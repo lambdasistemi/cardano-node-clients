@@ -66,9 +66,14 @@
               buildInputs = [
                 pkgs.just
                 pkgs.mkdocs
+                pkgs.curl
+                pkgs.cacert
                 mkdocs.packages.${system}.from-nixpkgs
                 cardano-node.packages.${system}.cardano-node
               ];
+              shellHook = ''
+                export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+              '';
             };
             modules = [ fix-libs ];
             inputMap = {
