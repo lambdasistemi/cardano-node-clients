@@ -9,22 +9,24 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: nixos
     steps:
       - uses: actions/checkout@v4
-      - uses: paolino/dev-assets/setup-nix@v0.0.1
+      - uses: cachix/cachix-action@v15
         with:
-          cachix-auth-token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          name: paolino
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build
         run: nix develop --quiet -c just ci
   docs:
-    runs-on: ubuntu-latest
+    runs-on: nixos
     if: github.ref == 'refs/heads/main'
     needs: build
     steps:
       - uses: actions/checkout@v4
-      - uses: paolino/dev-assets/setup-nix@v0.0.1
+      - uses: cachix/cachix-action@v15
         with:
-          cachix-auth-token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          name: paolino
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Deploy docs
         run: nix develop --quiet -c mkdocs gh-deploy --force
