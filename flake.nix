@@ -76,6 +76,9 @@
             };
           };
         in {
+          packages.devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
+            cp -r ${./e2e-test/genesis} $out
+          '';
           devShells.default = project.shell;
         };
     };
