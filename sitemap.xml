@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://paolino.github.io/cardano-node-clients/</loc>
+         <lastmod>1980-01-01</lastmod>
+    </url>
+    <url>
+         <loc>https://paolino.github.io/cardano-node-clients/architecture/</loc>
+         <lastmod>1980-01-01</lastmod>
+    </url>
+    <url>
+         <loc>https://paolino.github.io/cardano-node-clients/modules/balance/</loc>
+         <lastmod>1980-01-01</lastmod>
+    </url>
+    <url>
+         <loc>https://paolino.github.io/cardano-node-clients/modules/n2c/</loc>
+         <lastmod>1980-01-01</lastmod>
+    </url>
+    <url>
+         <loc>https://paolino.github.io/cardano-node-clients/modules/provider/</loc>
+         <lastmod>1980-01-01</lastmod>
+    </url>
+    <url>
+         <loc>https://paolino.github.io/cardano-node-clients/modules/submitter/</loc>
+         <lastmod>1980-01-01</lastmod>
+    </url>
+</urlset>
