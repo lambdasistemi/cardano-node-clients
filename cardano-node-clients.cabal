@@ -42,6 +42,7 @@ library
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.Balance
+    Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
     Cardano.Node.Client.N2C.LocalStateQuery
@@ -63,6 +64,7 @@ library
     , cardano-ledger-core
     , cardano-slotting
     , cardano-strict-containers
+    , chain-follower
     , containers
     , contra-tracer
     , microlens
@@ -74,9 +76,11 @@ library
     , ouroboros-network-api
     , ouroboros-network-framework
     , ouroboros-network-protocols
+    , serialise
     , stm
     , text
     , transformers
+    , typed-protocols
 
 library devnet
   import:           warnings
