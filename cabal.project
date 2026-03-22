@@ -17,11 +17,4 @@ repository cardano-haskell-packages
     c00aae8461a256275598500ea0e187588c35a5d5d7454fb57eac18d9edb86a56
     d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
 
--- Pin ouroboros packages to match cardano-mpfs-offchain
-constraints:
-    ouroboros-network-protocols == 0.14.1.0
-  , ouroboros-network == 0.21.6.1
-  , ouroboros-network-framework == 0.18.1.0
-  , ouroboros-consensus == 0.27.0.0
-  , ouroboros-consensus-cardano == 0.25.1.1
-  , typed-protocols == 0.3.0.0
+-- Let CHaP resolve ouroboros versions freely

@@ -47,6 +47,7 @@ ccfg =
         ShelleyCodecConfig -- Alonzo
         ShelleyCodecConfig -- Babbage
         ShelleyCodecConfig -- Conway
+        ShelleyCodecConfig -- Dijkstra
 
 -- | N2C version for codec selection.
 n2cVersion ::
