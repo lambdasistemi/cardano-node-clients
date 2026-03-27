@@ -1,30 +1,30 @@
-module Data.List.SampleFibonacciSpec
-    ( spec
-    )
+module Data.List.SampleFibonacciSpec (
+    spec,
+)
 where
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf)
-import Data.List.SampleFibonacci
-    ( atMost
-    , fibonacci
-    , fibonacciIntervals
-    , sampleAtFibonacciIntervals
-    )
-import Test.Hspec
-    ( Spec
-    , describe
-    , it
-    , shouldBe
-    )
-import Test.QuickCheck
-    ( Arbitrary (..)
-    , NonEmptyList (..)
-    , Positive (..)
-    , forAll
-    , property
-    , suchThat
-    )
+import Data.List.SampleFibonacci (
+    atMost,
+    fibonacci,
+    fibonacciIntervals,
+    sampleAtFibonacciIntervals,
+ )
+import Test.Hspec (
+    Spec,
+    describe,
+    it,
+    shouldBe,
+ )
+import Test.QuickCheck (
+    Arbitrary (..),
+    NonEmptyList (..),
+    Positive (..),
+    forAll,
+    property,
+    suchThat,
+ )
 
 sampleList :: [Int] -> IO (IO (Maybe Int))
 sampleList xs = do
@@ -74,30 +74,30 @@ spec = do
             result <- atMost 0 sampler
             result `shouldBe` Nothing
 
-        it "returns Nothing when action returns Nothing immediately"
-            $ property
-            $ \(Positive n) -> do
-                sampler <- sampleList []
-                result <- atMost n sampler
-                result `shouldBe` Nothing
-
-        it "returns the nth element when n is within available elements"
-            $ property
-            $ \(NonEmpty xs) -> forAll
-                ( arbitrary
-                    `suchThat` (<= length xs)
-                    `suchThat` (> 0)
-                )
-                $ \n -> do
-                    sampler <- sampleList xs
+        it "returns Nothing when action returns Nothing immediately" $
+            property $
+                \(Positive n) -> do
+                    sampler <- sampleList []
                     result <- atMost n sampler
-                    result `shouldBe` Just (xs !! (n - 1))
+                    result `shouldBe` Nothing
+
+        it "returns the nth element when n is within available elements" $
+            property $
+                \(NonEmpty xs) -> forAll
+                    ( arbitrary
+                        `suchThat` (<= length xs)
+                        `suchThat` (> 0)
+                    )
+                    $ \n -> do
+                        sampler <- sampleList xs
+                        result <- atMost n sampler
+                        result `shouldBe` Just (xs !! (n - 1))
 
         it
             "returns the last element before Nothing when n is larger than available elements"
             $ property
-            $ \(NonEmpty xs) -> forAll (arbitrary `suchThat` (> length xs))
-                $ \n -> do
+            $ \(NonEmpty xs) -> forAll (arbitrary `suchThat` (> length xs)) $
+                \n -> do
                     sampler <- sampleList xs
                     result <- atMost n sampler
                     result `shouldBe` Just (last xs)

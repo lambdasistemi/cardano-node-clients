@@ -1,6 +1,6 @@
-module Cardano.Node.Client.SampleList
-    ( sampleList
-    )
+module Cardano.Node.Client.SampleList (
+    sampleList,
+)
 where
 
 import Data.List.NonEmpty (NonEmpty (..), toList)

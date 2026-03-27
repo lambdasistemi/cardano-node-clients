@@ -1,13 +1,13 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoStrictData #-}
 
-module Data.List.SampleFibonacci
-    ( sampleAtFibonacciIntervals
-    , atMost
-    , fibonacci
-    , fibonacciIntervals
-    , sampleAll
-    ) where
+module Data.List.SampleFibonacci (
+    sampleAtFibonacciIntervals,
+    atMost,
+    fibonacci,
+    fibonacciIntervals,
+    sampleAll,
+) where
 
 import Data.Function (fix)
 import Data.Maybe (maybeToList)
@@ -20,22 +20,22 @@ data Sequence a = Cons
 scan :: (a -> b -> a) -> a -> Sequence b -> Sequence a
 scan f q (Cons x xs) =
     let q' = f q x
-    in  Cons q' (scan f q' xs)
+     in Cons q' (scan f q' xs)
 
 toList :: Sequence a -> [a]
 toList (Cons x xs) = x : toList xs
 
-infiniteZip
-    :: (a -> b -> c) -> Sequence a -> Sequence b -> Sequence c
+infiniteZip ::
+    (a -> b -> c) -> Sequence a -> Sequence b -> Sequence c
 infiniteZip f (Cons x xs) (Cons y ys) =
     Cons{sequenceHead = f x y, sequenceTail = infiniteZip f xs ys}
 
 fibonacciSequence :: Sequence Int
 fibonacciSequence =
-    Cons 0
-        $ Cons 1
-        $ infiniteZip (+) fibonacciSequence
-        $ sequenceTail fibonacciSequence
+    Cons 0 $
+        Cons 1 $
+            infiniteZip (+) fibonacciSequence $
+                sequenceTail fibonacciSequence
 
 fibonacci :: [Int]
 fibonacci = toList fibonacciSequence
@@ -50,7 +50,7 @@ fibonacciIntervals = toList fibonacciSequenceIntervals
 if the action returns Nothing before n is reached, it returns the previously
 collect element
 -}
-atMost :: Monad m => Int -> m (Maybe a) -> m (Maybe a)
+atMost :: (Monad m) => Int -> m (Maybe a) -> m (Maybe a)
 atMost n _
     | n <= 0 = pure Nothing
 atMost n f = do
@@ -70,8 +70,8 @@ it's implied that the action will eventually return Nothing
 it's implied that the action will move forward one element at every call in some sequence
 if the sequence is not empty the last element will be always returned even if not at a Fibonacci position
 -}
-sampleAtFibonacciIntervals
-    :: Monad m => m (Maybe a) -> m [a]
+sampleAtFibonacciIntervals ::
+    (Monad m) => m (Maybe a) -> m [a]
 sampleAtFibonacciIntervals f = ($ fibonacciSequence) $ fix $ \go (Cons n ns) -> do
     ml <- atMost (n - 1) f
     mx <- f
@@ -79,7 +79,7 @@ sampleAtFibonacciIntervals f = ($ fibonacciSequence) $ fix $ \go (Cons n ns) -> 
         Nothing -> pure $ maybeToList ml
         Just x -> (x :) <$> go ns
 
-sampleAll :: Monad m => m (Maybe a) -> m [a]
+sampleAll :: (Monad m) => m (Maybe a) -> m [a]
 sampleAll f = fix $ \go -> do
     mx <- f
     case mx of
