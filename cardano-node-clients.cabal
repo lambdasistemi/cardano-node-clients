@@ -51,8 +51,10 @@ library
     Cardano.Node.Client.N2C.Submitter
     Cardano.Node.Client.N2C.Types
     Cardano.Node.Client.Provider
+    Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
     Cardano.Node.Client.Types
+    Data.List.SampleFibonacci
 
   build-depends:
     , base
@@ -108,6 +110,19 @@ library devnet
     , process
     , time
     , unix
+
+test-suite unit-tests
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          unit-main.hs
+  default-language: GHC2021
+  other-modules:    Data.List.SampleFibonacciSpec
+  build-depends:
+    , base
+    , cardano-node-clients
+    , hspec
+    , QuickCheck
 
 test-suite e2e-tests
   import:           warnings
