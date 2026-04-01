@@ -20,14 +20,14 @@ repository cardano-haskell-packages
 source-repository-package
   type: git
   location: https://github.com/lambdasistemi/chain-follower
-  tag: 61e9a34181ea7f34daf67463eaf8aeb7414854c0
-  --sha256: 0gc8sq8dwi1g5js8qrcmnka7p19qqviwmgx4iyp43qk56x7n4lap
+  tag: 371b5930976ac3bb4e8a4ef576d5098d706984ee
+  --sha256: 1rks78zmgmxz5cg4v82vnc6hwib8vrylwk2m7y82iqaymmnskdvf
 
 source-repository-package
   type: git
   location: https://github.com/lambdasistemi/rocksdb-kv-transactions
-  tag: 5ba20902f4e97bd0090f0f4a58f0b1e3ee64d3dc
-  --sha256: 0jylki9wmgn1xxaw096dfxks9c6vzzbv8bgs6vg8k4bhpbig0v77
+  tag: e2e77579888ebbd832ea750ebf2635dfc3307025
+  --sha256: 0nd1yz6k3xh1p7nlswp2jbw74bzqr7bvz11kcfyhhimqmjhkqvwm
 
 source-repository-package
   type: git
