@@ -2,7 +2,10 @@ module Main (main) where
 
 import Test.Hspec (hspec)
 
+import Cardano.Node.Client.E2E.ChainSyncSpec qualified as ChainSyncSpec
 import Cardano.Node.Client.E2E.ProviderSpec qualified as ProviderSpec
 
 main :: IO ()
-main = hspec ProviderSpec.spec
+main = hspec $ do
+    ProviderSpec.spec
+    ChainSyncSpec.spec
