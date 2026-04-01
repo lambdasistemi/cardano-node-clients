@@ -130,11 +130,27 @@ test-suite e2e-tests
   hs-source-dirs:   test
   main-is:          main.hs
   default-language: GHC2021
-  other-modules:    Cardano.Node.Client.E2E.ProviderSpec
+  other-modules:
+    Cardano.Node.Client.E2E.ChainSyncSpec
+    Cardano.Node.Client.E2E.ProviderSpec
+
   build-depends:
+    , async
     , base
+    , bytestring
     , cardano-ledger-api
+    , cardano-ledger-byron
     , cardano-node-clients
     , cardano-node-clients:devnet
+    , chain-follower
+    , contra-tracer
+    , data-default
     , hspec
+    , lens
     , microlens
+    , ouroboros-network-api
+    , rocksdb-haskell-jprupp
+    , rocksdb-kv-transactions
+    , rocksdb-kv-transactions:kv-transactions
+    , stm
+    , temporary

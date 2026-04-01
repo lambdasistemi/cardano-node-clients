@@ -20,8 +20,20 @@ repository cardano-haskell-packages
 source-repository-package
   type: git
   location: https://github.com/lambdasistemi/chain-follower
-  tag: 388a333ecd45e374f7200cebf43c17c0c8bac688
-  --sha256: 17vrpxcn4z6kr4gwyscyy0c45i46idvhf4g41n8xnp1f80p1lm32
+  tag: 61e9a34181ea7f34daf67463eaf8aeb7414854c0
+  --sha256: 0gc8sq8dwi1g5js8qrcmnka7p19qqviwmgx4iyp43qk56x7n4lap
+
+source-repository-package
+  type: git
+  location: https://github.com/lambdasistemi/rocksdb-kv-transactions
+  tag: 5ba20902f4e97bd0090f0f4a58f0b1e3ee64d3dc
+  --sha256: 0jylki9wmgn1xxaw096dfxks9c6vzzbv8bgs6vg8k4bhpbig0v77
+
+source-repository-package
+  type: git
+  location: https://github.com/lambdasistemi/rocksdb-haskell.git
+  tag: a3e86b39f9510fea54abf734ee84aec33d0d683f
+  --sha256: 1gjzqhf81fy3bpc79ndmx3s77x3s1gf0lsk762acbfnpfh6g1hd0
 
 -- Pin ouroboros packages to match cardano-mpfs-offchain
 constraints:
