@@ -144,13 +144,9 @@ test-suite e2e-tests
     , cardano-node-clients:devnet
     , chain-follower
     , contra-tracer
-    , data-default
     , hspec
     , lens
     , microlens
     , ouroboros-network-api
-    , rocksdb-haskell-jprupp
-    , rocksdb-kv-transactions
     , rocksdb-kv-transactions:kv-transactions
     , stm
-    , temporary

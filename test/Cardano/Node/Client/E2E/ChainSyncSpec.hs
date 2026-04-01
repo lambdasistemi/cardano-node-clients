@@ -42,8 +42,8 @@ import Control.Concurrent.STM (
  )
 import Control.Lens (prism')
 import Control.Tracer (nullTracer)
+import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BS8
-import Data.Default (Default (..))
 import Data.IORef (
     IORef,
     modifyIORef',
@@ -56,7 +56,7 @@ import Database.KV.Database (
     KV,
     mkColumns,
  )
-import Database.KV.RocksDB (mkRocksDBDatabase)
+import Database.KV.InMemory (mkInMemoryDatabase)
 import Database.KV.Transaction (
     Codecs (..),
     DSum ((:=>)),
@@ -67,20 +67,12 @@ import Database.KV.Transaction (
     fromPairList,
     runTransactionUnguarded,
  )
-import Database.RocksDB (
-    BatchOp,
-    ColumnFamily,
-    Config (createIfMissing),
-    DB (..),
-    withDBCF,
- )
 import Ouroboros.Network.Block (
     Point (..),
     SlotNo (..),
     blockSlot,
  )
 import Ouroboros.Network.Point (WithOrigin (..))
-import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (
     Spec,
     describe,
@@ -109,12 +101,13 @@ import Cardano.Node.Client.N2C.ChainSync (
 data NoOpInv = NoOpInv
     deriving stock (Show, Eq, Read)
 
+-- | In-memory transaction type.
 type T =
     Transaction
         IO
-        ColumnFamily
+        Int
         RollbackCols
-        BatchOp
+        (Int, ByteString, Maybe ByteString)
 
 -- | No-op restoring continuation.
 noOpRestoring :: Restoring IO T Fetched NoOpInv ()
@@ -170,30 +163,22 @@ rollbackCodecs =
 type RunTx =
     forall a. T a -> IO a
 
--- | Run with a temporary RocksDB.
+-- | Create an in-memory rollback database.
 withRollbackDB :: (RunTx -> IO a) -> IO a
-withRollbackDB action =
-    withSystemTempDirectory "chainsync-e2e" $ \dbPath ->
-        withDBCF
-            dbPath
-            def{createIfMissing = True}
-            [("rollbacks", def{createIfMissing = True})]
-            $ \db ->
-                action $
-                    runTransactionUnguarded $
-                        mkRocksDBDatabase db $
-                            mkColumns
-                                (columnFamilies db)
-                                (fromPairList rollbackCodecs)
+withRollbackDB action = do
+    db <-
+        mkInMemoryDatabase $
+            mkColumns [0 ..] (fromPairList rollbackCodecs)
+    action $ runTransactionUnguarded db
 
 -- * Follower wiring
 
 type TestPhase =
     Phase
         IO
-        ColumnFamily
+        Int
         RollbackCols
-        BatchOp
+        (Int, ByteString, Maybe ByteString)
         Fetched
         NoOpInv
         ()
