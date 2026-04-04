@@ -90,6 +90,7 @@ library devnet
   hs-source-dirs:   e2e-test
   default-language: GHC2021
   exposed-modules:
+    Cardano.Node.Client.E2E.ChainPopulator
     Cardano.Node.Client.E2E.Devnet
     Cardano.Node.Client.E2E.Setup
 
@@ -99,15 +100,19 @@ library devnet
     , bytestring
     , cardano-crypto-class
     , cardano-ledger-api
+    , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-node-clients
+    , chain-follower
     , containers
+    , contra-tracer
     , directory
     , filepath
     , microlens
     , ouroboros-network-api
     , process
+    , stm
     , time
     , unix
 
@@ -131,6 +136,7 @@ test-suite e2e-tests
   main-is:          main.hs
   default-language: GHC2021
   other-modules:
+    Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
     Cardano.Node.Client.E2E.ProviderSpec
 
@@ -138,10 +144,14 @@ test-suite e2e-tests
     , async
     , base
     , bytestring
+    , cardano-crypto-class
     , cardano-ledger-api
     , cardano-ledger-byron
+    , cardano-ledger-conway
+    , cardano-ledger-core
     , cardano-node-clients
     , cardano-node-clients:devnet
+    , cardano-read-ledger
     , chain-follower
     , contra-tracer
     , hspec
