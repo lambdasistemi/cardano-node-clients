@@ -91,6 +91,7 @@ library devnet
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.E2E.ChainPopulator
+    Cardano.Node.Client.E2E.CrashRecovery
     Cardano.Node.Client.E2E.Devnet
     Cardano.Node.Client.E2E.Setup
 
