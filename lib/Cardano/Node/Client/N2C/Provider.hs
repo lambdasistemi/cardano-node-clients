@@ -21,6 +21,8 @@ import Data.Bifunctor (first)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Time.Clock (NominalDiffTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 
 import Control.Monad.Trans.Except (runExcept)
 import Lens.Micro ((^.))
@@ -36,6 +38,10 @@ import Cardano.Ledger.Api.Tx.Body (
 import Cardano.Ledger.Core (bodyTxL)
 import Cardano.Ledger.State (UTxO (..))
 import Cardano.Slotting.EpochInfo (hoistEpochInfo)
+import Cardano.Slotting.Time (
+    RelativeTime (..),
+    toRelativeTime,
+ )
 
 import Ouroboros.Consensus.Cardano.Block (
     pattern QueryIfCurrentConway,
@@ -46,6 +52,10 @@ import Ouroboros.Consensus.HardFork.Combinator.Ledger.Query (
  )
 import Ouroboros.Consensus.HardFork.History.EpochInfo (
     interpreterToEpochInfo,
+ )
+import Ouroboros.Consensus.HardFork.History.Qry (
+    interpretQuery,
+    wallclockToSlot,
  )
 import Ouroboros.Consensus.Ledger.Query (
     Query (BlockQuery, GetSystemStart),
@@ -60,7 +70,7 @@ import Cardano.Node.Client.N2C.LocalStateQuery (
     queryLSQ,
  )
 import Cardano.Node.Client.N2C.Types (LSQChannel)
-import Cardano.Node.Client.Provider (Provider (..))
+import Cardano.Node.Client.Provider (Provider (..), SlotNo)
 
 {- | Create a 'Provider IO' backed by the N2C
 LocalStateQuery protocol.
@@ -155,4 +165,54 @@ mkN2CProvider ch =
                     utxo
                     epochInfo
                     systemStart
+        , posixMsToSlot = \ms -> do
+            (slot, _, _) <-
+                queryWallclockToSlot ch ms
+            pure slot
+        , posixMsCeilSlot = \ms -> do
+            (slot, timeInSlot, _slotLen) <-
+                queryWallclockToSlot ch ms
+            -- If the time falls exactly on a slot
+            -- boundary, floor == ceil. Otherwise
+            -- advance to the next slot.
+            pure $
+                if timeInSlot == 0
+                    then slot
+                    else slot + 1
         }
+
+{- | Query SystemStart and HardFork interpreter,
+then convert POSIX milliseconds to a slot via
+'wallclockToSlot'. Returns the slot, time elapsed
+within that slot, and the slot length.
+-}
+queryWallclockToSlot ::
+    LSQChannel ->
+    Integer ->
+    IO (SlotNo, NominalDiffTime, NominalDiffTime)
+queryWallclockToSlot ch ms = do
+    systemStart <-
+        queryLSQ ch GetSystemStart
+    interpreter <-
+        queryLSQ ch $
+            BlockQuery $
+                QueryHardFork GetInterpreter
+    let utcTime =
+            posixSecondsToUTCTime $
+                fromIntegral ms / 1000
+        relTime =
+            toRelativeTime
+                systemStart
+                utcTime
+        clamped =
+            RelativeTime $
+                max 0 $
+                    getRelativeTime relTime
+    case interpretQuery
+        interpreter
+        (wallclockToSlot clamped) of
+        Right r -> pure r
+        Left err ->
+            error $
+                "posixMsToSlot: "
+                    <> show err

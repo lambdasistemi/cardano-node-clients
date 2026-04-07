@@ -89,6 +89,7 @@ library
     , serialise
     , stm
     , text
+    , time
     , transformers
     , typed-protocols
 
