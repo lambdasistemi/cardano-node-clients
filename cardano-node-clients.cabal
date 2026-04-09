@@ -130,6 +130,21 @@ test-suite unit-tests
     , hspec
     , QuickCheck
 
+executable n2c-throughput
+  ghc-options:      -O2 -threaded -rtsopts -with-rtsopts=-N
+  default-language: GHC2021
+  hs-source-dirs:   bench
+  main-is:          n2c-throughput.hs
+  build-depends:
+    , base
+    , cardano-ledger-byron
+    , cardano-node-clients
+    , chain-follower
+    , contra-tracer
+    , ouroboros-network
+    , ouroboros-network-api
+    , time
+
 test-suite e2e-tests
   import:           warnings
   type:             exitcode-stdio-1.0
