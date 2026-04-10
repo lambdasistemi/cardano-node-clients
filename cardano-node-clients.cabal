@@ -124,11 +124,21 @@ test-suite unit-tests
   hs-source-dirs:   test
   main-is:          unit-main.hs
   default-language: GHC2021
-  other-modules:    Data.List.SampleFibonacciSpec
+  other-modules:
+    Cardano.Node.Client.BalanceSpec
+    Data.List.SampleFibonacciSpec
+
   build-depends:
     , base
+    , cardano-crypto-class
+    , cardano-ledger-alonzo
+    , cardano-ledger-api
+    , cardano-ledger-conway
+    , cardano-ledger-core
     , cardano-node-clients
+    , containers
     , hspec
+    , plutus-core
     , QuickCheck
 
 test-suite e2e-tests
