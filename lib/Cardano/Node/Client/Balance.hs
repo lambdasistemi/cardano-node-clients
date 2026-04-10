@@ -21,6 +21,11 @@ module Cardano.Node.Client.Balance (
     balanceTx,
     balanceFeeLoop,
 
+    -- * Script helpers
+    computeScriptIntegrity,
+    spendingIndex,
+    placeholderExUnits,
+
     -- * Errors
     BalanceError (..),
     FeeLoopError (..),
@@ -29,6 +34,7 @@ module Cardano.Node.Client.Balance (
 import Data.Foldable (foldl')
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
+import Data.Word (Word32)
 import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Ledger.Address (Addr)
@@ -47,10 +53,27 @@ import Cardano.Ledger.Api.Tx.Out (
     coinTxOutL,
     mkBasicTxOut,
  )
-import Cardano.Ledger.BaseTypes (Inject (..))
+import Cardano.Ledger.Alonzo.PParams
+    ( LangDepView
+    , getLanguageView
+    )
+import Cardano.Ledger.Alonzo.Tx
+    ( ScriptIntegrityHash
+    , hashScriptIntegrity
+    )
+import Cardano.Ledger.Alonzo.TxWits
+    ( Redeemers
+    , TxDats (..)
+    )
+import Cardano.Ledger.BaseTypes
+    ( Inject (..)
+    , StrictMaybe
+    )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
+import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
+import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
 
 -- | Fee-paying UTxO has insufficient ada.
@@ -250,3 +273,65 @@ balanceFeeLoop pp mkOutputs numWitnesses tx =
                      in if newFee <= currentFee
                             then Right candidate
                             else go (n + 1) newFee
+
+-- -----------------------------------------------------------
+-- Script helpers
+-- -----------------------------------------------------------
+
+{- | Compute the 'ScriptIntegrityHash' from protocol
+parameters, a set of 'Redeemers', and the Plutus
+language used.
+
+The hash covers the language cost model, redeemers,
+and an empty datum set (inline datums only — no
+datum map needed).
+
+@
+integrity <- computeScriptIntegrity PlutusV3 pp redeemers
+body & scriptIntegrityHashTxBodyL .~ integrity
+@
+-}
+computeScriptIntegrity ::
+    Language ->
+    PParams ConwayEra ->
+    Redeemers ConwayEra ->
+    StrictMaybe ScriptIntegrityHash
+computeScriptIntegrity lang pp rdmrs =
+    let langViews :: Set.Set LangDepView
+        langViews =
+            Set.singleton
+                (getLanguageView pp lang)
+        emptyDats = TxDats mempty
+     in hashScriptIntegrity langViews rdmrs emptyDats
+
+{- | Compute the spending index of a 'TxIn' within
+the sorted input set.
+
+Plutus spending redeemers reference inputs by their
+position in the sorted set of all transaction
+inputs. This function finds that position.
+
+@
+let allInputs = Set.fromList [stateIn, reqIn, feeIn]
+    stateIx = spendingIndex stateIn allInputs
+    -- redeemer: ConwaySpending (AsIx stateIx)
+@
+-}
+spendingIndex :: TxIn -> Set.Set TxIn -> Word32
+spendingIndex needle inputs =
+    let sorted = Set.toAscList inputs
+     in go 0 sorted
+  where
+    go _ [] =
+        error "spendingIndex: TxIn not in set"
+    go n (x : xs)
+        | x == needle = n
+        | otherwise = go (n + 1) xs
+
+{- | Zero execution units, used as placeholder when
+building a transaction before script evaluation.
+After calling 'evaluateTx', patch the redeemers
+with the real values.
+-}
+placeholderExUnits :: ExUnits
+placeholderExUnits = ExUnits 0 0

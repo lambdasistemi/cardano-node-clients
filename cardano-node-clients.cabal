@@ -42,6 +42,7 @@ library
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.Balance
+    Cardano.Node.Client.Evaluate
     Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
