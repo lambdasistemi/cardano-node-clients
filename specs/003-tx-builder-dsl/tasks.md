@@ -1,191 +1,123 @@
 # Tasks: Transaction Builder DSL
 
 **Branch**: `003-tx-builder-dsl`
-**Generated**: 2026-04-10
-**Spec**: [spec.md](spec.md) | **Plan**: [plan.md](plan.md)
+**Updated**: 2026-04-11
+**Spec**: [spec-design.md](spec-design.md)
 
-Each task is a vertical slice: types + logic + test in one commit.
-
----
-
-## US1: Script-spending transactions with typed redeemers
-
-### Task 1.1: Core types and empty builder
-**Story**: US1 | **Priority**: P1 | **Depends**: none
-
-Define `TxBuilder`, `TxStep`, `SpendWitness`, `MintWitness` types and the `txBuilder` empty constructor in `Cardano.Node.Client.TxBuild`.
-
-**Acceptance**: Module compiles, `txBuilder` returns an empty builder, types are exported.
-
-**Commit scope**: `lib/Cardano/Node/Client/TxBuild.hs` (new file)
+Each slice is one commit: types + logic + interpreter + test.
 
 ---
 
-### Task 1.2: spend and spendScript combinators
-**Story**: US1 | **Priority**: P1 | **Depends**: 1.1
+## Slice 1: Simple pub-key spend + draft
 
-Implement `spend` (pub-key) and `spendScript` (typed redeemer via existential `ToData`) combinators that append `Spend` steps to the builder.
+GADT with `Spend`, `Send`, `Collateral`, `Peek`. Types: `Convergence`, `Check`, `LedgerCheck`, `SpendWitness`, `Interpret`, `InterpretIO`. Smart constructors: `spend` (returns `Word32` via `Peek`), `payTo`, `collateral`. `draft` interpreter (pure, `q = Void, e = Void`).
 
-**Acceptance**: Builder accumulates spend steps. Unit test: add two spends, verify step list contains both with correct witnesses.
+**Test**: simple transfer — verify inputs/outputs in assembled Tx, `spend` returns correct index.
 
-**Commit scope**: `TxBuild.hs` + `test/Cardano/Node/Client/TxBuildSpec.hs` (new file)
-
----
-
-### Task 1.3: draft — assemble without evaluation
-**Story**: US1, US6 | **Priority**: P1 | **Depends**: 1.2
-
-Implement `draft` that converts accumulated steps into a `Tx ConwayEra`:
-- Collect all `Spend` steps into `inputsTxBodyL`
-- Compute spending indices from sorted input set
-- Build `Redeemers` map with `ConwaySpending (AsIx ix)` + placeholder ExUnits
-- Attach scripts from builder's script map
-- Compute script integrity hash
-
-This is the assembly core without evaluation or balancing.
-
-**Acceptance**: `draft` on a builder with `spendScript` produces a `Tx` with correct redeemer indices and integrity hash. Test with known inputs, verify index assignment matches `spendingIndex` from Internal.hs.
-
-**Commit scope**: `lib/Cardano/Node/Client/TxBuild/Build.hs` (new file) + test
+**Depends**: none
 
 ---
 
-### Task 1.4: build — evaluate + patch + balance
-**Story**: US1 | **Priority**: P1 | **Depends**: 1.3
+## Slice 2: Script spend + mint + redeemer indices
 
-Implement `build` that:
-1. Calls `draft` to get the unbalanced tx
-2. Evaluates scripts via Provider's `evaluateTx`
-3. Patches ExUnits in redeemers
-4. Recomputes script integrity hash
-5. Calls existing `balanceTx`
+Add `MintI`, `AttachScript`, `ReqSignature` to GADT. `MintWitness` existential. Smart constructors: `spendScript`, `mint`, `attachScript`, `requireSignature`. `draft` computes spending + minting redeemer indices automatically.
 
-This absorbs the entire `evaluateAndBalance` function from MPFS Internal.hs.
+**Test**: Boot-shaped tx (spend + mint +1), End-shaped tx (spend + mint -1 + dual redeemers). Verify redeemer indices match sorted position.
 
-**Acceptance**: `build` with a mock Provider returning known ExUnits produces a balanced tx with patched redeemers. Integration test: build an End-shaped transaction, compare structure to hand-built version.
-
-**Commit scope**: `Build.hs` + test
+**Depends**: Slice 1
 
 ---
 
-### Task 1.5: attachScript combinator
-**Story**: US1 | **Priority**: P1 | **Depends**: 1.1
+## Slice 3: Peek convergence + build loop
 
-Implement `attachScript` that adds a script to the builder's script map (keyed by ScriptHash).
+`build` interpreter: fixpoint iteration over `Peek` nodes, script evaluation via evaluator function, ExUnits patching, recompute integrity hash, fee balancing via `balanceTx`. Convergence: iterate while any `Peek` returns `Iterate`, stop when all `Ok` and Tx body stable.
 
-**Acceptance**: Attached scripts appear in `witsTxL . scriptTxWitsL` after `draft`.
+**Test**: fee-dependent outputs — refund = totalIn - fee - tips. Verify `Peek` reads fee, outputs converge in 2-3 iterations. (Conservation case from cardano-mpfs-onchain#37.)
 
-**Commit scope**: `TxBuild.hs` + test
-
----
-
-## US2: Minting/burning transactions
-
-### Task 2.1: mint combinator
-**Story**: US2 | **Priority**: P1 | **Depends**: 1.3
-
-Implement `mint` combinator that appends `Mint` steps. `draft` must:
-- Collect all Mint steps into `mintTxBodyL`
-- Compute minting indices from sorted policy set
-- Build `ConwayMinting (AsIx ix)` redeemer entries
-
-Positive quantities mint, negative burn. Unified API following Scalus.
-
-**Acceptance**: Builder with `spendScript` + `mint` produces a `Tx` with both spending and minting redeemers at correct indices. Test with Boot-shaped (mint +1) and End-shaped (mint -1 + spend) transactions.
-
-**Commit scope**: `TxBuild.hs` + `Build.hs` + test
+**Depends**: Slice 2
 
 ---
 
-## US3: Typed inline datums
+## Slice 4: Ctx + pluggable queries
 
-### Task 3.1: payTo and payTo' combinators
-**Story**: US3 | **Priority**: P1 | **Depends**: 1.1
+Add `Ctx` instruction. `ctx` smart constructor. `build` takes `InterpretIO q`. `draftWith` takes `Interpret q` (or `DMap q Identity`).
 
-Implement `payTo` (address + value, no datum) and `payTo'` (address + value + typed datum with `ToData` constraint → inline datum). Also `output` for raw `TxOut` passthrough.
+**Test**: define `data TestQ a where GetValue :: TestQ Int`. Use `ctx GetValue` in a builder, interpret with `Interpret TestQ`. Verify the value flows through bind into a subsequent step.
 
-**Acceptance**: `payTo'` produces output with inline `Datum` constructed via `dataToBinaryData . Data . toPlcData`. Roundtrip test: encode datum, extract from TxOut, decode via `FromData`, compare.
-
-**Commit scope**: `TxBuild.hs` + test
+**Depends**: Slice 3
 
 ---
 
-## US4: Reference inputs, validity, required signers
+## Slice 5: Valid + library checkers
 
-### Task 4.1: references, collaterals, validFrom, validTo, requireSignature
-**Story**: US4 | **Priority**: P2 | **Depends**: 1.3
+Add `Valid` instruction. `valid` smart constructor. `Check e = Pass | LedgerFail LedgerCheck | CustomFail e`. Library checkers: `checkMinUtxo`, `checkTxSize`. Interpreter runs checks after `Peek` convergence. `build` returns `Left (ChecksFailed [Check e])` on failure.
 
-Implement remaining combinators:
-- `references` → `referenceInputsTxBodyL`
-- `collaterals` → `collateralInputsTxBodyL`
-- `validFrom` → `ValidityInterval` lower bound
-- `validTo` → `ValidityInterval` upper bound
-- `requireSignature` / `requireSignatures` → `reqSignerHashesTxBodyL`
+**Test**: output below min UTxO → `LedgerFail (MinUtxoViolation ...)`. Custom check → `CustomFail MyErr`. All-pass → `Right tx`.
 
-**Acceptance**: `draft` on a Retract-shaped builder (reference input + validity + required signer) has all fields set correctly. Unit tests for each combinator.
-
-**Commit scope**: `TxBuild.hs` + `Build.hs` + test
+**Depends**: Slice 3
 
 ---
 
-## US5: Auto-complete
+## Slice 6: Reference inputs + validity intervals
 
-### Task 5.1: complete — query + select + build
-**Story**: US5 | **Priority**: P2 | **Depends**: 1.4
+Add `Reference`, `SetValidFrom`, `SetValidTo`. Smart constructors: `reference`, `validFrom`, `validTo`.
 
-Implement `complete` that:
-1. Queries UTxOs from Provider at sponsor address
-2. Selects inputs covering outputs + estimated fees (largest-first)
-3. Adds collateral if any script steps present
-4. Calls `build`
+**Test**: Retract-shaped tx — reference input (not consumed), validity window (lower + upper), required signer. Verify fields in assembled TxBody.
 
-**Acceptance**: `complete` with a mock Provider returning known UTxOs produces a balanced tx. Error case: insufficient funds returns clear error.
-
-**Commit scope**: `Build.hs` + test
+**Depends**: Slice 1
 
 ---
 
-## Conformance: Scalus test vectors
+## Slice 7: MPFS Boot migration
 
-### Task 6.1: Extract Scalus test vectors
-**Story**: Conformance | **Priority**: P2 | **Depends**: 1.4, 2.1
+In `cardano-mpfs-offchain`: define `CageQ` and `CageErr`. Rewrite `bootTokenImpl` as `TxBuild CageQ CageErr ()`. Production `InterpretIO CageQ` wrapping existing Provider. Test `Interpret CageQ` with fixture data.
 
-Extract test cases from Scalus TransactionBuilderTests.scala:
-- Simple spend + payTo
-- Script spend with redeemer
-- Mint + spend combo
-- Reference input + validity interval
-- Multi-input with per-input redeemers
+**Test**: e2e Boot test passes with the DSL builder.
 
-For each: capture builder steps, protocol params, UTxO set, and expected transaction CBOR or structure.
-
-**Acceptance**: Test vectors documented as Haskell test cases. Our `build`/`draft` produces matching transaction structure.
-
-**Commit scope**: `test/Cardano/Node/Client/TxBuild/ConformanceSpec.hs` (new file)
+**Depends**: Slice 4
 
 ---
 
-## Dependency Graph
+## Slice 8: MPFS Update/Reject (conservation)
+
+Rewrite `updateTokenImpl` and `rejectRequestsImpl` using `peek` for fee-dependent refunds. The `balanceFeeLoop` + `mkOutputs` callback pattern is replaced by `peek` + natural convergence.
+
+**Test**: e2e Update and Reject tests pass. Delete `balanceFeeLoop` from `Balance.hs`.
+
+**Depends**: Slice 7, Slice 3
+
+---
+
+## Slice 9: Remaining MPFS migrations
+
+Rewrite End, Retract, Request builders. Delete `evaluateAndBalance`, `spendingIndex`, `computeScriptIntegrity`, `placeholderExUnits` from Internal.hs. All e2e tests pass.
+
+**Test**: full e2e cage flow (Boot → Request → Update → Retract → Reject → End).
+
+**Depends**: Slice 8, Slice 6
+
+---
+
+## Dependency graph
 
 ```
-1.1 ──→ 1.2 ──→ 1.3 ──→ 1.4 ──→ 5.1
-  │               │        │
-  ├──→ 1.5        ├──→ 2.1 ├──→ 6.1
-  │               │
-  ├──→ 3.1        └──→ 4.1
+Slice 1 → Slice 2 → Slice 3 → Slice 4 → Slice 7 → Slice 8 → Slice 9
+              ↓           ↓                              ↑
+          Slice 6     Slice 5                             |
+              ↓                                           |
+              └───────────────────────────────────────────┘
 ```
 
-## Task Summary
+## Summary
 
-| Task | Description | Priority | Depends |
-|------|------------|----------|---------|
-| 1.1  | Core types + empty builder | P1 | — |
-| 1.2  | spend/spendScript combinators | P1 | 1.1 |
-| 1.3  | draft (assembly without eval) | P1 | 1.2 |
-| 1.4  | build (evaluate + patch + balance) | P1 | 1.3 |
-| 1.5  | attachScript combinator | P1 | 1.1 |
-| 2.1  | mint combinator (mint+burn) | P1 | 1.3 |
-| 3.1  | payTo/payTo' with typed datums | P1 | 1.1 |
-| 4.1  | references/collaterals/validity/signers | P2 | 1.3 |
-| 5.1  | complete (auto-select + build) | P2 | 1.4 |
-| 6.1  | Scalus conformance test vectors | P2 | 1.4, 2.1 |
+| Slice | What | Depends |
+|-------|------|---------|
+| 1 | Pub-key spend + payTo + draft | — |
+| 2 | Script spend + mint + redeemer indices | 1 |
+| 3 | Peek convergence + build loop | 2 |
+| 4 | Ctx + pluggable queries | 3 |
+| 5 | Valid + library checkers | 3 |
+| 6 | Reference inputs + validity intervals | 1 |
+| 7 | MPFS Boot migration | 4 |
+| 8 | MPFS Update/Reject (conservation) | 7, 3 |
+| 9 | Remaining MPFS + cleanup | 8, 6 |
