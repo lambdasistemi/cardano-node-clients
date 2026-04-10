@@ -9,32 +9,32 @@ import Data.Set qualified as Set
 import Test.Hspec
 import Test.QuickCheck
 
+import Cardano.Crypto.Hash (hashFromStringAsHex)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.Scripts.Data (Data (..))
-import Cardano.Ledger.BaseTypes
-    ( StrictMaybe (..)
-    , TxIx (..)
-    )
+import Cardano.Ledger.BaseTypes (
+    StrictMaybe (..),
+    TxIx (..),
+ )
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Conway.Scripts
-    ( ConwayPlutusPurpose (..)
-    )
+import Cardano.Ledger.Conway.Scripts (
+    ConwayPlutusPurpose (..),
+ )
 import Cardano.Ledger.Core (emptyPParams)
-import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
-import Cardano.Ledger.Plutus.Language
-    ( Language (PlutusV3)
-    )
-import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
-import Cardano.Crypto.Hash (hashFromStringAsHex)
+import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
+import Cardano.Ledger.Plutus.Language (
+    Language (PlutusV3),
+ )
+import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import PlutusCore.Data qualified as PLC
 
-import Cardano.Node.Client.Balance
-    ( computeScriptIntegrity
-    , placeholderExUnits
-    , spendingIndex
-    )
+import Cardano.Node.Client.Balance (
+    computeScriptIntegrity,
+    placeholderExUnits,
+    spendingIndex,
+ )
 
 spec :: Spec
 spec = describe "Balance helpers" $ do
@@ -46,10 +46,11 @@ spec = describe "Balance helpers" $ do
 -- Test TxIn construction
 -- -----------------------------------------------------------
 
--- | Make a TxIn from an Int (deterministic, unique).
--- | Deterministic TxIn from an Int.
--- Uses the int as the last 2 bytes of a 32-byte
--- hash, producing unique sorted TxIds.
+{- | Make a TxIn from an Int (deterministic, unique).
+| Deterministic TxIn from an Int.
+Uses the int as the last 2 bytes of a 32-byte
+hash, producing unique sorted TxIds.
+-}
 mkTxIn :: Int -> TxIn
 mkTxIn n =
     let hexStr =
@@ -57,11 +58,11 @@ mkTxIn n =
                 ++ hexByte (n `div` 256)
                 ++ hexByte (n `mod` 256)
         h = fromJust (hashFromStringAsHex hexStr)
-    in  TxIn (TxId (unsafeMakeSafeHash h)) (TxIx 0)
+     in TxIn (TxId (unsafeMakeSafeHash h)) (TxIx 0)
   where
     hexByte b =
         let (hi, lo) = b `divMod` 16
-        in  [hexDigit hi, hexDigit lo]
+         in [hexDigit hi, hexDigit lo]
     hexDigit d
         | d < 10 = toEnum (fromEnum '0' + d)
         | otherwise = toEnum (fromEnum 'a' + d - 10)
@@ -81,8 +82,10 @@ spendingIndexSpec = describe "spendingIndex" $ do
         let tins = map mkTxIn [1 .. 5]
             s = Set.fromList tins
             sorted = Set.toAscList s
-        mapM_ (\(tin, expected) ->
-            spendingIndex tin s `shouldBe` expected)
+        mapM_
+            ( \(tin, expected) ->
+                spendingIndex tin s `shouldBe` expected
+            )
             (zip sorted [0 ..])
 
     it "index < set size (property)" $
@@ -124,8 +127,8 @@ spendingIndexSpec = describe "spendingIndex" $ do
 -- | Build a Redeemers with a spending entry.
 mkRedeemers :: Integer -> Redeemers ConwayEra
 mkRedeemers seed =
-    Redeemers
-        $ Map.singleton
+    Redeemers $
+        Map.singleton
             (ConwaySpending (AsIx 0))
             ( Data (PLC.I seed)
             , ExUnits 1000 10000

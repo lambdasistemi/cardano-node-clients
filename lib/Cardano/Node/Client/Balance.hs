@@ -38,6 +38,18 @@ import Data.Word (Word32)
 import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Alonzo.PParams (
+    LangDepView,
+    getLanguageView,
+ )
+import Cardano.Ledger.Alonzo.Tx (
+    ScriptIntegrityHash,
+    hashScriptIntegrity,
+ )
+import Cardano.Ledger.Alonzo.TxWits (
+    Redeemers,
+    TxDats (..),
+ )
 import Cardano.Ledger.Api.Tx (
     Tx,
     bodyTxL,
@@ -53,22 +65,10 @@ import Cardano.Ledger.Api.Tx.Out (
     coinTxOutL,
     mkBasicTxOut,
  )
-import Cardano.Ledger.Alonzo.PParams
-    ( LangDepView
-    , getLanguageView
-    )
-import Cardano.Ledger.Alonzo.Tx
-    ( ScriptIntegrityHash
-    , hashScriptIntegrity
-    )
-import Cardano.Ledger.Alonzo.TxWits
-    ( Redeemers
-    , TxDats (..)
-    )
-import Cardano.Ledger.BaseTypes
-    ( Inject (..)
-    , StrictMaybe
-    )
+import Cardano.Ledger.BaseTypes (
+    Inject (..),
+    StrictMaybe,
+ )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
@@ -184,13 +184,15 @@ balanceTx pp inputUtxos changeAddr tx =
                 Left (InsufficientFee fee inputCoin)
             else Right (buildTx fee)
 
--- | Output function rejected the fee, or the
--- iteration did not converge.
+{- | Output function rejected the fee, or the
+iteration did not converge.
+-}
 data FeeLoopError
     = -- | Fee did not converge in 10 iterations.
       FeeDidNotConverge
-    | -- | The output function returned an error
-      --   (e.g., insufficient funds for the fee).
+    | {- | The output function returned an error
+      (e.g., insufficient funds for the fee).
+      -}
       OutputError !String
     deriving (Eq, Show)
 
@@ -238,12 +240,14 @@ goes to the Cardano treasury.
 -}
 balanceFeeLoop ::
     PParams ConwayEra ->
-    -- | Compute outputs for a given fee. Return
-    --   'Left' to abort (e.g., fee exceeds
-    --   available funds).
+    {- | Compute outputs for a given fee. Return
+    'Left' to abort (e.g., fee exceeds
+    available funds).
+    -}
     (Coin -> Either String (StrictSeq (TxOut ConwayEra))) ->
-    -- | Number of key witnesses to assume for
-    --   fee estimation.
+    {- | Number of key witnesses to assume for
+    fee estimation.
+    -}
     Int ->
     -- | Template transaction.
     Tx ConwayEra ->

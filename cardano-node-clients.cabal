@@ -166,8 +166,8 @@ test-suite e2e-tests
     , cardano-node-clients:devnet
     , cardano-read-ledger
     , cardano-strict-containers
-    , containers
     , chain-follower
+    , containers
     , contra-tracer
     , hspec
     , lens

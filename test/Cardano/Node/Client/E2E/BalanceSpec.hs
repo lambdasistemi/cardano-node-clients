@@ -8,37 +8,37 @@ import Lens.Micro ((&), (.~), (^.))
 import Test.Hspec
 
 import Cardano.Ledger.Address (Addr)
-import Cardano.Ledger.Api.Tx
-    ( bodyTxL
-    , estimateMinFeeTx
-    , mkBasicTx
-    )
-import Cardano.Ledger.Api.Tx.Body
-    ( collateralInputsTxBodyL
-    , feeTxBodyL
-    , inputsTxBodyL
-    , mkBasicTxBody
-    , outputsTxBodyL
-    )
-import Cardano.Ledger.Api.Tx.Out
-    ( TxOut
-    , coinTxOutL
-    , mkBasicTxOut
-    )
+import Cardano.Ledger.Api.Tx (
+    bodyTxL,
+    estimateMinFeeTx,
+    mkBasicTx,
+ )
+import Cardano.Ledger.Api.Tx.Body (
+    collateralInputsTxBodyL,
+    feeTxBodyL,
+    inputsTxBodyL,
+    mkBasicTxBody,
+    outputsTxBodyL,
+ )
+import Cardano.Ledger.Api.Tx.Out (
+    TxOut,
+    coinTxOutL,
+    mkBasicTxOut,
+ )
 import Cardano.Ledger.BaseTypes (Inject (..))
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.TxIn (TxIn)
 
-import Cardano.Node.Client.Balance
-    ( FeeLoopError (..)
-    , balanceFeeLoop
-    )
-import Cardano.Node.Client.E2E.Setup
-    ( genesisAddr
-    , withDevnet
-    )
+import Cardano.Node.Client.Balance (
+    FeeLoopError (..),
+    balanceFeeLoop,
+ )
+import Cardano.Node.Client.E2E.Setup (
+    genesisAddr,
+    withDevnet,
+ )
 import Cardano.Node.Client.N2C.Provider (mkN2CProvider)
 import Cardano.Node.Client.Provider (Provider (..))
 
@@ -71,14 +71,14 @@ singleOutput (pp, addr, utxos) = do
         tip = 100_000
         mkOutputs (Coin fee) =
             let refund = inputVal - fee - tip
-            in  if refund < 0
+             in if refund < 0
                     then Left "insufficient"
                     else
-                        Right
-                            $ StrictSeq.singleton
-                            $ mkBasicTxOut
-                                addr
-                                (inject (Coin refund))
+                        Right $
+                            StrictSeq.singleton $
+                                mkBasicTxOut
+                                    addr
+                                    (inject (Coin refund))
         template =
             mkBasicTx
                 ( mkBasicTxBody
@@ -115,12 +115,13 @@ multiOutput (pp, addr, utxos) = do
             let totalRefund = inputVal - fee - n * tipPerOutput
                 perOutput = totalRefund `div` n
                 remainder = totalRefund `mod` n
-            in  if totalRefund < 0
+             in if totalRefund < 0
                     then Left "insufficient"
                     else
-                        Right
-                            $ StrictSeq.fromList
-                                [ mkBasicTxOut addr
+                        Right $
+                            StrictSeq.fromList
+                                [ mkBasicTxOut
+                                    addr
                                     ( inject
                                         ( Coin
                                             ( perOutput
@@ -182,14 +183,14 @@ feeIsSufficient (pp, addr, utxos) = do
         Coin inputVal = seedOut ^. coinTxOutL
         mkOutputs (Coin fee) =
             let refund = inputVal - fee
-            in  if refund < 0
+             in if refund < 0
                     then Left "insufficient"
                     else
-                        Right
-                            $ StrictSeq.singleton
-                            $ mkBasicTxOut
-                                addr
-                                (inject (Coin refund))
+                        Right $
+                            StrictSeq.singleton $
+                                mkBasicTxOut
+                                    addr
+                                    (inject (Coin refund))
         template =
             mkBasicTx
                 ( mkBasicTxBody

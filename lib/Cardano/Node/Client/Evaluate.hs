@@ -23,27 +23,27 @@ let signed = addKeyWitness sk tx
 submitTx submitter signed
 @
 -}
-module Cardano.Node.Client.Evaluate
-    ( evaluateAndBalance
-    ) where
+module Cardano.Node.Client.Evaluate (
+    evaluateAndBalance,
+) where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Ledger.Address (Addr)
-import Cardano.Ledger.Alonzo.TxBody
-    ( scriptIntegrityHashTxBodyL
-    )
+import Cardano.Ledger.Alonzo.TxBody (
+    scriptIntegrityHashTxBodyL,
+ )
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
-import Cardano.Ledger.Api.Tx
-    ( Tx
-    , bodyTxL
-    , witsTxL
-    )
-import Cardano.Ledger.Api.Tx.Body
-    ( inputsTxBodyL
-    )
+import Cardano.Ledger.Api.Tx (
+    Tx,
+    bodyTxL,
+    witsTxL,
+ )
+import Cardano.Ledger.Api.Tx.Body (
+    inputsTxBodyL,
+ )
 import Cardano.Ledger.Api.Tx.Out (TxOut)
 import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
 import Cardano.Ledger.Conway (ConwayEra)
@@ -51,10 +51,10 @@ import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
 
-import Cardano.Node.Client.Balance
-    ( balanceTx
-    , computeScriptIntegrity
-    )
+import Cardano.Node.Client.Balance (
+    balanceTx,
+    computeScriptIntegrity,
+ )
 import Cardano.Node.Client.Provider (Provider (..))
 
 {- | Evaluate Plutus scripts, patch execution units,
@@ -82,9 +82,10 @@ evaluateAndBalance ::
     Language ->
     Provider IO ->
     PParams ConwayEra ->
-    -- | All input UTxOs (fee-paying and script).
-    --   Their 'TxIn's are unioned with the body's
-    --   inputs.
+    {- | All input UTxOs (fee-paying and script).
+    Their 'TxIn's are unioned with the body's
+    inputs.
+    -}
     [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->
@@ -119,9 +120,9 @@ evaluateAndBalance lang prov pp inputUtxos changeAddr tx =
         if null failures
             then pure ()
             else
-                error
-                    $ "evaluateAndBalance: \
-                      \script eval failed: "
+                error $
+                    "evaluateAndBalance: \
+                    \script eval failed: "
                         <> show failures
         -- Patch ExUnits from eval result
         let Redeemers rdmrMap =
@@ -156,7 +157,7 @@ evaluateAndBalance lang prov pp inputUtxos changeAddr tx =
             changeAddr
             patched' of
             Left err ->
-                error
-                    $ "evaluateAndBalance: "
+                error $
+                    "evaluateAndBalance: "
                         <> show err
             Right balanced -> pure balanced
