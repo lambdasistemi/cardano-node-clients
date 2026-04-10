@@ -44,7 +44,6 @@ library
     Cardano.Node.Client.Balance
     Cardano.Node.Client.Evaluate
     Cardano.Node.Client.N2C.ChainSync
-    Cardano.Node.Client.TxBuild
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
     Cardano.Node.Client.N2C.LocalStateQuery
@@ -55,6 +54,7 @@ library
     Cardano.Node.Client.Provider
     Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
+    Cardano.Node.Client.TxBuild
     Cardano.Node.Client.Types
     Data.List.SampleFibonacci
 
