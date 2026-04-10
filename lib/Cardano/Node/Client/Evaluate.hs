@@ -1,5 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
-
 {- |
 Module      : Cardano.Node.Client.Evaluate
 Description : Evaluate scripts and balance in one step

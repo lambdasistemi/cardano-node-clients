@@ -1,5 +1,3 @@
-{-# LANGUAGE NumericUnderscores #-}
-
 module Cardano.Node.Client.BalanceSpec (spec) where
 
 import Data.List (nub, sort)
