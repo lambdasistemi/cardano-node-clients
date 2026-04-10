@@ -42,6 +42,7 @@ library
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.Balance
+    Cardano.Node.Client.Evaluate
     Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
@@ -123,11 +124,21 @@ test-suite unit-tests
   hs-source-dirs:   test
   main-is:          unit-main.hs
   default-language: GHC2021
-  other-modules:    Data.List.SampleFibonacciSpec
+  other-modules:
+    Cardano.Node.Client.BalanceSpec
+    Data.List.SampleFibonacciSpec
+
   build-depends:
     , base
+    , cardano-crypto-class
+    , cardano-ledger-alonzo
+    , cardano-ledger-api
+    , cardano-ledger-conway
+    , cardano-ledger-core
     , cardano-node-clients
+    , containers
     , hspec
+    , plutus-core
     , QuickCheck
 
 test-suite e2e-tests
@@ -137,6 +148,7 @@ test-suite e2e-tests
   main-is:          main.hs
   default-language: GHC2021
   other-modules:
+    Cardano.Node.Client.E2E.BalanceSpec
     Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
     Cardano.Node.Client.E2E.ProviderSpec
@@ -153,7 +165,9 @@ test-suite e2e-tests
     , cardano-node-clients
     , cardano-node-clients:devnet
     , cardano-read-ledger
+    , cardano-strict-containers
     , chain-follower
+    , containers
     , contra-tracer
     , hspec
     , lens
