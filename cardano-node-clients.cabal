@@ -44,6 +44,7 @@ library
     Cardano.Node.Client.Balance
     Cardano.Node.Client.Evaluate
     Cardano.Node.Client.N2C.ChainSync
+    Cardano.Node.Client.TxBuild
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
     Cardano.Node.Client.N2C.LocalStateQuery
@@ -65,6 +66,7 @@ library
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-mary
     , cardano-slotting
     , cardano-strict-containers
     , chain-follower
@@ -72,6 +74,7 @@ library
     , contra-tracer
     , microlens
     , network-mux
+    , operational
     , ouroboros-consensus
     , ouroboros-consensus-cardano
     , ouroboros-consensus-protocol
@@ -126,10 +129,12 @@ test-suite unit-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.BalanceSpec
+    Cardano.Node.Client.TxBuildSpec
     Data.List.SampleFibonacciSpec
 
   build-depends:
     , base
+    , bytestring
     , cardano-crypto-class
     , cardano-ledger-alonzo
     , cardano-ledger-api
@@ -138,6 +143,7 @@ test-suite unit-tests
     , cardano-node-clients
     , containers
     , hspec
+    , microlens
     , plutus-core
     , QuickCheck
 
