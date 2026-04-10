@@ -137,6 +137,7 @@ test-suite e2e-tests
   main-is:          main.hs
   default-language: GHC2021
   other-modules:
+    Cardano.Node.Client.E2E.BalanceSpec
     Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
     Cardano.Node.Client.E2E.ProviderSpec
@@ -153,6 +154,8 @@ test-suite e2e-tests
     , cardano-node-clients
     , cardano-node-clients:devnet
     , cardano-read-ledger
+    , cardano-strict-containers
+    , containers
     , chain-follower
     , contra-tracer
     , hspec
