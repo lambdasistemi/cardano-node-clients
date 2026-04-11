@@ -62,6 +62,7 @@ library
     , base
     , bytestring
     , cardano-binary
+    , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
@@ -139,12 +140,14 @@ test-suite unit-tests
     , base
     , bytestring
     , cardano-crypto-class
+    , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-node-clients
+    , cardano-slotting
     , containers
     , hspec
     , microlens

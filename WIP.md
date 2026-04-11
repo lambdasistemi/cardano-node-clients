@@ -1,7 +1,7 @@
 # WIP: Transaction Builder DSL
 
 ## Status
-Slices 1-5 done, unit tests green. Next: Slice 6 (Reference + Validity).
+Slices 1-6 done, unit tests green. Next: Slices 7-9 (MPFS migrations).
 
 ## Links
 - PR: lambdasistemi/cardano-node-clients#38
@@ -44,13 +44,20 @@ Slices 1-5 done, unit tests green. Next: Slice 6 (Reference + Validity).
 - `build` now returns `Left (ChecksFailed [...])` after convergence
 - Tests for custom failure, min-UTxO failure, tx-size failure, and all-pass
 
+### Slice 6: Reference inputs + validity intervals
+- `Reference :: TxIn -> TxInstr q e ()`
+- `SetValidFrom :: SlotNo -> TxInstr q e ()`
+- `SetValidTo :: SlotNo -> TxInstr q e ()`
+- `reference`, `validFrom`, `validTo`
+- `assembleTx` now fills `referenceInputsTxBodyL` and `vldtTxBodyL`
+- Retract-shaped assembly coverage in `TxBuildSpec`
+
 ## Next
 
-### Slice 6: Reference inputs + validity intervals
 ### Slices 7-9: MPFS migrations
 
 ## Tests
-23 `TxBuild` examples passing
+24 `TxBuild` examples passing
 
 ## Key files
 - `lib/Cardano/Node/Client/TxBuild.hs`

@@ -38,6 +38,7 @@ module Cardano.Node.Client.TxBuild (
     -- * Input combinators
     spend,
     spendScript,
+    reference,
     collateral,
 
     -- * Output combinators
@@ -49,6 +50,8 @@ module Cardano.Node.Client.TxBuild (
     mint,
 
     -- * Constraints
+    validFrom,
+    validTo,
     requireSignature,
     attachScript,
 
@@ -96,6 +99,7 @@ import Data.Word (Word32)
 import Numeric.Natural (Natural)
 
 import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.PParams (getLanguageView)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.Tx (hashScriptIntegrity)
@@ -124,7 +128,9 @@ import Cardano.Ledger.Api.Tx.Body (
     mintTxBodyL,
     mkBasicTxBody,
     outputsTxBodyL,
+    referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
+    vldtTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
@@ -137,7 +143,9 @@ import Cardano.Ledger.Api.Tx.Wits (
     rdmrsTxWitsL,
     scriptTxWitsL,
  )
-import Cardano.Ledger.BaseTypes (StrictMaybe (SNothing))
+import Cardano.Ledger.BaseTypes (
+    StrictMaybe (SJust, SNothing),
+ )
 import Cardano.Ledger.Coin (Coin)
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
@@ -168,6 +176,7 @@ import Cardano.Node.Client.Balance (
     BalanceError,
     balanceTx,
  )
+import Cardano.Slotting.Slot (SlotNo)
 import Lens.Micro ((&), (.~), (^.))
 import PlutusCore.Data qualified as PLC
 import PlutusTx.Builtins.Internal (
@@ -238,6 +247,8 @@ data TxInstr q e a where
     -- | Spend an input with a witness.
     Spend ::
         TxIn -> SpendWitness -> TxInstr q e ()
+    -- | Add a reference input.
+    Reference :: TxIn -> TxInstr q e ()
     -- | Add a collateral input.
     Collateral :: TxIn -> TxInstr q e ()
     -- | Add an output.
@@ -256,6 +267,10 @@ data TxInstr q e a where
     -- | Attach a Plutus script.
     AttachScript ::
         Script ConwayEra -> TxInstr q e ()
+    -- | Set the lower validity bound.
+    SetValidFrom :: SlotNo -> TxInstr q e ()
+    -- | Set the upper validity bound.
+    SetValidTo :: SlotNo -> TxInstr q e ()
     -- | Peek at the final Tx (fixpoint).
     Peek ::
         (Tx ConwayEra -> Convergence a) ->
@@ -299,6 +314,10 @@ spendScript txIn r = do
          in if Set.member txIn ins
                 then Ok (spendingIndex txIn ins)
                 else Iterate 0
+
+-- | Add a reference input.
+reference :: TxIn -> TxBuild q e ()
+reference = singleton . Reference
 
 -- | Add a collateral input.
 collateral :: TxIn -> TxBuild q e ()
@@ -382,6 +401,14 @@ mint pid assets r =
         , q /= 0
         ]
 
+-- | Set the lower validity bound.
+validFrom :: SlotNo -> TxBuild q e ()
+validFrom = singleton . SetValidFrom
+
+-- | Set the upper validity bound.
+validTo :: SlotNo -> TxBuild q e ()
+validTo = singleton . SetValidTo
+
 -- | Require a key signature.
 requireSignature ::
     KeyHash 'Witness -> TxBuild q e ()
@@ -452,6 +479,7 @@ checkTxSize pp =
 -- | Accumulated state from interpreting 'TxBuild'.
 data TxState e = TxState
     { tsSpends :: [(TxIn, SpendWitness)]
+    , tsRefIns :: [TxIn]
     , tsCollIns :: [TxIn]
     , tsOuts :: [TxOut ConwayEra]
     , tsMints ::
@@ -464,6 +492,8 @@ data TxState e = TxState
     , tsSigners :: Set (KeyHash 'Witness)
     , tsScripts ::
         Map ScriptHash (Script ConwayEra)
+    , tsValidFrom :: StrictMaybe SlotNo
+    , tsValidTo :: StrictMaybe SlotNo
     , tsChecks :: [Tx ConwayEra -> Check e]
     }
 
@@ -471,11 +501,14 @@ emptyState :: TxState e
 emptyState =
     TxState
         { tsSpends = []
+        , tsRefIns = []
         , tsCollIns = []
         , tsOuts = []
         , tsMints = []
         , tsSigners = Set.empty
         , tsScripts = Map.empty
+        , tsValidFrom = SNothing
+        , tsValidTo = SNothing
         , tsChecks = []
         }
 
@@ -510,6 +543,14 @@ interpretWithM runCtx currentTx = go emptyState True
                 st
                     { tsSpends =
                         tsSpends st ++ [(txIn, w)]
+                    }
+                conv
+                (k ())
+        Reference txIn :>>= k ->
+            go
+                st
+                    { tsRefIns =
+                        tsRefIns st ++ [txIn]
                     }
                 conv
                 (k ())
@@ -557,6 +598,20 @@ interpretWithM runCtx currentTx = go emptyState True
                     }
                 conv
                 (k ())
+        SetValidFrom slot :>>= k ->
+            go
+                st
+                    { tsValidFrom = SJust slot
+                    }
+                conv
+                (k ())
+        SetValidTo slot :>>= k ->
+            go
+                st
+                    { tsValidTo = SJust slot
+                    }
+                conv
+                (k ())
         Peek f :>>= k ->
             case f currentTx of
                 Ok a -> go st conv (k a)
@@ -580,6 +635,7 @@ assembleTx pp st =
     let
         allSpendIns =
             Set.fromList $ map fst (tsSpends st)
+        refIns = Set.fromList (tsRefIns st)
         collIns = Set.fromList (tsCollIns st)
         outs = StrictSeq.fromList (tsOuts st)
         mintMA = foldl' addMint mempty (tsMints st)
@@ -606,10 +662,16 @@ assembleTx pp st =
             mkBasicTxBody
                 & inputsTxBodyL .~ allSpendIns
                 & outputsTxBodyL .~ outs
+                & referenceInputsTxBodyL .~ refIns
                 & collateralInputsTxBodyL .~ collIns
                 & mintTxBodyL .~ mintMA
                 & reqSignerHashesTxBodyL
                     .~ tsSigners st
+                & vldtTxBodyL
+                    .~ ValidityInterval
+                        { invalidBefore = tsValidFrom st
+                        , invalidHereafter = tsValidTo st
+                        }
                 & scriptIntegrityHashTxBodyL
                     .~ integrity
      in

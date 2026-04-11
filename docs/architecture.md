@@ -71,10 +71,11 @@ Current implemented pieces:
 - `Ctx` for pluggable domain queries resolved by `Interpret` or
   `InterpretIO`
 - `Valid` for opt-in post-convergence transaction checks
+- reference inputs and explicit validity intervals in the assembled
+  `TxBody`
 - `draft` and `draftWith` for pure assembly
 - `build` for script evaluation, `ExUnits` patching, and balancing
 
 Not implemented yet in this branch:
 
-- reference inputs
-- validity interval instructions
+- the MPFS builder migrations

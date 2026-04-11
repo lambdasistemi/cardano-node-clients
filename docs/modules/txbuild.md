@@ -8,7 +8,7 @@ Operational transaction builder DSL for Conway-era transactions.
 
 ## What exists today
 
-The current implementation covers the first five slices of the DSL:
+The current implementation covers the first six slices of the DSL:
 
 - spend, script spend, collateral, output, mint, signer, and script
   attachment instructions
@@ -16,13 +16,13 @@ The current implementation covers the first five slices of the DSL:
   indices, and fee-driven outputs
 - `Ctx` for pluggable domain queries
 - `Valid` for post-convergence transaction checks
+- reference inputs and validity interval instructions
 - pure interpreters with `draft` and `draftWith`
 - effectful building with `build`, including script evaluation,
   `ExUnits` patching, and balancing
 
-The next planned slices add reference inputs and validity interval
-support. Those APIs are described in the spec, but they are not
-implemented in the module yet.
+The next planned slices are the MPFS migrations that move the existing
+offchain builders onto this DSL.
 
 ## Core types
 
@@ -85,6 +85,9 @@ output           :: TxOut ConwayEra -> TxBuild q e Word32
 mint             :: ToData r => PolicyID -> Map AssetName Integer -> r -> TxBuild q e ()
 requireSignature :: KeyHash 'Witness -> TxBuild q e ()
 attachScript     :: Script ConwayEra -> TxBuild q e ()
+reference        :: TxIn -> TxBuild q e ()
+validFrom        :: SlotNo -> TxBuild q e ()
+validTo          :: SlotNo -> TxBuild q e ()
 peek             :: (Tx ConwayEra -> Convergence a) -> TxBuild q e a
 ctx              :: q a -> TxBuild q e a
 valid            :: (Tx ConwayEra -> Check e) -> TxBuild q e ()
@@ -134,3 +137,4 @@ The same `TestQ` program can run through `build` by supplying an
 - `checkMinUtxo` failures
 - `checkTxSize` failures
 - all-pass validation
+- reference-input and validity-interval assembly
