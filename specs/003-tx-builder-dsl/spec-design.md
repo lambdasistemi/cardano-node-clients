@@ -466,22 +466,6 @@ Vertical slices — each delivers one working end-to-end feature with types, log
 - `reference`, `validFrom`, `validTo`
 - Test: Retract-shaped tx (reference input + validity window + required signer)
 
-### Slice 7: MPFS Boot migration
-- Define `CageQ` and `CageErr` in MPFS offchain
-- Rewrite `bootTokenImpl` as `TxBuild CageQ CageErr ()`
-- Production `InterpretIO CageQ` + test `Interpret CageQ`
-- Verify e2e Boot test passes
-
-### Slice 8: MPFS Update/Reject migration (conservation)
-- Rewrite `updateTokenImpl` / `rejectRequestsImpl` using `peek` for fee
-- Verify conservation e2e tests pass
-- Delete `balanceFeeLoop`, `evaluateAndBalance` from Internal.hs
-
-### Slice 9: Remaining MPFS migrations
-- Rewrite End, Retract, Request builders
-- Delete `spendingIndex`, `computeScriptIntegrity`, `placeholderExUnits`
-- All e2e tests pass, Internal.hs cleaned up
-
 ### Phase 4: Transaction Logic Tester (separate ticket)
 
 Not an emulator — a transaction logic tester. It validates that a sequence of `TxBuild` programs produces valid transactions against `cardano-ledger`'s `applyTx`. It does NOT replicate the production infrastructure (chain sync, RocksDB, concurrent queries, rollbacks).

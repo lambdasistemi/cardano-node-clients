@@ -23,7 +23,7 @@ protocol supplies its own constructor:
 ## Current TxBuild status
 
 The transaction builder DSL is under active development and currently
-implements Slices 1-6:
+implements the first complete branch scope:
 
 - spending, outputs, collateral, and minting combinators
 - `Peek`-driven fixpoint values for indices and fee-dependent assembly
@@ -32,8 +32,6 @@ implements Slices 1-6:
 - pluggable context queries through `Ctx`
 - opt-in final-transaction validation via `Valid`
 - reference inputs and explicit validity intervals
-
-The next planned slices are the MPFS migrations.
 
 ## Quick start
 

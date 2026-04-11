@@ -21,9 +21,6 @@ The current implementation covers the first six slices of the DSL:
 - effectful building with `build`, including script evaluation,
   `ExUnits` patching, and balancing
 
-The next planned slices are the MPFS migrations that move the existing
-offchain builders onto this DSL.
-
 ## Core types
 
 ```haskell
@@ -100,6 +97,30 @@ internally so the caller gets the final index after assembly.
 
 ## Example
 
+### Pure draft
+
+```haskell
+{-# LANGUAGE OverloadedStrings #-}
+
+import Cardano.Ledger.BaseTypes (Inject (inject))
+import Cardano.Ledger.Coin (Coin (..))
+
+simpleTransfer :: TxBuild q e ()
+simpleTransfer = do
+    _ <- spend walletInput
+    collateral collateralInput
+    _ <- payTo recipientAddr (inject (Coin 7_000_000))
+    pure ()
+
+tx :: Tx ConwayEra
+tx = draft emptyPParams simpleTransfer
+```
+
+This is the smallest useful shape: spend a wallet input, add
+collateral, and assemble a pure draft transaction.
+
+### Context-aware draft
+
 ```haskell
 {-# LANGUAGE GADTs #-}
 
@@ -119,8 +140,65 @@ tx =
         example
 ```
 
-The same `TestQ` program can run through `build` by supplying an
-`InterpretIO TestQ`.
+Use `draftWith` when the builder depends on domain queries but still
+needs a pure interpreter for testing.
+
+### Build with `Peek` and `Valid`
+
+```haskell
+{-# LANGUAGE GADTs #-}
+
+data WalletQ a where
+    GetProtocolParams :: WalletQ (PParams ConwayEra)
+
+checkedTx :: TxBuild WalletQ String ()
+checkedTx = do
+    pp <- ctx GetProtocolParams
+    outIx <- payTo recipientAddr (inject (Coin 2_000_000))
+    checkMinUtxo pp outIx
+    checkTxSize pp
+    fee <- peek $ \tx ->
+        Ok (tx ^. bodyTxL . feeTxBodyL)
+    valid $ \_tx ->
+        if fee >= Coin 0
+            then Pass
+            else CustomFail "negative fee"
+```
+
+`Peek` is for values that only exist after assembly or balancing, such
+as spending indices, output indices, and the final fee. `Valid` runs
+after convergence, so checks see the final balanced transaction.
+
+### Effectful build
+
+```haskell
+txOrErr <-
+    build
+        pp
+        (InterpretIO runWalletQuery)
+        evaluateTx
+        inputUtxos
+        changeAddr
+        checkedTx
+```
+
+The same program can move from pure tests to production by swapping the
+interpreter and calling `build` instead of `draftWith`.
+
+### Reference input and validity window
+
+```haskell
+windowedTx :: TxBuild q e ()
+windowedTx = do
+    reference oracleRef
+    validFrom lowerBound
+    validTo upperBound
+    requireSignature ownerWkh
+    pure ()
+```
+
+This covers the common "read but do not spend" pattern for reference
+inputs together with explicit validity bounds and signer requirements.
 
 ## Testing status
 

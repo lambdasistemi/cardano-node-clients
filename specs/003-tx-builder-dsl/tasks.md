@@ -68,44 +68,12 @@ Add `Reference`, `SetValidFrom`, `SetValidTo`. Smart constructors: `reference`, 
 
 ---
 
-## Slice 7: MPFS Boot migration
-
-In `cardano-mpfs-offchain`: define `CageQ` and `CageErr`. Rewrite `bootTokenImpl` as `TxBuild CageQ CageErr ()`. Production `InterpretIO CageQ` wrapping existing Provider. Test `Interpret CageQ` with fixture data.
-
-**Test**: e2e Boot test passes with the DSL builder.
-
-**Depends**: Slice 4
-
----
-
-## Slice 8: MPFS Update/Reject (conservation)
-
-Rewrite `updateTokenImpl` and `rejectRequestsImpl` using `peek` for fee-dependent refunds. The `balanceFeeLoop` + `mkOutputs` callback pattern is replaced by `peek` + natural convergence.
-
-**Test**: e2e Update and Reject tests pass. Delete `balanceFeeLoop` from `Balance.hs`.
-
-**Depends**: Slice 7, Slice 3
-
----
-
-## Slice 9: Remaining MPFS migrations
-
-Rewrite End, Retract, Request builders. Delete `evaluateAndBalance`, `spendingIndex`, `computeScriptIntegrity`, `placeholderExUnits` from Internal.hs. All e2e tests pass.
-
-**Test**: full e2e cage flow (Boot → Request → Update → Retract → Reject → End).
-
-**Depends**: Slice 8, Slice 6
-
----
-
 ## Dependency graph
 
 ```
-Slice 1 → Slice 2 → Slice 3 → Slice 4 → Slice 7 → Slice 8 → Slice 9
-              ↓           ↓                              ↑
-          Slice 6     Slice 5                             |
-              ↓                                           |
-              └───────────────────────────────────────────┘
+Slice 1 → Slice 2 → Slice 3 → Slice 4
+              ↓           ↓
+          Slice 6     Slice 5
 ```
 
 ## Summary
@@ -118,6 +86,3 @@ Slice 1 → Slice 2 → Slice 3 → Slice 4 → Slice 7 → Slice 8 → Slice 9
 | 4 | Ctx + pluggable queries | 3 |
 | 5 | Valid + library checkers | 3 |
 | 6 | Reference inputs + validity intervals | 1 |
-| 7 | MPFS Boot migration | 4 |
-| 8 | MPFS Update/Reject (conservation) | 7, 3 |
-| 9 | Remaining MPFS + cleanup | 8, 6 |

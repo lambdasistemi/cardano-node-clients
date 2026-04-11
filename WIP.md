@@ -1,7 +1,7 @@
 # WIP: Transaction Builder DSL
 
 ## Status
-Slices 1-6 done, unit tests green. Next: Slices 7-9 (MPFS migrations).
+Slices 1-6 done, unit tests green. Branch scope complete.
 
 ## Links
 - PR: lambdasistemi/cardano-node-clients#38
@@ -51,10 +51,6 @@ Slices 1-6 done, unit tests green. Next: Slices 7-9 (MPFS migrations).
 - `reference`, `validFrom`, `validTo`
 - `assembleTx` now fills `referenceInputsTxBodyL` and `vldtTxBodyL`
 - Retract-shaped assembly coverage in `TxBuildSpec`
-
-## Next
-
-### Slices 7-9: MPFS migrations
 
 ## Tests
 24 `TxBuild` examples passing
