@@ -2,3 +2,4 @@ dist-newstyle/
 .llm/
 cabal.project.local
 result
+site/
