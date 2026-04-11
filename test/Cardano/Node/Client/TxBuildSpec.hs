@@ -1,3 +1,5 @@
+{-# LANGUAGE GADTs #-}
+
 {- |
 Module      : Cardano.Node.Client.TxBuildSpec
 Description : TxBuild DSL tests — Slice 1
@@ -24,7 +26,10 @@ import Cardano.Ledger.Api.Tx.Body (
     mintTxBodyL,
     outputsTxBodyL,
  )
-import Cardano.Ledger.Api.Tx.Out (mkBasicTxOut)
+import Cardano.Ledger.Api.Tx.Out (
+    TxOut,
+    mkBasicTxOut,
+ )
 import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
 import Cardano.Ledger.BaseTypes (
     Inject (..),
@@ -65,6 +70,7 @@ import Cardano.Crypto.Hash (
  )
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
+import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust)
 import Data.Word (Word8)
@@ -125,7 +131,11 @@ spec = describe "TxBuild" $ do
     spendIndexSpec
     scriptSpendSpec
     mintSpec
+    ctxSpec
     buildSpec
+
+data TestQ a where
+    GetValue :: TestQ Int
 
 spendSpec :: Spec
 spendSpec =
@@ -361,6 +371,29 @@ mintSpec =
             hasMint `shouldBe` True
             Map.size rdmrs `shouldBe` 2
 
+ctxSpec :: Spec
+ctxSpec =
+    describe "ctx" $ do
+        it "flows interpreted values through subsequent binds" $ do
+            let interpret =
+                    Interpret $ \GetValue -> 7
+                expected :: TxOut ConwayEra
+                expected =
+                    mkBasicTxOut
+                        (mkAddr 3)
+                        (inject (Coin 7))
+                tx =
+                    draftWith emptyPParams interpret $ do
+                        n <- ctx GetValue
+                        _ <-
+                            payTo
+                                (mkAddr 3)
+                                (inject (Coin (fromIntegral n)))
+                        pure ()
+                outs = tx ^. bodyTxL . outputsTxBodyL
+            toList outs
+                `shouldBe` [expected]
+
 buildSpec :: Spec
 buildSpec =
     describe "build" $ do
@@ -385,6 +418,7 @@ buildSpec =
                 result <-
                     build
                         emptyPParams
+                        noCtxInterpretIO
                         mockEval
                         [feeUtxo]
                         (mkAddr 1)
@@ -421,6 +455,7 @@ buildSpec =
             result <-
                 build
                     emptyPParams
+                    noCtxInterpretIO
                     mockEval
                     [feeUtxo]
                     (mkAddr 1)
@@ -439,6 +474,48 @@ buildSpec =
                     -- value
                     fee `shouldSatisfy` (>= 0)
 
+        it "resolves ctx queries through InterpretIO" $ do
+            let prog = do
+                    _ <- spend (mkTxIn 1)
+                    n <- ctx GetValue
+                    _ <-
+                        payTo
+                            (mkAddr 4)
+                            (inject (Coin (fromIntegral n)))
+                    pure ()
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                interpret =
+                    InterpretIO $ \GetValue -> pure 7
+                mockEval _ = pure Map.empty
+            result <-
+                build
+                    emptyPParams
+                    interpret
+                    mockEval
+                    [feeUtxo]
+                    (mkAddr 1)
+                    prog
+            case result of
+                Left err ->
+                    expectationFailure $ show err
+                Right tx -> do
+                    let outs =
+                            toList $
+                                tx
+                                    ^. bodyTxL
+                                        . outputsTxBodyL
+                        expected :: TxOut ConwayEra
+                        expected =
+                            mkBasicTxOut
+                                (mkAddr 4)
+                                (inject (Coin 7))
+                    expected `shouldSatisfy` (`elem` outs)
+
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
 isSpend (ConwaySpending _) = True
@@ -454,9 +531,31 @@ program's result.
 -}
 runDraft ::
     TxBuild q e a -> (Tx ConwayEra, a)
-runDraft prog =
+runDraft = runDraftWith noCtxInterpret
+
+runDraftWith ::
+    Interpret q ->
+    TxBuild q e a ->
+    (Tx ConwayEra, a)
+runDraftWith interpret prog =
     let initialTx = draft emptyPParams (pure ())
-        (st1, _, _) = interpretWith initialTx prog
+        (st1, _, _) =
+            interpretWith interpret initialTx prog
         tx1 = assembleTx emptyPParams st1
-        (st2, a, _) = interpretWith tx1 prog
+        (st2, a, _) =
+            interpretWith interpret tx1 prog
      in (assembleTx emptyPParams st2, a)
+
+noCtxInterpret :: Interpret q
+noCtxInterpret =
+    Interpret $
+        const $
+            error
+                "test: encountered ctx without interpreter"
+
+noCtxInterpretIO :: InterpretIO q
+noCtxInterpretIO =
+    InterpretIO $
+        const $
+            error
+                "test: encountered ctx without interpreter"

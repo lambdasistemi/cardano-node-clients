@@ -52,9 +52,11 @@ module Cardano.Node.Client.TxBuild (
 
     -- * Deferred
     peek,
+    ctx,
 
     -- * Assembly
     draft,
+    draftWith,
     build,
 
     -- * Errors
@@ -72,6 +74,9 @@ import Control.Monad.Operational (
     view,
  )
 import Data.Foldable (foldl')
+import Data.Functor.Identity (
+    runIdentity,
+ )
 import Data.List (elemIndex)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -223,6 +228,8 @@ data TxInstr q e a where
     Peek ::
         (Tx ConwayEra -> Convergence a) ->
         TxInstr q e a
+    -- | Query external context.
+    Ctx :: q a -> TxInstr q e a
 
 -- | Monadic transaction builder.
 type TxBuild q e = Program (TxInstr q e)
@@ -354,6 +361,10 @@ peek ::
     TxBuild q e a
 peek = singleton . Peek
 
+-- | Query pluggable build context.
+ctx :: q a -> TxBuild q e a
+ctx = singleton . Ctx
+
 -- ----------------------------------------------------
 -- Interpreter state
 -- ----------------------------------------------------
@@ -390,19 +401,28 @@ emptyState =
 The 'Tx' argument resolves 'Peek' nodes.
 -}
 interpretWith ::
+    Interpret q ->
     Tx ConwayEra ->
     TxBuild q e a ->
     -- | (state, result, all converged?)
     (TxState, a, Bool)
-interpretWith currentTx = go emptyState True
+interpretWith interpret currentTx prog =
+    runIdentity $
+        interpretWithM
+            (pure . runInterpret interpret)
+            currentTx
+            prog
+
+interpretWithM ::
+    (Monad m) =>
+    (forall x. q x -> m x) ->
+    Tx ConwayEra ->
+    TxBuild q e a ->
+    m (TxState, a, Bool)
+interpretWithM runCtx currentTx = go emptyState True
   where
-    go ::
-        TxState ->
-        Bool ->
-        TxBuild q' e' b ->
-        (TxState, b, Bool)
     go st conv prog = case view prog of
-        Return a -> (st, a, conv)
+        Return a -> pure (st, a, conv)
         Spend txIn w :>>= k ->
             go
                 st
@@ -460,6 +480,9 @@ interpretWith currentTx = go emptyState True
                 Ok a -> go st conv (k a)
                 Iterate a ->
                     go st False (k a)
+        Ctx q :>>= k -> do
+            a <- runCtx q
+            go st conv (k a)
 
 -- | Assemble a 'Tx' from interpreter state.
 assembleTx :: PParams ConwayEra -> TxState -> Tx ConwayEra
@@ -521,16 +544,32 @@ draft ::
     PParams ConwayEra ->
     TxBuild q e a ->
     Tx ConwayEra
-draft pp prog =
+draft pp = draftWith pp noCtxInterpret
+
+noCtxInterpret :: Interpret q
+noCtxInterpret =
+    Interpret $
+        const $
+            error
+                "draft: encountered ctx without draftWith interpreter"
+
+draftWith ::
+    PParams ConwayEra ->
+    Interpret q ->
+    TxBuild q e a ->
+    Tx ConwayEra
+draftWith pp interpret prog =
     let
         -- Pass 1: collect steps with bogus Tx
         initialTx = mkBasicTx mkBasicTxBody
-        (st1, _, _) = interpretWith initialTx prog
+        (st1, _, _) =
+            interpretWith interpret initialTx prog
         -- Assemble from pass 1
         tx1 = assembleTx pp st1
         -- Pass 2: re-interpret with real Tx for
         -- Peek resolution
-        (st2, _, _) = interpretWith tx1 prog
+        (st2, _, _) =
+            interpretWith interpret tx1 prog
      in
         assembleTx pp st2
 
@@ -558,6 +597,7 @@ the Tx body stabilizes:
 -}
 build ::
     PParams ConwayEra ->
+    InterpretIO q ->
     -- | Script evaluator
     ( Tx ConwayEra ->
       IO
@@ -575,13 +615,17 @@ build ::
     Addr ->
     TxBuild q e a ->
     IO (Either (BuildError e) (Tx ConwayEra))
-build pp evaluateTx inputUtxos changeAddr prog =
+build pp interpret evaluateTx inputUtxos changeAddr prog =
     loop (mkBasicTx mkBasicTxBody)
   where
     loop prevTx = do
         -- 1. Interpret with current Tx
-        let (st, _, converged) =
-                interpretWith prevTx prog
+        (st, _, converged) <-
+            interpretWithM
+                (runInterpretIO interpret)
+                prevTx
+                prog
+        let
             tx = assembleTx pp st
         -- 2. Add all input TxIns for eval
         let existingIns =
