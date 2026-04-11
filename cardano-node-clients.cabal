@@ -82,6 +82,8 @@ library
     , ouroboros-network-api
     , ouroboros-network-framework
     , ouroboros-network-protocols
+    , plutus-core
+    , plutus-tx
     , serialise
     , stm
     , text
@@ -140,6 +142,7 @@ test-suite unit-tests
     , cardano-ledger-api
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-mary
     , cardano-node-clients
     , containers
     , hspec
