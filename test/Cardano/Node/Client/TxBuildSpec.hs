@@ -19,10 +19,12 @@ import Cardano.Ledger.Api.PParams (emptyPParams)
 import Cardano.Ledger.Api.Tx (Tx, witsTxL)
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
+    feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
  )
+import Cardano.Ledger.Api.Tx.Out (mkBasicTxOut)
 import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
 import Cardano.Ledger.BaseTypes (
     Inject (..),
@@ -123,6 +125,7 @@ spec = describe "TxBuild" $ do
     spendIndexSpec
     scriptSpendSpec
     mintSpec
+    buildSpec
 
 spendSpec :: Spec
 spendSpec =
@@ -357,6 +360,84 @@ mintSpec =
             hasSpend `shouldBe` True
             hasMint `shouldBe` True
             Map.size rdmrs `shouldBe` 2
+
+buildSpec :: Spec
+buildSpec =
+    describe "build" $ do
+        it "produces a balanced Tx with no scripts" $
+            do
+                let prog = do
+                        _ <- spend (mkTxIn 1)
+                        _ <-
+                            payTo
+                                (mkAddr 2)
+                                (inject (Coin 3_000_000))
+                        pure ()
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            ( inject
+                                (Coin 10_000_000)
+                            )
+                        )
+                    mockEval _ = pure Map.empty
+                result <-
+                    build
+                        emptyPParams
+                        mockEval
+                        [feeUtxo]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left err ->
+                        expectationFailure $
+                            show err
+                    Right tx -> do
+                        let ins =
+                                tx
+                                    ^. bodyTxL
+                                        . inputsTxBodyL
+                        Set.size ins
+                            `shouldSatisfy` (> 0)
+
+        it "peek reads fee from balanced Tx" $ do
+            let prog = do
+                    _ <- spend (mkTxIn 1)
+                    fee <- peek $ \tx ->
+                        Ok (tx ^. bodyTxL . feeTxBodyL)
+                    _ <-
+                        payTo
+                            (mkAddr 2)
+                            (inject fee)
+                    pure ()
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                mockEval _ = pure Map.empty
+            result <-
+                build
+                    emptyPParams
+                    mockEval
+                    [feeUtxo]
+                    (mkAddr 1)
+                    prog
+            case result of
+                Left err ->
+                    expectationFailure $ show err
+                Right tx -> do
+                    let Coin fee =
+                            tx
+                                ^. bodyTxL
+                                    . feeTxBodyL
+                    -- Fee is 0 with emptyPParams
+                    -- (zero fee coefficients) — the
+                    -- point is it converged, not the
+                    -- value
+                    fee `shouldSatisfy` (>= 0)
 
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
