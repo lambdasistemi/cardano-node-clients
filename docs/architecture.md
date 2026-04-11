@@ -75,7 +75,3 @@ Current implemented pieces:
   `TxBody`
 - `draft` and `draftWith` for pure assembly
 - `build` for script evaluation, `ExUnits` patching, and balancing
-
-Not implemented yet in this branch:
-
-- the MPFS builder migrations
