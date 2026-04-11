@@ -1,7 +1,7 @@
 # WIP: Transaction Builder DSL
 
 ## Status
-Slices 1-4 done, unit tests green. Next: Slice 5 (Valid).
+Slices 1-5 done, unit tests green. Next: Slice 6 (Reference + Validity).
 
 ## Links
 - PR: lambdasistemi/cardano-node-clients#38
@@ -36,14 +36,21 @@ Slices 1-4 done, unit tests green. Next: Slice 5 (Valid).
 - `build` now takes `InterpretIO q`
 - Test query GADT coverage in `TxBuildSpec`
 
+### Slice 5: Valid + library checkers
+- `Valid :: (Tx ConwayEra -> Check e) -> TxInstr q e ()`
+- `Check e = Pass | LedgerFail LedgerCheck | CustomFail e`
+- `LedgerCheck` includes min-UTxO and tx-size failures
+- `valid`, `checkMinUtxo`, `checkTxSize`
+- `build` now returns `Left (ChecksFailed [...])` after convergence
+- Tests for custom failure, min-UTxO failure, tx-size failure, and all-pass
+
 ## Next
 
-### Slice 5: Valid + library checkers
 ### Slice 6: Reference inputs + validity intervals
 ### Slices 7-9: MPFS migrations
 
 ## Tests
-18 `TxBuild` examples passing
+23 `TxBuild` examples passing
 
 ## Key files
 - `lib/Cardano/Node/Client/TxBuild.hs`

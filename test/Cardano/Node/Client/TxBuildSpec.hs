@@ -17,7 +17,12 @@ import Test.Hspec
 import Cardano.Ledger.Address (Addr (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
-import Cardano.Ledger.Api.PParams (emptyPParams)
+import Cardano.Ledger.Api.PParams (
+    CoinPerByte (..),
+    emptyPParams,
+    ppCoinsPerUTxOByteL,
+    ppMaxTxSizeL,
+ )
 import Cardano.Ledger.Api.Tx (Tx, witsTxL)
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
@@ -61,7 +66,7 @@ import Cardano.Ledger.TxIn (
     TxIn (..),
  )
 import Cardano.Node.Client.TxBuild
-import Lens.Micro ((^.))
+import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Crypto.Hash (
     Hash,
@@ -132,10 +137,15 @@ spec = describe "TxBuild" $ do
     scriptSpendSpec
     mintSpec
     ctxSpec
+    validSpec
     buildSpec
 
 data TestQ a where
     GetValue :: TestQ Int
+
+data TestErr
+    = BrokenInvariant
+    deriving (Show, Eq)
 
 spendSpec :: Spec
 spendSpec =
@@ -394,12 +404,175 @@ ctxSpec =
             toList outs
                 `shouldBe` [expected]
 
+validSpec :: Spec
+validSpec =
+    describe "valid" $ do
+        it "returns custom failures after convergence" $ do
+            let prog :: TxBuild TestQ TestErr ()
+                prog = do
+                    _ <- spend (mkTxIn 1)
+                    valid $
+                        const $
+                            CustomFail BrokenInvariant
+                    pure ()
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                mockEval _ = pure Map.empty
+            result <-
+                build
+                    emptyPParams
+                    noCtxInterpretIO
+                    mockEval
+                    [feeUtxo]
+                    (mkAddr 1)
+                    prog
+            case result of
+                Left (ChecksFailed [CustomFail err]) ->
+                    err `shouldBe` BrokenInvariant
+                Left err ->
+                    expectationFailure $ show err
+                Right _ ->
+                    expectationFailure
+                        "expected custom validation failure"
+
+        it "fails checkMinUtxo when an output is below the threshold" $
+            do
+                let pp =
+                        emptyPParams
+                            & ppCoinsPerUTxOByteL
+                                .~ CoinPerByte
+                                    (Coin 1)
+                    prog :: TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <- spend (mkTxIn 1)
+                        outIx <-
+                            payTo
+                                (mkAddr 2)
+                                (inject (Coin 1))
+                        checkMinUtxo pp outIx
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 10_000_000))
+                        )
+                    mockEval _ = pure Map.empty
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [feeUtxo]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left
+                        ( ChecksFailed
+                                [ LedgerFail
+                                        (MinUtxoViolation ix actual required)
+                                    ]
+                            ) -> do
+                            ix `shouldBe` 0
+                            actual `shouldBe` Coin 1
+                            actual `shouldSatisfy` (< required)
+                    Left err ->
+                        expectationFailure $ show err
+                    Right _ ->
+                        expectationFailure
+                            "expected min-UTxO failure"
+
+        it "fails checkTxSize when the encoded tx exceeds ppMaxTxSizeL" $
+            do
+                let pp =
+                        emptyPParams
+                            & ppMaxTxSizeL .~ 1
+                    prog :: TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <- spend (mkTxIn 1)
+                        _ <-
+                            payTo
+                                (mkAddr 2)
+                                (inject (Coin 3_000_000))
+                        checkTxSize pp
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 10_000_000))
+                        )
+                    mockEval _ = pure Map.empty
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [feeUtxo]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left
+                        ( ChecksFailed
+                                [ LedgerFail
+                                        (TxSizeExceeded actual limit)
+                                    ]
+                            ) -> do
+                            limit `shouldBe` 1
+                            actual `shouldSatisfy` (> limit)
+                    Left err ->
+                        expectationFailure $ show err
+                    Right _ ->
+                        expectationFailure
+                            "expected tx-size failure"
+
+        it "returns Right when all checks pass" $ do
+            let pp =
+                    emptyPParams
+                        & ppCoinsPerUTxOByteL
+                            .~ CoinPerByte (Coin 1)
+                prog :: TxBuild TestQ TestErr ()
+                prog = do
+                    _ <- spend (mkTxIn 1)
+                    outIx <-
+                        payTo
+                            (mkAddr 2)
+                            (inject (Coin 5_000_000))
+                    checkMinUtxo pp outIx
+                    valid $ const Pass
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                mockEval _ = pure Map.empty
+            result <-
+                build
+                    pp
+                    noCtxInterpretIO
+                    mockEval
+                    [feeUtxo]
+                    (mkAddr 1)
+                    prog
+            case result of
+                Left err ->
+                    expectationFailure $ show err
+                Right tx -> do
+                    let outs =
+                            tx ^. bodyTxL . outputsTxBodyL
+                    length outs
+                        `shouldSatisfy` (> 0)
+
 buildSpec :: Spec
 buildSpec =
     describe "build" $ do
         it "produces a balanced Tx with no scripts" $
             do
-                let prog = do
+                let prog :: TxBuild TestQ TestErr ()
+                    prog = do
                         _ <- spend (mkTxIn 1)
                         _ <-
                             payTo
@@ -436,7 +609,8 @@ buildSpec =
                             `shouldSatisfy` (> 0)
 
         it "peek reads fee from balanced Tx" $ do
-            let prog = do
+            let prog :: TxBuild TestQ TestErr ()
+                prog = do
                     _ <- spend (mkTxIn 1)
                     fee <- peek $ \tx ->
                         Ok (tx ^. bodyTxL . feeTxBodyL)
@@ -475,7 +649,8 @@ buildSpec =
                     fee `shouldSatisfy` (>= 0)
 
         it "resolves ctx queries through InterpretIO" $ do
-            let prog = do
+            let prog :: TxBuild TestQ TestErr ()
+                prog = do
                     _ <- spend (mkTxIn 1)
                     n <- ctx GetValue
                     _ <-
