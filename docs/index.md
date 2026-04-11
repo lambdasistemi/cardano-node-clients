@@ -10,6 +10,7 @@ Cardano node:
 - **Provider** -- query UTxOs and protocol parameters
 - **Submitter** -- submit signed transactions
 - **Balance** -- iterative fee estimation and transaction balancing
+- **TxBuild** -- Conway-era transaction builder DSL with `Peek` fixpoints and pluggable `Ctx` queries
 
 The interfaces are protocol-agnostic records-of-functions. Each transport
 protocol supplies its own constructor:
@@ -18,6 +19,20 @@ protocol supplies its own constructor:
 |----------|----------|-----------|
 | N2C (Unix socket) | `mkN2CProvider` | `mkN2CSubmitter` |
 | N2N (TCP) | planned | planned |
+
+## Current TxBuild status
+
+The transaction builder DSL is under active development and currently
+implements Slices 1-4:
+
+- spending, outputs, collateral, and minting combinators
+- `Peek`-driven fixpoint values for indices and fee-dependent assembly
+- pure drafting with `draft` and `draftWith`
+- effectful building with `build` and `InterpretIO`
+- pluggable context queries through `Ctx`
+
+The next planned slices are `Valid` checks, reference inputs, and
+validity interval support.
 
 ## Quick start
 

@@ -11,6 +11,7 @@ Cardano.Node.Client
 ├── Provider       -- query interface (record-of-functions)
 ├── Submitter      -- submit interface (record-of-functions)
 ├── Balance        -- transaction balancing
+├── TxBuild        -- transaction builder DSL
 └── N2C
     ├── Types              -- LSQChannel, LTxSChannel
     ├── Codecs             -- N2C codec config
@@ -55,3 +56,25 @@ with `async`.
 adding fee-paying inputs and a change output. It converges in at
 most 10 rounds. Only ADA-only inputs are supported; multi-asset
 coin selection is out of scope.
+
+## Transaction builder DSL
+
+`Cardano.Node.Client.TxBuild` sits one layer above raw transaction
+assembly. It lets callers describe a transaction as a monadic program
+instead of manually building lens-heavy `TxBody` values.
+
+Current implemented pieces:
+
+- fixed transaction instructions for spends, outputs, collateral,
+  minting, required signers, and attached scripts
+- `Peek` for fixpoint values derived from the assembled transaction
+- `Ctx` for pluggable domain queries resolved by `Interpret` or
+  `InterpretIO`
+- `draft` and `draftWith` for pure assembly
+- `build` for script evaluation, `ExUnits` patching, and balancing
+
+Not implemented yet in this branch:
+
+- `Valid` checks and library-provided checkers
+- reference inputs
+- validity interval instructions
