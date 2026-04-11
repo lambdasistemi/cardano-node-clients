@@ -31,14 +31,24 @@ module Cardano.Node.Client.TxBuild (
 
     -- * Witnesses
     SpendWitness (..),
+    MintWitness (..),
 
     -- * Input combinators
     spend,
+    spendScript,
     collateral,
 
     -- * Output combinators
     payTo,
+    payTo',
     output,
+
+    -- * Minting
+    mint,
+
+    -- * Constraints
+    requireSignature,
+    attachScript,
 
     -- * Deferred
     peek,
@@ -57,33 +67,86 @@ import Control.Monad.Operational (
     singleton,
     view,
  )
+import Data.Foldable (foldl')
 import Data.List (elemIndex)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Word (Word32)
 
 import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Alonzo.PParams (getLanguageView)
+import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
+import Cardano.Ledger.Alonzo.Tx (hashScriptIntegrity)
+import Cardano.Ledger.Alonzo.TxBody (
+    scriptIntegrityHashTxBodyL,
+ )
+import Cardano.Ledger.Alonzo.TxWits (
+    Redeemers (..),
+    TxDats (..),
+ )
+import Cardano.Ledger.Api.Scripts.Data (
+    Data (..),
+    Datum (..),
+    dataToBinaryData,
+ )
 import Cardano.Ledger.Api.Tx (
     Tx,
     bodyTxL,
     mkBasicTx,
+    witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
     inputsTxBodyL,
+    mintTxBodyL,
     mkBasicTxBody,
     outputsTxBodyL,
+    reqSignerHashesTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
+    datumTxOutL,
     mkBasicTxOut,
  )
+import Cardano.Ledger.Api.Tx.Wits (
+    rdmrsTxWitsL,
+    scriptTxWitsL,
+ )
+import Cardano.Ledger.BaseTypes (StrictMaybe (SNothing))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Core (PParams)
-import Cardano.Ledger.Mary.Value (MaryValue)
+import Cardano.Ledger.Conway.Scripts (
+    ConwayPlutusPurpose (..),
+ )
+import Cardano.Ledger.Core (
+    PParams,
+    Script,
+    hashScript,
+ )
+import Cardano.Ledger.Hashes (ScriptHash)
+import Cardano.Ledger.Keys (
+    KeyHash,
+    KeyRole (..),
+ )
+import Cardano.Ledger.Mary.Value (
+    AssetName,
+    MaryValue,
+    MultiAsset (..),
+    PolicyID,
+ )
+import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
+import Cardano.Ledger.Plutus.Language (
+    Language (PlutusV3),
+ )
 import Cardano.Ledger.TxIn (TxIn)
 import Lens.Micro ((&), (.~), (^.))
+import PlutusCore.Data qualified as PLC
+import PlutusTx.Builtins.Internal (
+    BuiltinData (..),
+ )
+import PlutusTx.IsData.Class (ToData (..))
 
 -- ----------------------------------------------------
 -- Core types
@@ -103,6 +166,13 @@ data Convergence a
 data SpendWitness
     = -- | Pub-key input, no redeemer needed.
       PubKeyWitness
+    | -- | Script input with a typed redeemer.
+      forall r. (ToData r) => ScriptWitness r
+
+-- | How a minting operation is witnessed.
+data MintWitness
+    = -- | Plutus script with a typed redeemer.
+      forall r. (ToData r) => PlutusScriptWitness r
 
 -- | Pure query interpreter.
 newtype Interpret q = Interpret
@@ -128,6 +198,19 @@ data TxInstr q e a where
     -- | Add an output.
     Send ::
         TxOut ConwayEra -> TxInstr q e ()
+    -- | Mint or burn tokens.
+    MintI ::
+        PolicyID ->
+        AssetName ->
+        Integer ->
+        MintWitness ->
+        TxInstr q e ()
+    -- | Require a key signature.
+    ReqSignature ::
+        KeyHash 'Witness -> TxInstr q e ()
+    -- | Attach a Plutus script.
+    AttachScript ::
+        Script ConwayEra -> TxInstr q e ()
     -- | Peek at the final Tx (fixpoint).
     Peek ::
         (Tx ConwayEra -> Convergence a) ->
@@ -147,6 +230,19 @@ via 'Peek').
 spend :: TxIn -> TxBuild q e Word32
 spend txIn = do
     singleton $ Spend txIn PubKeyWitness
+    singleton $ Peek $ \tx ->
+        let ins = tx ^. bodyTxL . inputsTxBodyL
+         in if Set.member txIn ins
+                then Ok (spendingIndex txIn ins)
+                else Iterate 0
+
+{- | Spend a script UTxO with a typed redeemer.
+Returns the spending index.
+-}
+spendScript ::
+    (ToData r) => TxIn -> r -> TxBuild q e Word32
+spendScript txIn r = do
+    singleton $ Spend txIn (ScriptWitness r)
     singleton $ Peek $ \tx ->
         let ins = tx ^. bodyTxL . inputsTxBodyL
          in if Set.member txIn ins
@@ -187,6 +283,63 @@ output txOut = do
   where
     toList = foldr (:) []
 
+{- | Pay value with a typed inline datum.
+Returns the output index.
+-}
+payTo' ::
+    (ToData d) =>
+    Addr ->
+    MaryValue ->
+    d ->
+    TxBuild q e Word32
+payTo' addr val datum = do
+    singleton $
+        Send $
+            mkBasicTxOut addr val
+                & datumTxOutL
+                    .~ mkInlineDatum (toPlcData datum)
+    singleton $ Peek $ \tx ->
+        let outs = tx ^. bodyTxL . outputsTxBodyL
+            target =
+                mkBasicTxOut addr val
+                    & datumTxOutL
+                        .~ mkInlineDatum
+                            (toPlcData datum)
+         in case elemIndex target (toList outs) of
+                Just i -> Ok (fromIntegral i)
+                Nothing -> Iterate 0
+  where
+    toList = foldr (:) []
+
+{- | Mint or burn tokens. Positive = mint,
+negative = burn. Zero-amount entries are skipped.
+-}
+mint ::
+    (ToData r) =>
+    PolicyID ->
+    Map AssetName Integer ->
+    r ->
+    TxBuild q e ()
+mint pid assets r =
+    mapM_
+        ( \(name, qty) ->
+            singleton $
+                MintI pid name qty (PlutusScriptWitness r)
+        )
+        [ (n, q)
+        | (n, q) <- Map.toList assets
+        , q /= 0
+        ]
+
+-- | Require a key signature.
+requireSignature ::
+    KeyHash 'Witness -> TxBuild q e ()
+requireSignature = singleton . ReqSignature
+
+-- | Attach a Plutus script to the transaction.
+attachScript :: Script ConwayEra -> TxBuild q e ()
+attachScript = singleton . AttachScript
+
 -- | Peek at the final assembled Tx.
 peek ::
     (Tx ConwayEra -> Convergence a) ->
@@ -202,6 +355,16 @@ data TxState = TxState
     { tsSpends :: [(TxIn, SpendWitness)]
     , tsCollIns :: [TxIn]
     , tsOuts :: [TxOut ConwayEra]
+    , tsMints ::
+        [ ( PolicyID
+          , AssetName
+          , Integer
+          , MintWitness
+          )
+        ]
+    , tsSigners :: Set (KeyHash 'Witness)
+    , tsScripts ::
+        Map ScriptHash (Script ConwayEra)
     }
 
 emptyState :: TxState
@@ -210,6 +373,9 @@ emptyState =
         { tsSpends = []
         , tsCollIns = []
         , tsOuts = []
+        , tsMints = []
+        , tsSigners = Set.empty
+        , tsScripts = Map.empty
         }
 
 {- | Interpret a 'TxBuild' program into 'TxState'.
@@ -253,6 +419,34 @@ interpretWith currentTx = go emptyState True
                     }
                 conv
                 (k ())
+        MintI pid name qty w :>>= k ->
+            go
+                st
+                    { tsMints =
+                        tsMints st
+                            ++ [(pid, name, qty, w)]
+                    }
+                conv
+                (k ())
+        ReqSignature kh :>>= k ->
+            go
+                st
+                    { tsSigners =
+                        Set.insert kh (tsSigners st)
+                    }
+                conv
+                (k ())
+        AttachScript script :>>= k ->
+            go
+                st
+                    { tsScripts =
+                        Map.insert
+                            (hashScript script)
+                            script
+                            (tsScripts st)
+                    }
+                conv
+                (k ())
         Peek f :>>= k ->
             case f currentTx of
                 Ok a -> go st conv (k a)
@@ -260,20 +454,49 @@ interpretWith currentTx = go emptyState True
                     go st False (k a)
 
 -- | Assemble a 'Tx' from interpreter state.
-assembleTx :: TxState -> Tx ConwayEra
-assembleTx st =
+assembleTx :: PParams ConwayEra -> TxState -> Tx ConwayEra
+assembleTx pp st =
     let
         allSpendIns =
             Set.fromList $ map fst (tsSpends st)
         collIns = Set.fromList (tsCollIns st)
         outs = StrictSeq.fromList (tsOuts st)
+        mintMA = foldl' addMint mempty (tsMints st)
+        -- Build redeemers
+        spendRdmrs =
+            collectSpendRedeemers
+                allSpendIns
+                (tsSpends st)
+        mintRdmrs = collectMintRedeemers (tsMints st)
+        rdmrList = spendRdmrs ++ mintRdmrs
+        allRdmrs = Redeemers $ Map.fromList rdmrList
+        -- Integrity hash (skip if no scripts)
+        integrity =
+            if null rdmrList
+                then SNothing
+                else
+                    hashScriptIntegrity
+                        ( Set.singleton
+                            (getLanguageView pp PlutusV3)
+                        )
+                        allRdmrs
+                        (TxDats mempty)
         body =
             mkBasicTxBody
                 & inputsTxBodyL .~ allSpendIns
                 & outputsTxBodyL .~ outs
                 & collateralInputsTxBodyL .~ collIns
+                & mintTxBodyL .~ mintMA
+                & reqSignerHashesTxBodyL
+                    .~ tsSigners st
+                & scriptIntegrityHashTxBodyL
+                    .~ integrity
      in
         mkBasicTx body
+            & witsTxL . scriptTxWitsL
+                .~ tsScripts st
+            & witsTxL . rdmrsTxWitsL
+                .~ allRdmrs
 
 -- ----------------------------------------------------
 -- Assembly
@@ -290,18 +513,18 @@ draft ::
     PParams ConwayEra ->
     TxBuild q e a ->
     Tx ConwayEra
-draft _pp prog =
+draft pp prog =
     let
         -- Pass 1: collect steps with bogus Tx
         initialTx = mkBasicTx mkBasicTxBody
         (st1, _, _) = interpretWith initialTx prog
         -- Assemble from pass 1
-        tx1 = assembleTx st1
+        tx1 = assembleTx pp st1
         -- Pass 2: re-interpret with real Tx for
         -- Peek resolution
         (st2, _, _) = interpretWith tx1 prog
      in
-        assembleTx st2
+        assembleTx pp st2
 
 -- ----------------------------------------------------
 -- Internal helpers
@@ -319,3 +542,82 @@ spendingIndex needle inputs =
     go n (x : xs)
         | x == needle = n
         | otherwise = go (n + 1) xs
+
+-- | Collect spending redeemers from steps.
+collectSpendRedeemers ::
+    Set TxIn ->
+    [(TxIn, SpendWitness)] ->
+    [ ( ConwayPlutusPurpose AsIx ConwayEra
+      , (Data ConwayEra, ExUnits)
+      )
+    ]
+collectSpendRedeemers allIns spends =
+    [ ( ConwaySpending (AsIx ix)
+      , (toLedgerData r, ExUnits 0 0)
+      )
+    | (txIn, ScriptWitness r) <- spends
+    , let ix = spendingIndex txIn allIns
+    ]
+
+-- | Collect minting redeemers. First per policy.
+collectMintRedeemers ::
+    [(PolicyID, AssetName, Integer, MintWitness)] ->
+    [ ( ConwayPlutusPurpose AsIx ConwayEra
+      , (Data ConwayEra, ExUnits)
+      )
+    ]
+collectMintRedeemers mints =
+    let
+        allPolicies =
+            Set.fromList
+                [pid | (pid, _, _, _) <- mints]
+        policyIdx pid =
+            go 0 (Set.toAscList allPolicies)
+          where
+            go _ [] = error "policyIdx: not found"
+            go n (x : xs)
+                | x == pid = n
+                | otherwise = go (n + 1) xs
+        seenData =
+            foldl' addP Map.empty mints
+        addP acc (pid, _, _, PlutusScriptWitness r)
+            | Map.member pid acc = acc
+            | otherwise =
+                Map.insert pid (toLedgerData r) acc
+     in
+        [ ( ConwayMinting (AsIx (policyIdx pid))
+          , (d, ExUnits 0 0)
+          )
+        | (pid, d) <- Map.toList seenData
+        ]
+
+-- | Accumulate 'MultiAsset' from mint entries.
+addMint ::
+    MultiAsset ->
+    (PolicyID, AssetName, Integer, MintWitness) ->
+    MultiAsset
+addMint acc (pid, name, qty, _) =
+    acc
+        <> MultiAsset
+            ( Map.singleton
+                pid
+                (Map.singleton name qty)
+            )
+
+-- | Convert a 'ToData' value to ledger 'Data'.
+toLedgerData :: (ToData a) => a -> Data ConwayEra
+toLedgerData x =
+    let BuiltinData d = toBuiltinData x
+     in Data d
+
+-- | Convert a 'ToData' value to 'PlutusCore.Data'.
+toPlcData :: (ToData a) => a -> PLC.Data
+toPlcData x =
+    let BuiltinData d = toBuiltinData x in d
+
+-- | Wrap 'PlutusCore.Data' as an inline 'Datum'.
+mkInlineDatum :: PLC.Data -> Datum ConwayEra
+mkInlineDatum d =
+    Datum $
+        dataToBinaryData
+            (Data d :: Data ConwayEra)
