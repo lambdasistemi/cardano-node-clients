@@ -15,6 +15,7 @@ import Data.Set qualified as Set
 import Test.Hspec
 
 import Cardano.Ledger.Address (Addr (..))
+import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.PParams (
@@ -30,6 +31,9 @@ import Cardano.Ledger.Api.Tx.Body (
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
+    referenceInputsTxBodyL,
+    reqSignerHashesTxBodyL,
+    vldtTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
@@ -39,6 +43,7 @@ import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
 import Cardano.Ledger.BaseTypes (
     Inject (..),
     Network (..),
+    StrictMaybe (SJust),
     TxIx (..),
  )
 import Cardano.Ledger.Coin (Coin (..))
@@ -55,7 +60,10 @@ import Cardano.Ledger.Hashes (
     ScriptHash (..),
     unsafeMakeSafeHash,
  )
-import Cardano.Ledger.Keys (KeyHash (..))
+import Cardano.Ledger.Keys (
+    KeyHash (..),
+    KeyRole (Witness),
+ )
 import Cardano.Ledger.Mary.Value (
     AssetName (..),
     MultiAsset (..),
@@ -66,6 +74,7 @@ import Cardano.Ledger.TxIn (
     TxIn (..),
  )
 import Cardano.Node.Client.TxBuild
+import Cardano.Slotting.Slot (SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Crypto.Hash (
@@ -124,6 +133,10 @@ mkPolicyId n =
         Cardano.Ledger.Hashes.ScriptHash $
             mkHash28 n
 
+mkWitnessKeyHash :: Word8 -> KeyHash 'Witness
+mkWitnessKeyHash n =
+    KeyHash (mkHash28 n)
+
 -- --------------------------------------------------
 -- Spec
 -- --------------------------------------------------
@@ -138,6 +151,7 @@ spec = describe "TxBuild" $ do
     mintSpec
     ctxSpec
     validSpec
+    referenceValiditySpec
     buildSpec
 
 data TestQ a where
@@ -565,6 +579,34 @@ validSpec =
                             tx ^. bodyTxL . outputsTxBodyL
                     length outs
                         `shouldSatisfy` (> 0)
+
+referenceValiditySpec :: Spec
+referenceValiditySpec =
+    describe "reference inputs and validity interval" $ do
+        it "assembles retract-shaped body fields" $ do
+            let signer = mkWitnessKeyHash 9
+                lower = SlotNo 10
+                upper = SlotNo 20
+                tx =
+                    draft emptyPParams $ do
+                        _ <- spend (mkTxIn 1)
+                        reference (mkTxIn 2)
+                        requireSignature signer
+                        validFrom lower
+                        validTo upper
+                        pure ()
+                body = tx ^. bodyTxL
+            body ^. referenceInputsTxBodyL
+                `shouldBe` Set.singleton (mkTxIn 2)
+            body ^. inputsTxBodyL
+                `shouldBe` Set.singleton (mkTxIn 1)
+            body ^. reqSignerHashesTxBodyL
+                `shouldBe` Set.singleton signer
+            body ^. vldtTxBodyL
+                `shouldBe` ValidityInterval
+                    { invalidBefore = SJust lower
+                    , invalidHereafter = SJust upper
+                    }
 
 buildSpec :: Spec
 buildSpec =
