@@ -70,11 +70,11 @@ Current implemented pieces:
 - `Peek` for fixpoint values derived from the assembled transaction
 - `Ctx` for pluggable domain queries resolved by `Interpret` or
   `InterpretIO`
+- `Valid` for opt-in post-convergence transaction checks
 - `draft` and `draftWith` for pure assembly
 - `build` for script evaluation, `ExUnits` patching, and balancing
 
 Not implemented yet in this branch:
 
-- `Valid` checks and library-provided checkers
 - reference inputs
 - validity interval instructions

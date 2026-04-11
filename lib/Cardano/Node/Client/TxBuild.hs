@@ -24,6 +24,8 @@ module Cardano.Node.Client.TxBuild (
 
     -- * Convergence
     Convergence (..),
+    Check (..),
+    LedgerCheck (..),
 
     -- * Interpreters
     Interpret (..),
@@ -52,7 +54,12 @@ module Cardano.Node.Client.TxBuild (
 
     -- * Deferred
     peek,
+    valid,
     ctx,
+
+    -- * Checkers
+    checkMinUtxo,
+    checkTxSize,
 
     -- * Assembly
     draft,
@@ -67,12 +74,14 @@ module Cardano.Node.Client.TxBuild (
     assembleTx,
 ) where
 
+import Cardano.Binary (serialize')
 import Control.Monad.Operational (
     Program,
     ProgramViewT (Return, (:>>=)),
     singleton,
     view,
  )
+import Data.ByteString qualified as BS
 import Data.Foldable (foldl')
 import Data.Functor.Identity (
     runIdentity,
@@ -84,6 +93,7 @@ import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Word (Word32)
+import Numeric.Natural (Natural)
 
 import Cardano.Ledger.Address (Addr)
 import Cardano.Ledger.Alonzo.PParams (getLanguageView)
@@ -96,6 +106,7 @@ import Cardano.Ledger.Alonzo.TxWits (
     Redeemers (..),
     TxDats (..),
  )
+import Cardano.Ledger.Api.PParams (ppMaxTxSizeL)
 import Cardano.Ledger.Api.Scripts.Data (
     Data (..),
     Datum (..),
@@ -117,7 +128,9 @@ import Cardano.Ledger.Api.Tx.Body (
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
+    coinTxOutL,
     datumTxOutL,
+    getMinCoinTxOut,
     mkBasicTxOut,
  )
 import Cardano.Ledger.Api.Tx.Wits (
@@ -125,6 +138,7 @@ import Cardano.Ledger.Api.Tx.Wits (
     scriptTxWitsL,
  )
 import Cardano.Ledger.BaseTypes (StrictMaybe (SNothing))
+import Cardano.Ledger.Coin (Coin)
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
@@ -174,6 +188,24 @@ data Convergence a
     | -- | Converged; use this value and stop.
       Ok a
     deriving (Show, Eq, Functor)
+
+-- | Validation result for the final transaction.
+data Check e
+    = -- | Validation passed.
+      Pass
+    | -- | One of the library-provided checks failed.
+      LedgerFail LedgerCheck
+    | -- | A user-provided check failed.
+      CustomFail e
+    deriving (Show, Eq)
+
+-- | Closed set of library-provided validation failures.
+data LedgerCheck
+    = MinUtxoViolation Word32 Coin Coin
+    | TxSizeExceeded Natural Natural
+    | ValueNotConserved MaryValue MaryValue
+    | CollateralInsufficient Coin Coin
+    deriving (Show, Eq)
 
 -- | How a spent input is witnessed.
 data SpendWitness
@@ -228,6 +260,10 @@ data TxInstr q e a where
     Peek ::
         (Tx ConwayEra -> Convergence a) ->
         TxInstr q e a
+    -- | Validate the final Tx after convergence.
+    Valid ::
+        (Tx ConwayEra -> Check e) ->
+        TxInstr q e ()
     -- | Query external context.
     Ctx :: q a -> TxInstr q e a
 
@@ -361,16 +397,60 @@ peek ::
     TxBuild q e a
 peek = singleton . Peek
 
+-- | Validate the final converged transaction.
+valid ::
+    (Tx ConwayEra -> Check e) ->
+    TxBuild q e ()
+valid = singleton . Valid
+
 -- | Query pluggable build context.
 ctx :: q a -> TxBuild q e a
 ctx = singleton . Ctx
+
+-- | Check that the indexed output meets the min-UTxO threshold.
+checkMinUtxo ::
+    PParams ConwayEra ->
+    Word32 ->
+    TxBuild q e ()
+checkMinUtxo pp outIx =
+    valid $ \tx ->
+        case txOutAt outIx (tx ^. bodyTxL . outputsTxBodyL) of
+            Nothing -> Pass
+            Just txOut ->
+                let actual = txOut ^. coinTxOutL
+                    required = getMinCoinTxOut pp txOut
+                 in if actual >= required
+                        then Pass
+                        else
+                            LedgerFail $
+                                MinUtxoViolation
+                                    outIx
+                                    actual
+                                    required
+
+-- | Check that the CBOR-encoded transaction fits within max size.
+checkTxSize :: PParams ConwayEra -> TxBuild q e ()
+checkTxSize pp =
+    valid $ \tx ->
+        let actual =
+                fromIntegral $
+                    BS.length $
+                        serialize' tx
+            limit =
+                fromIntegral $
+                    pp ^. ppMaxTxSizeL
+         in if actual <= limit
+                then Pass
+                else
+                    LedgerFail $
+                        TxSizeExceeded actual limit
 
 -- ----------------------------------------------------
 -- Interpreter state
 -- ----------------------------------------------------
 
 -- | Accumulated state from interpreting 'TxBuild'.
-data TxState = TxState
+data TxState e = TxState
     { tsSpends :: [(TxIn, SpendWitness)]
     , tsCollIns :: [TxIn]
     , tsOuts :: [TxOut ConwayEra]
@@ -384,9 +464,10 @@ data TxState = TxState
     , tsSigners :: Set (KeyHash 'Witness)
     , tsScripts ::
         Map ScriptHash (Script ConwayEra)
+    , tsChecks :: [Tx ConwayEra -> Check e]
     }
 
-emptyState :: TxState
+emptyState :: TxState e
 emptyState =
     TxState
         { tsSpends = []
@@ -395,6 +476,7 @@ emptyState =
         , tsMints = []
         , tsSigners = Set.empty
         , tsScripts = Map.empty
+        , tsChecks = []
         }
 
 {- | Interpret a 'TxBuild' program into 'TxState'.
@@ -405,7 +487,7 @@ interpretWith ::
     Tx ConwayEra ->
     TxBuild q e a ->
     -- | (state, result, all converged?)
-    (TxState, a, Bool)
+    (TxState e, a, Bool)
 interpretWith interpret currentTx prog =
     runIdentity $
         interpretWithM
@@ -418,7 +500,7 @@ interpretWithM ::
     (forall x. q x -> m x) ->
     Tx ConwayEra ->
     TxBuild q e a ->
-    m (TxState, a, Bool)
+    m (TxState e, a, Bool)
 interpretWithM runCtx currentTx = go emptyState True
   where
     go st conv prog = case view prog of
@@ -480,12 +562,20 @@ interpretWithM runCtx currentTx = go emptyState True
                 Ok a -> go st conv (k a)
                 Iterate a ->
                     go st False (k a)
+        Valid chk :>>= k ->
+            go
+                st
+                    { tsChecks =
+                        tsChecks st ++ [chk]
+                    }
+                conv
+                (k ())
         Ctx q :>>= k -> do
             a <- runCtx q
             go st conv (k a)
 
 -- | Assemble a 'Tx' from interpreter state.
-assembleTx :: PParams ConwayEra -> TxState -> Tx ConwayEra
+assembleTx :: PParams ConwayEra -> TxState e -> Tx ConwayEra
 assembleTx pp st =
     let
         allSpendIns =
@@ -581,6 +671,8 @@ data BuildError e
         String
     | -- | Balance failure.
       BalanceFailed BalanceError
+    | -- | Validation failures on the final Tx.
+      ChecksFailed [Check e]
     deriving (Show)
 
 {- | Assemble, evaluate scripts, and balance.
@@ -703,7 +795,15 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             && txBodyEq
                                 balanced
                                 prevTx ->
-                            pure $ Right balanced
+                            case failedChecks
+                                (tsChecks st)
+                                balanced of
+                                [] ->
+                                    pure $ Right balanced
+                                errs ->
+                                    pure $
+                                        Left $
+                                            ChecksFailed errs
                         | otherwise ->
                             loop balanced
 
@@ -808,3 +908,27 @@ mkInlineDatum d =
     Datum $
         dataToBinaryData
             (Data d :: Data ConwayEra)
+
+failedChecks ::
+    [Tx ConwayEra -> Check e] ->
+    Tx ConwayEra ->
+    [Check e]
+failedChecks checks tx =
+    [ result
+    | check <- checks
+    , let result = check tx
+    , case result of
+        Pass -> False
+        _ -> True
+    ]
+
+txOutAt ::
+    Word32 ->
+    StrictSeq.StrictSeq (TxOut ConwayEra) ->
+    Maybe (TxOut ConwayEra)
+txOutAt ix =
+    go (fromIntegral ix :: Int) . foldr (:) []
+  where
+    go _ [] = Nothing
+    go 0 (txOut : _) = Just txOut
+    go n (_ : rest) = go (n - 1) rest

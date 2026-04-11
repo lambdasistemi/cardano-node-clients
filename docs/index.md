@@ -23,16 +23,17 @@ protocol supplies its own constructor:
 ## Current TxBuild status
 
 The transaction builder DSL is under active development and currently
-implements Slices 1-4:
+implements Slices 1-5:
 
 - spending, outputs, collateral, and minting combinators
 - `Peek`-driven fixpoint values for indices and fee-dependent assembly
 - pure drafting with `draft` and `draftWith`
 - effectful building with `build` and `InterpretIO`
 - pluggable context queries through `Ctx`
+- opt-in final-transaction validation via `Valid`
 
-The next planned slices are `Valid` checks, reference inputs, and
-validity interval support.
+The next planned slices are reference inputs and validity interval
+support.
 
 ## Quick start
 

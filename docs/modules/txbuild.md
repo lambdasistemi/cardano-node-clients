@@ -8,20 +8,21 @@ Operational transaction builder DSL for Conway-era transactions.
 
 ## What exists today
 
-The current implementation covers the first four slices of the DSL:
+The current implementation covers the first five slices of the DSL:
 
 - spend, script spend, collateral, output, mint, signer, and script
   attachment instructions
 - `Peek` for fixpoint-dependent values such as spend indices, output
   indices, and fee-driven outputs
 - `Ctx` for pluggable domain queries
+- `Valid` for post-convergence transaction checks
 - pure interpreters with `draft` and `draftWith`
 - effectful building with `build`, including script evaluation,
   `ExUnits` patching, and balancing
 
-The next planned slices add `Valid`, reference inputs, and validity
-interval support. Those APIs are described in the spec, but they are
-not implemented in the module yet.
+The next planned slices add reference inputs and validity interval
+support. Those APIs are described in the spec, but they are not
+implemented in the module yet.
 
 ## Core types
 
@@ -42,7 +43,7 @@ newtype InterpretIO q = InterpretIO
 ```
 
 `q` is the query GADT used by `Ctx`. `e` is reserved for custom
-validation errors in later slices.
+validation errors carried by `Valid`.
 
 ## Main entry points
 
@@ -86,6 +87,9 @@ requireSignature :: KeyHash 'Witness -> TxBuild q e ()
 attachScript     :: Script ConwayEra -> TxBuild q e ()
 peek             :: (Tx ConwayEra -> Convergence a) -> TxBuild q e a
 ctx              :: q a -> TxBuild q e a
+valid            :: (Tx ConwayEra -> Check e) -> TxBuild q e ()
+checkMinUtxo     :: PParams ConwayEra -> Word32 -> TxBuild q e ()
+checkTxSize      :: PParams ConwayEra -> TxBuild q e ()
 ```
 
 Position-dependent combinators such as `spend` and `payTo` use `Peek`
@@ -126,3 +130,7 @@ The same `TestQ` program can run through `build` by supplying an
 - mint and burn redeemers
 - `Peek` through `build`
 - `Ctx` through both `draftWith` and `build`
+- `Valid` custom failures
+- `checkMinUtxo` failures
+- `checkTxSize` failures
+- all-pass validation
