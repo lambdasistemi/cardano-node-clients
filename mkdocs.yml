@@ -1,6 +1,6 @@
 site_name: cardano-node-clients
 site_url: https://paolino.github.io/cardano-node-clients/
-repo_url: https://github.com/paolino/cardano-node-clients
+repo_url: https://github.com/lambdasistemi/cardano-node-clients
 
 theme:
   name: material
@@ -38,4 +38,5 @@ nav:
       - Provider: modules/provider.md
       - Submitter: modules/submitter.md
       - Balance: modules/balance.md
+      - TxBuild: modules/txbuild.md
       - N2C: modules/n2c.md
