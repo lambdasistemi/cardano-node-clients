@@ -55,6 +55,10 @@ module Cardano.Node.Client.TxBuild (
 
     -- * Assembly
     draft,
+    build,
+
+    -- * Errors
+    BuildError (..),
 
     -- * Internal (for testing)
     interpretWith,
@@ -141,6 +145,10 @@ import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
  )
 import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Balance (
+    BalanceError,
+    balanceTx,
+ )
 import Lens.Micro ((&), (.~), (^.))
 import PlutusCore.Data qualified as PLC
 import PlutusTx.Builtins.Internal (
@@ -525,6 +533,141 @@ draft pp prog =
         (st2, _, _) = interpretWith tx1 prog
      in
         assembleTx pp st2
+
+-- | Errors from 'build'.
+data BuildError e
+    = -- | Script evaluation failure.
+      EvalFailure
+        (ConwayPlutusPurpose AsIx ConwayEra)
+        String
+    | -- | Balance failure.
+      BalanceFailed BalanceError
+    deriving (Show)
+
+{- | Assemble, evaluate scripts, and balance.
+
+Iterates until all 'Peek' nodes return 'Ok' and
+the Tx body stabilizes:
+
+1. Interpret program with current Tx (resolve Peek)
+2. Assemble Tx from steps
+3. Add input UTxOs, evaluate scripts → ExUnits
+4. Patch redeemers, recompute integrity hash
+5. Balance (fee + change)
+6. If any Peek returned Iterate or Tx changed → 1
+-}
+build ::
+    PParams ConwayEra ->
+    -- | Script evaluator
+    ( Tx ConwayEra ->
+      IO
+        ( Map
+            ( ConwayPlutusPurpose
+                AsIx
+                ConwayEra
+            )
+            (Either String ExUnits)
+        )
+    ) ->
+    -- | All input UTxOs
+    [(TxIn, TxOut ConwayEra)] ->
+    -- | Change address
+    Addr ->
+    TxBuild q e a ->
+    IO (Either (BuildError e) (Tx ConwayEra))
+build pp evaluateTx inputUtxos changeAddr prog =
+    loop (mkBasicTx mkBasicTxBody)
+  where
+    loop prevTx = do
+        -- 1. Interpret with current Tx
+        let (st, _, converged) =
+                interpretWith prevTx prog
+            tx = assembleTx pp st
+        -- 2. Add all input TxIns for eval
+        let existingIns =
+                tx ^. bodyTxL . inputsTxBodyL
+            allIns =
+                foldl'
+                    ( \s (tin, _) ->
+                        Set.insert tin s
+                    )
+                    existingIns
+                    inputUtxos
+            txForEval =
+                tx
+                    & bodyTxL . inputsTxBodyL
+                        .~ allIns
+        -- 3. Evaluate scripts
+        evalResult <- evaluateTx txForEval
+        let failures =
+                [ (p, e)
+                | (p, Left e) <-
+                    Map.toList evalResult
+                ]
+        case failures of
+            ((p, e) : _) ->
+                pure $ Left $ EvalFailure p e
+            [] -> do
+                -- 4. Patch ExUnits
+                let Redeemers rdmrMap =
+                        tx ^. witsTxL . rdmrsTxWitsL
+                    patched =
+                        Map.mapWithKey
+                            ( \purpose (dat, eu) ->
+                                case Map.lookup
+                                    purpose
+                                    evalResult of
+                                    Just (Right eu') ->
+                                        (dat, eu')
+                                    _ -> (dat, eu)
+                            )
+                            rdmrMap
+                    newRdmrs = Redeemers patched
+                    integrity =
+                        if Map.null patched
+                            then SNothing
+                            else
+                                hashScriptIntegrity
+                                    ( Set.singleton
+                                        ( getLanguageView
+                                            pp
+                                            PlutusV3
+                                        )
+                                    )
+                                    newRdmrs
+                                    (TxDats mempty)
+                    patchedTx =
+                        tx
+                            & witsTxL . rdmrsTxWitsL
+                                .~ newRdmrs
+                            & bodyTxL
+                                . scriptIntegrityHashTxBodyL
+                                .~ integrity
+                -- 5. Balance
+                case balanceTx
+                    pp
+                    inputUtxos
+                    changeAddr
+                    patchedTx of
+                    Left err ->
+                        pure $
+                            Left $
+                                BalanceFailed err
+                    Right balanced
+                        -- 6. Converged?
+                        | converged
+                            && txBodyEq
+                                balanced
+                                prevTx ->
+                            pure $ Right balanced
+                        | otherwise ->
+                            loop balanced
+
+-- | Compare Tx bodies for convergence.
+txBodyEq ::
+    Tx ConwayEra -> Tx ConwayEra -> Bool
+txBodyEq a b =
+    (a ^. bodyTxL) == (b ^. bodyTxL)
 
 -- ----------------------------------------------------
 -- Internal helpers
