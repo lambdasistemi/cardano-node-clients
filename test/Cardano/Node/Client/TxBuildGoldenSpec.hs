@@ -155,6 +155,9 @@ goldenCases =
     , GoldenCase "STEAK mine" "0fe086ab41e4b14a070d491a08bcddcc011afa1e48d6c0c6430bf82d7968028e"
     , GoldenCase "WingRiders swap" "23f8ade58f538e09d9741cd6d7d88fd394ef29fd17880f0539b685018d3d5f29"
     , GoldenCase "Indigo iUSD" "b4b28b84f67a21a627d9ad3a64a56aa13e8e31250715d0aa3563a84d94ab4a36"
+    , GoldenCase "Splash order v3" "a8de7b592e1ae77b92e1a2e21e41439c0721986f10f68a5126979aae4643d711"
+    , GoldenCase "Strike perps LP" "cebc413826ebd61a4ee908617d668197dd1206ca39bb31429d538dc59fbb534f"
+    , GoldenCase "Charli3 oracle v9" "46cb53fe682bc5189f76d4d91f2955bc2cb4bfbfca0689327495882bd10c8f50"
     , GoldenCase "Recent batch" "b28a2813677f60223ef195b2d7f3344b2f98f627b7e0e7957d484fdeb3fed409"
     ]
 
