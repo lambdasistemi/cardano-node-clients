@@ -17,7 +17,7 @@ so that the TxBuild DSL is checked against the structures production protocols a
 
 1. Given a committed mainnet fixture, when the test suite decodes it into `Tx ConwayEra`, then the test can reconstruct the same supported structure with `TxBuild`.
 2. Given a fixture that uses script spends, mints, or stake withdrawals, when the reconstruction runs, then the resulting transaction contains the same redeemer purposes, indices, and redeemer data.
-3. Given the full 12-vector sample, when unit tests run, then every fixture is exercised without external network access.
+3. Given the committed Conway-era sample, when unit tests run, then every fixture is exercised without external network access.
 
 ### User Story 2 - Keep the comparison aligned with current DSL guarantees
 
@@ -32,7 +32,7 @@ so that failures point to real coverage gaps instead of unrelated balancing or w
 
 ## Functional Requirements
 
-- FR-001: The repository MUST include committed fixture files for the 12 transaction hashes listed in issue `#43`.
+- FR-001: The repository MUST include committed fixture files for the Conway-era transaction hashes used by the golden suite.
 - FR-002: The unit test suite MUST decode each fixture into `Tx ConwayEra` using ledger decoding, not ad hoc parsing.
 - FR-003: The test suite MUST reconstruct each transaction with `TxBuild` primitives supported today: spends, script spends, outputs, collateral, reference inputs, minting, withdrawals, required signers, validity interval, metadata, and attached witness scripts.
 - FR-004: The test suite MUST compare the reconstructed transaction to the decoded fixture for the supported structural fields only.
@@ -47,6 +47,6 @@ so that failures point to real coverage gaps instead of unrelated balancing or w
 
 ## Success Criteria
 
-- SC-001: Running the unit test suite exercises all 12 mainnet golden cases.
+- SC-001: Running the unit test suite exercises all committed Conway-era golden cases.
 - SC-002: A regression in any covered TxBuild field produces a failing test for the specific affected transaction.
 - SC-003: The tests pass without any external network dependency once fixtures are committed.

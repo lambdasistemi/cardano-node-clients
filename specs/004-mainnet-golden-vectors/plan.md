@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add an offline unit-test harness that decodes 12 committed mainnet transaction fixtures, reconstructs their supported structure with `TxBuild`, and checks structural equivalence for the fields the DSL currently owns.
+Add an offline unit-test harness that decodes committed Conway-era mainnet transaction fixtures, reconstructs their supported structure with `TxBuild`, and checks structural equivalence for the fields the DSL currently owns.
 
 ## Technical Approach
 
