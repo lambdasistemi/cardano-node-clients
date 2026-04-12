@@ -11,6 +11,12 @@ assembled Tx and that spend returns correct index.
 -}
 module Cardano.Node.Client.TxBuildSpec (spec) where
 
+import Data.IORef (
+    IORef,
+    modifyIORef',
+    newIORef,
+    readIORef,
+ )
 import Data.Set qualified as Set
 import Test.Hspec
 
@@ -77,6 +83,7 @@ import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
  )
+import Cardano.Node.Client.Balance (balanceTx)
 import Cardano.Node.Client.TxBuild
 import Cardano.Slotting.Slot (SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
@@ -160,6 +167,7 @@ spec = describe "TxBuild" $ do
 
 data TestQ a where
     GetValue :: TestQ Int
+    RecordFee :: Coin -> TestQ ()
 
 data TestErr
     = BrokenInvariant
@@ -404,7 +412,10 @@ ctxSpec =
     describe "ctx" $ do
         it "flows interpreted values through subsequent binds" $ do
             let interpret =
-                    Interpret $ \GetValue -> 7
+                    Interpret $ \q ->
+                        case q of
+                            GetValue -> 7
+                            RecordFee _ -> ()
                 expected :: TxOut ConwayEra
                 expected =
                     mkBasicTxOut
@@ -711,7 +722,10 @@ buildSpec =
                         (inject (Coin 10_000_000))
                     )
                 interpret =
-                    InterpretIO $ \GetValue -> pure 7
+                    InterpretIO $ \q ->
+                        case q of
+                            GetValue -> pure 7
+                            RecordFee _ -> pure ()
                 mockEval _ = pure Map.empty
             result <-
                 build
@@ -882,6 +896,211 @@ buildSpec =
                         fee
                             `shouldSatisfy` (> 0)
 
+        it "retries with an estimated fee after eval failure" $ do
+            feeHistoryRef <- newIORef []
+            let pp =
+                    emptyPParams
+                        & ppMinFeeAL .~ Coin 44
+                        & ppMinFeeBL .~ Coin 155381
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                spendUtxo =
+                    ( mkTxIn 2
+                    , mkBasicTxOut
+                        (mkAddr 3)
+                        (inject (Coin 5_000_000))
+                    )
+                prog :: TxBuild TestQ TestErr ()
+                prog = do
+                    _ <- spend (mkTxIn 2)
+                    fee <- peek $ \tx ->
+                        Ok (tx ^. bodyTxL . feeTxBodyL)
+                    _ <- ctx (RecordFee fee)
+                    _ <-
+                        payTo
+                            (mkAddr 4)
+                            (inject fee)
+                    pure ()
+                interpret =
+                    recordingInterpret feeHistoryRef
+                mockEval tx =
+                    pure $
+                        if tx ^. bodyTxL . feeTxBodyL
+                            == Coin 0
+                            then
+                                Map.singleton
+                                    (ConwaySpending (AsIx 0))
+                                    (Left "fee too small")
+                            else Map.empty
+            result <-
+                build
+                    pp
+                    interpret
+                    mockEval
+                    [feeUtxo, spendUtxo]
+                    (mkAddr 1)
+                    prog
+            history <- readRecordedFees feeHistoryRef
+            case result of
+                Left err ->
+                    expectationFailure $ show err
+                Right tx -> do
+                    history `shouldSatisfy` elem (Coin 0)
+                    history
+                        `shouldSatisfy` any (> Coin 0)
+                    last history
+                        `shouldBe` (tx ^. bodyTxL . feeTxBodyL)
+
+        it "re-interprets outputs after a fee oscillation" $ do
+            feeHistoryRef <- newIORef []
+            let pp =
+                    emptyPParams
+                        & ppMinFeeAL .~ Coin 10
+                        & ppMinFeeBL .~ Coin 0
+                        & ppMaxTxSizeL .~ 100_000
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 20_000_000))
+                    )
+                spendUtxo =
+                    ( mkTxIn 2
+                    , mkBasicTxOut
+                        (mkAddr 3)
+                        (inject (Coin 5_000_000))
+                    )
+                inputUtxos = [feeUtxo, spendUtxo]
+                smallCoin = Coin 3_000_000
+                largeCoin = Coin 4_000_000
+                smallDatum = ([] :: [Integer])
+                largeDatum = [1 .. 2000] :: [Integer]
+                feeFor datum coin =
+                    case balanceTx
+                        pp
+                        inputUtxos
+                        (mkAddr 1)
+                        ( draft pp $ do
+                            _ <- spend (mkTxIn 2)
+                            _ <-
+                                payTo'
+                                    (mkAddr 4)
+                                    (inject coin)
+                                    datum
+                            pure ()
+                        ) of
+                        Left err ->
+                            expectationFailure (show err)
+                                >> pure (Coin 0)
+                        Right tx ->
+                            pure $
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+            lowFee <- feeFor smallDatum smallCoin
+            highFee <- feeFor largeDatum largeCoin
+            let Coin lo = min lowFee highFee
+                Coin hi = max lowFee highFee
+                pivot = Coin (lo + (hi - lo) `div` 2)
+                prog :: TxBuild TestQ TestErr ()
+                prog = do
+                    _ <- spend (mkTxIn 2)
+                    fee <- peek $ \tx ->
+                        Ok (tx ^. bodyTxL . feeTxBodyL)
+                    _ <- ctx (RecordFee fee)
+                    if fee < pivot
+                        then do
+                            _ <-
+                                payTo'
+                                    (mkAddr 4)
+                                    (inject largeCoin)
+                                    largeDatum
+                            pure ()
+                        else do
+                            _ <-
+                                payTo'
+                                    (mkAddr 4)
+                                    (inject smallCoin)
+                                    smallDatum
+                            pure ()
+                interpret =
+                    recordingInterpret feeHistoryRef
+                mockEval _ = pure Map.empty
+            max lowFee highFee
+                `shouldSatisfy` (> min lowFee highFee)
+            result <-
+                build
+                    pp
+                    interpret
+                    mockEval
+                    inputUtxos
+                    (mkAddr 1)
+                    prog
+            history <- readRecordedFees feeHistoryRef
+            case result of
+                Left err ->
+                    expectationFailure $ show err
+                Right tx -> do
+                    let finalFee =
+                            tx
+                                ^. bodyTxL
+                                    . feeTxBodyL
+                        outs =
+                            toList $
+                                tx
+                                    ^. bodyTxL
+                                        . outputsTxBodyL
+                        firstOut =
+                            case outs of
+                                o : _ -> o
+                                [] ->
+                                    error
+                                        "expected at least one output"
+                    history
+                        `shouldSatisfy` any (< pivot)
+                    history
+                        `shouldSatisfy` any (>= pivot)
+                    last history `shouldBe` finalFee
+                    if finalFee < pivot
+                        then
+                            firstOut ^. coinTxOutL
+                                `shouldBe` largeCoin
+                        else
+                            firstOut ^. coinTxOutL
+                                `shouldBe` smallCoin
+
+        it "bumpFee only shrinks the change output" $ do
+            let tx =
+                    draft emptyPParams $ do
+                        _ <-
+                            payTo
+                                (mkAddr 2)
+                                (inject (Coin 3_000_000))
+                        _ <-
+                            payTo
+                                (mkAddr 1)
+                                (inject (Coin 7_000_000))
+                        pure ()
+                bumped =
+                    bumpFee
+                        (tx & bodyTxL . feeTxBodyL .~ Coin 200)
+                        (Coin 500)
+                outs =
+                    toList $
+                        bumped
+                            ^. bodyTxL
+                                . outputsTxBodyL
+            bumped ^. bodyTxL . feeTxBodyL
+                `shouldBe` Coin 500
+            map (^. coinTxOutL) outs
+                `shouldBe` [ Coin 3_000_000
+                           , Coin 6_999_700
+                           ]
+
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
 isSpend (ConwaySpending _) = True
@@ -925,3 +1144,16 @@ noCtxInterpretIO =
         const $
             error
                 "test: encountered ctx without interpreter"
+
+recordingInterpret ::
+    IORef [Coin] -> InterpretIO TestQ
+recordingInterpret feeHistoryRef =
+    InterpretIO $ \q ->
+        case q of
+            GetValue -> pure 7
+            RecordFee fee ->
+                modifyIORef' feeHistoryRef (fee :)
+
+readRecordedFees :: IORef [Coin] -> IO [Coin]
+readRecordedFees feeHistoryRef =
+    reverse <$> readIORef feeHistoryRef

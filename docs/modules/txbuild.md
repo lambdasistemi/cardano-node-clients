@@ -19,7 +19,8 @@ The current implementation covers the first six slices of the DSL:
 - reference inputs and validity interval instructions
 - pure interpreters with `draft` and `draftWith`
 - effectful building with `build`, including script evaluation,
-  `ExUnits` patching, and balancing
+  `ExUnits` patching, eval retry, oscillation handling, bisection,
+  and balancing
 
 ## Core types
 
@@ -216,3 +217,17 @@ inputs together with explicit validity bounds and signer requirements.
 - `checkTxSize` failures
 - all-pass validation
 - reference-input and validity-interval assembly
+- eval retry after script-evaluation failure
+- fee oscillation with output re-interpretation
+- `bumpFee` in isolation
+
+`TxBuild` E2E coverage currently covers:
+
+- submitted devnet transactions built with `build`
+- `spend`, `payTo`, and `payTo'`
+- `Ctx`, `Peek`, and `Valid`
+- required signers and explicit validity intervals
+
+Script-specific builder features such as `spendScript`, `mint`,
+`attachScript`, and the real reference/collateral script paths are
+still primarily covered by unit tests and downstream integration tests.

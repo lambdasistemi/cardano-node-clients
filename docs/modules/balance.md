@@ -4,7 +4,7 @@
 `Cardano.Node.Client.Balance`
 :::
 
-Iterative fee estimation and transaction balancing for Conway-era
+Iterative exact-fee transaction balancing for Conway-era
 transactions.
 
 ```haskell
@@ -21,9 +21,10 @@ balanceTx
 1. Collect all input UTxOs and compute total available ADA
 2. Start with fee = 0
 3. Build candidate transaction with change output
-4. Estimate fee via `estimateMinFeeTx` (1 key witness assumed)
-5. If new fee > current fee, repeat from step 3
-6. Converges in at most 10 rounds
+4. Compute exact fee via `getMinFeeTx`
+5. Add 106-byte VKey witness padding using `ppMinFeeAL`
+6. If new fee > current fee, repeat from step 3
+7. Converges in at most 10 rounds
 
 ## Errors
 

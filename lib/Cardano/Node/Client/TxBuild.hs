@@ -75,6 +75,7 @@ module Cardano.Node.Client.TxBuild (
     -- * Internal (for testing)
     interpretWith,
     assembleTx,
+    bumpFee,
 ) where
 
 import Cardano.Binary (serialize')
