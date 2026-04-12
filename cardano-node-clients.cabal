@@ -148,6 +148,7 @@ test-suite unit-tests
     , cardano-ledger-mary
     , cardano-node-clients
     , cardano-slotting
+    , cardano-strict-containers
     , containers
     , hspec
     , microlens
@@ -165,12 +166,14 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
     Cardano.Node.Client.E2E.ProviderSpec
+    Cardano.Node.Client.E2E.TxBuildSpec
 
   build-depends:
     , async
     , base
     , bytestring
     , cardano-crypto-class
+    , cardano-ledger-allegra
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
@@ -178,6 +181,7 @@ test-suite e2e-tests
     , cardano-node-clients
     , cardano-node-clients:devnet
     , cardano-read-ledger
+    , cardano-slotting
     , cardano-strict-containers
     , chain-follower
     , containers

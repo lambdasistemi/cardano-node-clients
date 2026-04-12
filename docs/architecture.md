@@ -52,10 +52,11 @@ with `async`.
 
 ## Transaction balancing
 
-`balanceTx` iteratively estimates fees using `estimateMinFeeTx`,
-adding fee-paying inputs and a change output. It converges in at
-most 10 rounds. Only ADA-only inputs are supported; multi-asset
-coin selection is out of scope.
+`balanceTx` iteratively computes the exact ledger fee with
+`getMinFeeTx`, then adds VKey witness padding for the unsigned
+transaction before adding fee-paying inputs and a change output.
+It converges in at most 10 rounds. Only ADA-only inputs are
+supported; multi-asset coin selection is out of scope.
 
 ## Transaction builder DSL
 

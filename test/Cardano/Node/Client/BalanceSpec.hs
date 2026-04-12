@@ -3,24 +3,58 @@ module Cardano.Node.Client.BalanceSpec (spec) where
 import Data.List (nub, sort)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust)
+import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set qualified as Set
+import Lens.Micro ((&), (.~), (^.))
 import Test.Hspec
 import Test.QuickCheck
 
 import Cardano.Crypto.Hash (hashFromStringAsHex)
+import Cardano.Ledger.Address (Addr (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
+import Cardano.Ledger.Api.PParams (
+    ppMinFeeAL,
+    ppMinFeeBL,
+ )
 import Cardano.Ledger.Api.Scripts.Data (Data (..))
+import Cardano.Ledger.Api.Tx (
+    bodyTxL,
+    mkBasicTx,
+ )
+import Cardano.Ledger.Api.Tx.Body (
+    feeTxBodyL,
+    mkBasicTxBody,
+    outputsTxBodyL,
+ )
+import Cardano.Ledger.Api.Tx.Out (
+    coinTxOutL,
+    mkBasicTxOut,
+ )
 import Cardano.Ledger.BaseTypes (
+    Inject (..),
+    Network (..),
     StrictMaybe (..),
     TxIx (..),
  )
+import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
-import Cardano.Ledger.Core (emptyPParams)
+import Cardano.Ledger.Core (
+    emptyPParams,
+    getMinFeeTx,
+ )
+import Cardano.Ledger.Credential (
+    Credential (KeyHashObj),
+    StakeReference (StakeRefNull),
+ )
 import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
+import Cardano.Ledger.Keys (
+    KeyHash (..),
+    KeyRole (Payment),
+ )
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
@@ -29,6 +63,8 @@ import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import PlutusCore.Data qualified as PLC
 
 import Cardano.Node.Client.Balance (
+    BalanceError (..),
+    balanceTx,
     computeScriptIntegrity,
     placeholderExUnits,
     spendingIndex,
@@ -39,6 +75,7 @@ spec = describe "Balance helpers" $ do
     spendingIndexSpec
     computeScriptIntegritySpec
     placeholderExUnitsSpec
+    balanceTxSpec
 
 -- -----------------------------------------------------------
 -- Test TxIn construction
@@ -57,6 +94,26 @@ mkTxIn n =
                 ++ hexByte (n `mod` 256)
         h = fromJust (hashFromStringAsHex hexStr)
      in TxIn (TxId (unsafeMakeSafeHash h)) (TxIx 0)
+  where
+    hexByte b =
+        let (hi, lo) = b `divMod` 16
+         in [hexDigit hi, hexDigit lo]
+    hexDigit d
+        | d < 10 = toEnum (fromEnum '0' + d)
+        | otherwise = toEnum (fromEnum 'a' + d - 10)
+
+-- | Deterministic testnet address from an Int.
+mkAddr :: Int -> Addr
+mkAddr n =
+    let hexStr =
+            replicate 52 '0'
+                ++ hexByte (n `div` 256)
+                ++ hexByte (n `mod` 256)
+        h = fromJust (hashFromStringAsHex hexStr)
+     in Addr
+            Testnet
+            (KeyHashObj (KeyHash h :: KeyHash 'Payment))
+            StakeRefNull
   where
     hexByte b =
         let (hi, lo) = b `divMod` 16
@@ -186,3 +243,83 @@ placeholderExUnitsSpec =
             let ExUnits mem steps = placeholderExUnits
             mem `shouldBe` 0
             steps `shouldBe` 0
+
+-- -----------------------------------------------------------
+-- balanceTx
+-- -----------------------------------------------------------
+
+balanceTxSpec :: Spec
+balanceTxSpec =
+    describe "balanceTx" $ do
+        it "uses getMinFeeTx plus VKey padding" $ do
+            let pp =
+                    emptyPParams @ConwayEra
+                        & ppMinFeeAL .~ Coin 44
+                        & ppMinFeeBL .~ Coin 155381
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 10_000_000))
+                        )
+                    ]
+                template =
+                    mkBasicTx $
+                        mkBasicTxBody
+                            & outputsTxBodyL
+                                .~ StrictSeq.singleton
+                                    ( mkBasicTxOut
+                                        (mkAddr 2)
+                                        (inject (Coin 3_000_000))
+                                    )
+            case balanceTx
+                pp
+                inputUtxos
+                (mkAddr 3)
+                template of
+                Left err ->
+                    expectationFailure (show err)
+                Right tx -> do
+                    let fee = tx ^. bodyTxL . feeTxBodyL
+                        Coin exactFee =
+                            getMinFeeTx pp tx 0
+                        Coin feePerByte =
+                            pp ^. ppMinFeeAL
+                        expectedFee =
+                            Coin (exactFee + 106 * feePerByte)
+                        outs =
+                            foldr
+                                (:)
+                                []
+                                (tx ^. bodyTxL . outputsTxBodyL)
+                    fee `shouldBe` expectedFee
+                    last outs ^. coinTxOutL
+                        `shouldBe` Coin
+                            (10_000_000 - 3_000_000 - exactFee - 106 * feePerByte)
+
+        it "returns InsufficientFee when exact fee exceeds available input" $ do
+            let pp =
+                    emptyPParams @ConwayEra
+                        & ppMinFeeAL .~ Coin 200
+                        & ppMinFeeBL .~ Coin 200_000
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 1))
+                        )
+                    ]
+                template = mkBasicTx mkBasicTxBody
+            case balanceTx
+                pp
+                inputUtxos
+                (mkAddr 2)
+                template of
+                Left (InsufficientFee required available) -> do
+                    required `shouldSatisfy` (> available)
+                    available `shouldBe` Coin 1
+                Right _ ->
+                    expectationFailure
+                        "expected InsufficientFee"

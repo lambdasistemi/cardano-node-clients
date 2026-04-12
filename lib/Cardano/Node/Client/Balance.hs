@@ -7,9 +7,12 @@ License     : Apache-2.0
 
 Balance an unsigned Conway-era transaction by adding
 fee-paying inputs and a change output. The fee is
-estimated iteratively via 'estimateMinFeeTx' from
-@cardano-ledger-api@ until the value converges
-(at most 10 rounds).
+computed iteratively via the exact ledger
+'getMinFeeTx' function, plus VKey witness padding
+for the unsigned transaction size (at most 10
+rounds). 'balanceFeeLoop' still uses
+'estimateMinFeeTx' for fee-dependent output
+fixpoints.
 
 This is a simplified balancer that only handles
 ADA-only fee inputs. Multi-asset coin selection is
@@ -88,10 +91,11 @@ and a change output.
 
 One additional key witness is assumed for the fee
 input. The fee is found by iterating
-'setMinFeeTx' to a fixpoint: each round builds
+'getMinFeeTx' to a fixpoint: each round builds
 the full transaction (with change output and fee
-field set) and re-estimates until the fee
-stabilises.
+field set), computes the exact minimum fee for
+that serialized transaction, and adds witness
+padding until the fee stabilises.
 -}
 balanceTx ::
     PParams ConwayEra ->

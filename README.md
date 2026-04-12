@@ -8,8 +8,19 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 
 - **Provider** -- query UTxOs and protocol parameters
 - **Submitter** -- submit signed transactions
-- **Balance** -- iterative fee estimation and transaction balancing
+- **Balance** -- exact-fee transaction balancing plus fee-dependent output convergence
+- **TxBuild** -- Conway-era transaction builder DSL with `Peek`, `Ctx`, and `Valid`
 - **N2C** -- LocalStateQuery + LocalTxSubmission over Unix socket
+
+## Testing
+
+- Unit tests cover `balanceTx`, `balanceFeeLoop`, and the `TxBuild`
+  convergence logic, including eval retry, fee oscillation, and
+  `bumpFee`.
+- E2E tests run against a real devnet for provider, chainsync,
+  chain-population, `balanceFeeLoop`, and a submitted `TxBuild`
+  transaction using `spend`, `payTo`, `payTo'`, `ctx`, `peek`,
+  `valid`, `requireSignature`, and `validFrom`/`validTo`.
 
 ## Build
 
