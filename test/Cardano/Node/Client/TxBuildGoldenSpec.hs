@@ -8,6 +8,7 @@
 module Cardano.Node.Client.TxBuildGoldenSpec (spec) where
 
 import Control.Monad (void)
+import Data.Bifunctor (first)
 import Data.Foldable (for_, toList)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
@@ -160,8 +161,7 @@ goldenCases =
 loadGoldenTx :: GoldenCase -> IO (Tx ConwayEra)
 loadGoldenTx golden = do
     hex <-
-        fmap (T.strip . T.pack) $
-            readFile (fixturePath (goldenHash golden))
+        T.strip . T.pack <$> readFile (fixturePath (goldenHash golden))
     case decodeFullAnnotatorFromHexText
         (natVersion @11)
         "mainnet golden tx"
@@ -187,7 +187,7 @@ txBuildFromTx tx = do
     mapM_ addSpend indexedInputs
     mapM_ collateral (Set.toAscList collateralInputs)
     mapM_ reference (Set.toAscList referenceInputs)
-    mapM_ (void . output) outputs
+    mapM_ output outputs
     mapM_ attachScript witnessScripts
     mapM_ addMint indexedMints
     mapM_ addWithdrawal (Map.toAscList withdrawalMap)
@@ -316,7 +316,7 @@ normalizedRedeemersWithExUnits ::
         (ConwayPlutusPurpose AsIx ConwayEra)
         (PLC.Data, ExUnits)
 normalizedRedeemersWithExUnits tx =
-    Map.map (\(redeemer, exUnits) -> (getPlutusData redeemer, exUnits)) redeemers
+    Map.map (first getPlutusData) redeemers
   where
     Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
 
