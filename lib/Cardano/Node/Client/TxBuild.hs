@@ -119,11 +119,13 @@ import Cardano.Ledger.Api.Scripts.Data (
 import Cardano.Ledger.Api.Tx (
     Tx,
     bodyTxL,
+    estimateMinFeeTx,
     mkBasicTx,
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
+    feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     mkBasicTxBody,
@@ -146,7 +148,7 @@ import Cardano.Ledger.Api.Tx.Wits (
 import Cardano.Ledger.BaseTypes (
     StrictMaybe (SJust, SNothing),
  )
-import Cardano.Ledger.Coin (Coin)
+import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
@@ -631,10 +633,20 @@ interpretWithM runCtx currentTx = go emptyState True
 
 -- | Assemble a 'Tx' from interpreter state.
 assembleTx :: PParams ConwayEra -> TxState e -> Tx ConwayEra
-assembleTx pp st =
+assembleTx = assembleTxWith Set.empty
+
+{- | Assemble with extra input TxIns (e.g. fee UTxO).
+These are included in the input set for correct
+spending index computation but don't get redeemers.
+-}
+assembleTxWith ::
+    Set.Set TxIn -> PParams ConwayEra -> TxState e -> Tx ConwayEra
+assembleTxWith extraIns pp st =
     let
         allSpendIns =
-            Set.fromList $ map fst (tsSpends st)
+            Set.union extraIns $
+                Set.fromList $
+                    map fst (tsSpends st)
         refIns = Set.fromList (tsRefIns st)
         collIns = Set.fromList (tsCollIns st)
         outs = StrictSeq.fromList (tsOuts st)
@@ -770,32 +782,38 @@ build ::
     TxBuild q e a ->
     IO (Either (BuildError e) (Tx ConwayEra))
 build pp interpret evaluateTx inputUtxos changeAddr prog =
-    loop (mkBasicTx mkBasicTxBody)
+    step Set.empty (Coin 0) (mkBasicTx mkBasicTxBody)
   where
-    loop prevTx = do
-        -- 1. Interpret with current Tx
-        (st, _, converged) <-
+    -- Pre-compute the extra TxIns from inputUtxos
+    -- so Peek-based index computation sees ALL
+    -- inputs (including fee UTxO).
+    extraIns =
+        Set.fromList $ map fst inputUtxos
+    addExtras tx =
+        let existing =
+                tx ^. bodyTxL . inputsTxBodyL
+         in tx
+                & bodyTxL . inputsTxBodyL
+                    .~ Set.union existing extraIns
+
+    -- \| One iteration: interpret, assemble, eval,
+    -- patch, balance. Track seen fees to detect
+    -- oscillation and bisect.
+    step seenFees maxFee prevTx = do
+        -- 1. Interpret
+        let prevWithIns = addExtras prevTx
+        (st, _, _) <-
             interpretWithM
                 (runInterpretIO interpret)
-                prevTx
+                prevWithIns
                 prog
-        let
-            tx = assembleTx pp st
-        -- 2. Add all input TxIns for eval
-        let existingIns =
-                tx ^. bodyTxL . inputsTxBodyL
-            allIns =
-                foldl'
-                    ( \s (tin, _) ->
-                        Set.insert tin s
-                    )
-                    existingIns
-                    inputUtxos
+        let tx = assembleTxWith extraIns pp st
+            prevFee = prevTx ^. bodyTxL . feeTxBodyL
             txForEval =
-                tx
-                    & bodyTxL . inputsTxBodyL
-                        .~ allIns
-        -- 3. Evaluate scripts
+                tx & bodyTxL . feeTxBodyL .~ prevFee
+        -- 2. Eval (no change output; scripts that
+        --    check conservation use tx.fee which
+        --    matches Peek-computed outputs).
         evalResult <- evaluateTx txForEval
         let failures =
                 [ (p, e)
@@ -803,45 +821,26 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                     Map.toList evalResult
                 ]
         case failures of
-            ((p, e) : _) ->
-                pure $ Left $ EvalFailure p e
-            [] -> do
-                -- 4. Patch ExUnits
-                let Redeemers rdmrMap =
-                        tx ^. witsTxL . rdmrsTxWitsL
-                    patched =
-                        Map.mapWithKey
-                            ( \purpose (dat, eu) ->
-                                case Map.lookup
-                                    purpose
-                                    evalResult of
-                                    Just (Right eu') ->
-                                        (dat, eu')
-                                    _ -> (dat, eu)
-                            )
-                            rdmrMap
-                    newRdmrs = Redeemers patched
-                    integrity =
-                        if Map.null patched
-                            then SNothing
-                            else
-                                hashScriptIntegrity
-                                    ( Set.singleton
-                                        ( getLanguageView
-                                            pp
-                                            PlutusV3
-                                        )
-                                    )
-                                    newRdmrs
-                                    (TxDats mempty)
-                    patchedTx =
+            ((_, _) : _) -> do
+                -- Eval failed. Retry with estimate.
+                let estFee =
+                        estimateMinFeeTx
+                            pp
+                            txForEval
+                            1
+                            0
+                            0
+                    retryTx =
                         tx
-                            & witsTxL . rdmrsTxWitsL
-                                .~ newRdmrs
-                            & bodyTxL
-                                . scriptIntegrityHashTxBodyL
-                                .~ integrity
-                -- 5. Balance
+                            & bodyTxL . feeTxBodyL
+                                .~ estFee
+                step seenFees maxFee retryTx
+            [] -> do
+                -- 3. Patch ExUnits THEN balance.
+                --    This way balanceTx sees the
+                --    real script cost.
+                let patchedTx =
+                        patchExUnits tx evalResult
                 case balanceTx
                     pp
                     inputUtxos
@@ -851,29 +850,270 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                         pure $
                             Left $
                                 BalanceFailed err
-                    Right balanced
-                        -- 6. Converged?
-                        | converged
-                            && txBodyEq
+                    Right balanced -> do
+                        let finalFee =
                                 balanced
-                                prevTx ->
-                            case failedChecks
-                                (tsChecks st)
-                                balanced of
-                                [] ->
-                                    pure $ Right balanced
-                                errs ->
-                                    pure $
-                                        Left $
-                                            ChecksFailed errs
-                        | otherwise ->
-                            loop balanced
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                            newMax =
+                                max maxFee finalFee
+                        if finalFee == prevFee
+                            then
+                                if newMax > finalFee
+                                    then
+                                        -- Fee converged
+                                        -- but below max.
+                                        -- Re-iterate
+                                        -- once with max
+                                        -- so Peek sees
+                                        -- the right fee.
+                                        step
+                                            seenFees
+                                            newMax
+                                            ( bumpFee
+                                                balanced
+                                                newMax
+                                            )
+                                    else
+                                        -- Truly
+                                        -- converged.
+                                        case failedChecks
+                                            (tsChecks st)
+                                            balanced of
+                                            [] ->
+                                                pure $
+                                                    Right
+                                                        balanced
+                                            errs ->
+                                                pure $
+                                                    Left $
+                                                        ChecksFailed
+                                                            errs
+                            else
+                                if Set.member
+                                    finalFee
+                                    seenFees
+                                    then do
+                                        -- Oscillation!
+                                        let lo =
+                                                min
+                                                    finalFee
+                                                    prevFee
+                                            hi =
+                                                max
+                                                    finalFee
+                                                    prevFee
+                                        bisect
+                                            st
+                                            evalResult
+                                            balanced
+                                            lo
+                                            hi
+                                    else
+                                        step
+                                            ( Set.insert
+                                                finalFee
+                                                seenFees
+                                            )
+                                            newMax
+                                            balanced
 
--- | Compare Tx bodies for convergence.
-txBodyEq ::
-    Tx ConwayEra -> Tx ConwayEra -> Bool
-txBodyEq a b =
-    (a ^. bodyTxL) == (b ^. bodyTxL)
+    -- \| Binary search for the smallest fee where
+    -- eval passes. lo fails eval, hi passes.
+    bisect st evalResult templateTx lo hi
+        | unCoin hi <= unCoin lo + 1 =
+            -- hi is the smallest valid fee.
+            -- Build final tx with hi.
+            finalize st evalResult templateTx hi
+        | otherwise = do
+            let mid =
+                    Coin $
+                        unCoin lo
+                            + (unCoin hi - unCoin lo)
+                                `div` 2
+            -- Re-interpret with mid fee
+            let midTx =
+                    bumpFee templateTx mid
+                midWithIns = addExtras midTx
+            (st', _, _) <-
+                interpretWithM
+                    (runInterpretIO interpret)
+                    midWithIns
+                    prog
+            let tx' =
+                    assembleTxWith extraIns pp st'
+                        & bodyTxL . feeTxBodyL .~ mid
+            -- Balance to get change output
+            case balanceTx
+                pp
+                inputUtxos
+                changeAddr
+                tx' of
+                Left _ ->
+                    -- Can't balance at mid, go hi
+                    bisect
+                        st
+                        evalResult
+                        templateTx
+                        mid
+                        hi
+                Right balanced -> do
+                    let midBal =
+                            bumpFee balanced mid
+                    -- Evaluate with change output
+                    evalResult' <-
+                        evaluateTx midBal
+                    let failures' =
+                            [ e
+                            | (_, Left e) <-
+                                Map.toList
+                                    evalResult'
+                            ]
+                    if null failures'
+                        then
+                            -- mid works, try lower
+                            bisect
+                                st'
+                                evalResult'
+                                midBal
+                                lo
+                                mid
+                        else
+                            -- mid fails, try higher
+                            bisect
+                                st
+                                evalResult
+                                templateTx
+                                mid
+                                hi
+
+    -- \| Finalize with a specific fee.
+    --
+    -- Re-interpret + assemble so Peek sees the
+    -- chosen fee, patch ExUnits, then balance.
+    -- If balanceTx lowered the fee (it computes
+    -- min_fee), bump it back and shrink the change
+    -- output to compensate.
+    finalize _st evalResult _templateTx fee = do
+        -- Re-interpret with the chosen fee
+        let feeTx =
+                mkBasicTx mkBasicTxBody
+                    & bodyTxL . feeTxBodyL .~ fee
+            feeTxWithIns = addExtras feeTx
+        (st', _, _) <-
+            interpretWithM
+                (runInterpretIO interpret)
+                feeTxWithIns
+                prog
+        let tx' =
+                assembleTxWith extraIns pp st'
+                    & bodyTxL . feeTxBodyL .~ fee
+            patched =
+                patchExUnits tx' evalResult
+        case balanceTx
+            pp
+            inputUtxos
+            changeAddr
+            patched of
+            Left err ->
+                pure $ Left $ BalanceFailed err
+            Right balanced -> do
+                let balFee =
+                        balanced
+                            ^. bodyTxL . feeTxBodyL
+                    final =
+                        if balFee == fee
+                            then balanced
+                            else bumpFee balanced fee
+                case failedChecks
+                    (tsChecks st')
+                    final of
+                    [] -> pure $ Right final
+                    errs ->
+                        pure $
+                            Left $
+                                ChecksFailed errs
+
+    -- \| Patch ExUnits from eval result.
+    patchExUnits tx evalResult =
+        let Redeemers rdmrMap =
+                tx ^. witsTxL . rdmrsTxWitsL
+            patched =
+                Map.mapWithKey
+                    ( \purpose (dat, eu) ->
+                        case Map.lookup
+                            purpose
+                            evalResult of
+                            Just (Right eu') ->
+                                (dat, eu')
+                            _ -> (dat, eu)
+                    )
+                    rdmrMap
+            newRdmrs = Redeemers patched
+            integrity =
+                if Map.null patched
+                    then SNothing
+                    else
+                        hashScriptIntegrity
+                            ( Set.singleton
+                                ( getLanguageView
+                                    pp
+                                    PlutusV3
+                                )
+                            )
+                            newRdmrs
+                            (TxDats mempty)
+         in tx
+                & witsTxL . rdmrsTxWitsL
+                    .~ newRdmrs
+                & bodyTxL
+                    . scriptIntegrityHashTxBodyL
+                    .~ integrity
+
+{- | Bump fee from what balanceTx set to a higher
+target, reducing the last output (change) to
+compensate.
+
+When bisection finds a fee > min_fee,
+balanceTx sets fee = min_fee and puts the
+excess into the change output. This function
+moves the difference back: increase fee,
+decrease change.
+
+Pre-condition: outputs must be non-empty (the
+last one is the change output added by
+balanceTx).
+-}
+bumpFee :: Tx ConwayEra -> Coin -> Tx ConwayEra
+bumpFee tx targetFee =
+    let currentFee = tx ^. bodyTxL . feeTxBodyL
+        diff = unCoin targetFee - unCoin currentFee
+        outs =
+            foldr
+                (:)
+                []
+                (tx ^. bodyTxL . outputsTxBodyL)
+     in case reverse outs of
+            [] ->
+                error
+                    "bumpFee: no outputs to \
+                    \adjust"
+            (changeOut : rest) ->
+                let Coin changeVal =
+                        changeOut ^. coinTxOutL
+                    adjusted =
+                        changeOut
+                            & coinTxOutL
+                                .~ Coin
+                                    (changeVal - diff)
+                    newOuts =
+                        StrictSeq.fromList
+                            (reverse (adjusted : rest))
+                 in tx
+                        & bodyTxL . feeTxBodyL
+                            .~ targetFee
+                        & bodyTxL . outputsTxBodyL
+                            .~ newOuts
 
 -- ----------------------------------------------------
 -- Internal helpers

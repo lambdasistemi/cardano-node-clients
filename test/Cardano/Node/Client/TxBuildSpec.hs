@@ -23,6 +23,8 @@ import Cardano.Ledger.Api.PParams (
     emptyPParams,
     ppCoinsPerUTxOByteL,
     ppMaxTxSizeL,
+    ppMinFeeAL,
+    ppMinFeeBL,
  )
 import Cardano.Ledger.Api.Tx (Tx, witsTxL)
 import Cardano.Ledger.Api.Tx.Body (
@@ -37,6 +39,7 @@ import Cardano.Ledger.Api.Tx.Body (
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
+    coinTxOutL,
     mkBasicTxOut,
  )
 import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
@@ -69,6 +72,7 @@ import Cardano.Ledger.Mary.Value (
     MultiAsset (..),
     PolicyID (..),
  )
+import Cardano.Ledger.Plutus (ExUnits (..))
 import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
@@ -732,6 +736,151 @@ buildSpec =
                                 (mkAddr 4)
                                 (inject (Coin 7))
                     expected `shouldSatisfy` (`elem` outs)
+
+        it
+            "fee-dependent outputs converge \
+            \(conservation equation)"
+            $ do
+                -- Simulate a conservation-aware
+                -- validator: the mock evaluator
+                -- checks that fee + outputs == inputs.
+                -- Refund = inputVal - tip - fee.
+                -- Tip is fixed, fee is what Peek reads.
+                let pp =
+                        emptyPParams
+                            & ppMaxTxSizeL .~ 16384
+                            & ppMinFeeAL .~ Coin 44
+                            & ppMinFeeBL .~ Coin 155381
+                            & ppCoinsPerUTxOByteL
+                                .~ CoinPerByte
+                                    (Coin 4310)
+                    tip = 1_000_000
+                    inputVal = 5_000_000
+                    scriptUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin inputVal))
+                        )
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            ( inject
+                                (Coin 10_000_000)
+                            )
+                        )
+                    prog ::
+                        TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <-
+                            spendScript
+                                (mkTxIn 2)
+                                (42 :: Integer)
+                        Coin fee <- peek $ \tx ->
+                            let f =
+                                    tx
+                                        ^. bodyTxL
+                                            . feeTxBodyL
+                             in if f > Coin 0
+                                    then Ok f
+                                    else Iterate f
+                        let refund =
+                                inputVal - tip - fee
+                        _ <-
+                            payTo
+                                (mkAddr 4)
+                                (inject (Coin refund))
+                        collateral (mkTxIn 1)
+                        pure ()
+                    -- Mock evaluator: check
+                    -- conservation equation.
+                    -- Only the first output (refund)
+                    -- participates; the change output
+                    -- (added by balanceTx) is ignored.
+                    mockEval tx =
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                            outs =
+                                toList
+                                    ( tx
+                                        ^. bodyTxL
+                                            . outputsTxBodyL
+                                    )
+                            -- First output is the
+                            -- refund (from Peek).
+                            refund = case outs of
+                                (o : _) ->
+                                    let Coin c =
+                                            o
+                                                ^. coinTxOutL
+                                     in c
+                                [] -> 0
+                         in if fee + refund + tip
+                                == inputVal
+                                then
+                                    pure
+                                        ( Map.singleton
+                                            ( ConwaySpending
+                                                (AsIx 0)
+                                            )
+                                            ( Right
+                                                ( ExUnits
+                                                    100
+                                                    100
+                                                )
+                                            )
+                                        )
+                                else
+                                    pure
+                                        ( Map.singleton
+                                            ( ConwaySpending
+                                                (AsIx 0)
+                                            )
+                                            ( Left
+                                                ( "conservation \
+                                                  \violated: fee="
+                                                    <> show fee
+                                                    <> " refund="
+                                                    <> show refund
+                                                    <> " tip="
+                                                    <> show tip
+                                                    <> " sum="
+                                                    <> show
+                                                        ( fee
+                                                            + refund
+                                                            + tip
+                                                        )
+                                                    <> " expected="
+                                                    <> show inputVal
+                                                )
+                                            )
+                                        )
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [ feeUtxo
+                        , scriptUtxo
+                        ]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left err ->
+                        expectationFailure $
+                            show err
+                    Right tx -> do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                        -- Conservation holds in
+                        -- the final tx
+                        fee
+                            `shouldSatisfy` (> 0)
 
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
