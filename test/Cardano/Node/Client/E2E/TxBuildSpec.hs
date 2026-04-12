@@ -194,13 +194,20 @@ buildAndSubmit (provider, submitter, pp, utxos) = do
                         { invalidBefore = SJust lower
                         , invalidHereafter = SJust upper
                         }
-                (outs !! 0) ^. coinTxOutL
-                    `shouldBe` plainCoin
-                (outs !! 1) ^. coinTxOutL
-                    `shouldBe` Coin
-                        (unCoin datumBase + unCoin fee)
-                (outs !! 1) ^. datumTxOutL
-                    `shouldNotBe` NoDatum
+                case outs of
+                    [plainOut, datumOut, _changeOut] -> do
+                        plainOut ^. coinTxOutL
+                            `shouldBe` plainCoin
+                        datumOut ^. coinTxOutL
+                            `shouldBe` Coin
+                                ( unCoin datumBase
+                                    + unCoin fee
+                                )
+                        datumOut ^. datumTxOutL
+                            `shouldNotBe` NoDatum
+                    _ ->
+                        expectationFailure
+                            "expected plain, datum, and change outputs"
 
                 let signed =
                         addKeyWitness genesisSignKey tx
