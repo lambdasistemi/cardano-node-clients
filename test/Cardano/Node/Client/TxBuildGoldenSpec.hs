@@ -130,13 +130,11 @@ loadGoldenTx golden = do
     hex <-
         fmap (T.strip . T.pack) $
             readFile (fixturePath (goldenHash golden))
-    case
-        decodeFullAnnotatorFromHexText
-            (natVersion @11)
-            "mainnet golden tx"
-            (decCBOR :: forall s. Decoder s (Annotator (Tx ConwayEra)))
-            hex
-        of
+    case decodeFullAnnotatorFromHexText
+        (natVersion @11)
+        "mainnet golden tx"
+        (decCBOR :: forall s. Decoder s (Annotator (Tx ConwayEra)))
+        hex of
         Left err ->
             expectationFailure
                 ("failed to decode fixture " <> goldenHash golden <> ": " <> show err)
