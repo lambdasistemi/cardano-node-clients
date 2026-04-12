@@ -21,7 +21,11 @@ import Data.IORef (
 import Data.Set qualified as Set
 import Test.Hspec
 
-import Cardano.Ledger.Address (Addr (..))
+import Cardano.Ledger.Address (
+    Addr (..),
+    RewardAccount (..),
+    Withdrawals (..),
+ )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
@@ -33,8 +37,13 @@ import Cardano.Ledger.Api.PParams (
     ppMinFeeAL,
     ppMinFeeBL,
  )
-import Cardano.Ledger.Api.Tx (Tx, witsTxL)
+import Cardano.Ledger.Api.Tx (
+    Tx,
+    auxDataTxL,
+    witsTxL,
+ )
 import Cardano.Ledger.Api.Tx.Body (
+    auxDataHashTxBodyL,
     collateralInputsTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
@@ -43,6 +52,7 @@ import Cardano.Ledger.Api.Tx.Body (
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
     vldtTxBodyL,
+    withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
@@ -61,7 +71,12 @@ import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
-import Cardano.Ledger.Core (bodyTxL)
+import Cardano.Ledger.Core (
+    bodyTxL,
+    hashTxAuxData,
+    metadataTxAuxDataL,
+    mkBasicTxAuxData,
+ )
 import Cardano.Ledger.Credential (
     Credential (..),
     StakeReference (..),
@@ -79,6 +94,7 @@ import Cardano.Ledger.Mary.Value (
     MultiAsset (..),
     PolicyID (..),
  )
+import Cardano.Ledger.Metadata (Metadatum (..))
 import Cardano.Ledger.Plutus (ExUnits (..))
 import Cardano.Ledger.TxIn (
     TxId (..),
@@ -149,6 +165,18 @@ mkWitnessKeyHash :: Word8 -> KeyHash 'Witness
 mkWitnessKeyHash n =
     KeyHash (mkHash28 n)
 
+mkRewardAccount :: Word8 -> RewardAccount
+mkRewardAccount n =
+    RewardAccount
+        Testnet
+        (KeyHashObj (KeyHash (mkHash28 n)))
+
+mkScriptRewardAccount :: Word8 -> RewardAccount
+mkScriptRewardAccount n =
+    RewardAccount
+        Testnet
+        (ScriptHashObj (ScriptHash (mkHash28 n)))
+
 -- --------------------------------------------------
 -- Spec
 -- --------------------------------------------------
@@ -161,6 +189,8 @@ spec = describe "TxBuild" $ do
     spendIndexSpec
     scriptSpendSpec
     mintSpec
+    withdrawSpec
+    metadataSpec
     ctxSpec
     validSpec
     referenceValiditySpec
@@ -407,6 +437,73 @@ mintSpec =
             hasSpend `shouldBe` True
             hasMint `shouldBe` True
             Map.size rdmrs `shouldBe` 2
+
+withdrawSpec :: Spec
+withdrawSpec =
+    describe "withdraw" $ do
+        it "adds pub-key withdrawals to the tx body" $ do
+            let rewardAccount = mkRewardAccount 7
+                tx =
+                    draft emptyPParams $
+                        withdraw rewardAccount (Coin 3_000_000)
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            tx ^. bodyTxL . withdrawalsTxBodyL
+                `shouldBe` Withdrawals
+                    (Map.singleton rewardAccount (Coin 3_000_000))
+            Map.null rdmrs `shouldBe` True
+
+        it "produces rewarding redeemers for script withdrawals" $ do
+            let rewardAccount = mkScriptRewardAccount 8
+                tx =
+                    draft emptyPParams $
+                        withdrawScript
+                            rewardAccount
+                            (Coin 2_000_000)
+                            (99 :: Integer)
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            tx ^. bodyTxL . withdrawalsTxBodyL
+                `shouldBe` Withdrawals
+                    (Map.singleton rewardAccount (Coin 2_000_000))
+            Map.keys rdmrs
+                `shouldBe` [ConwayRewarding (AsIx 0)]
+
+metadataSpec :: Spec
+metadataSpec =
+    describe "setMetadata" $ do
+        it "attaches auxiliary data and hashes it in the tx body" $ do
+            let tx =
+                    draft emptyPParams $
+                        setMetadata 674 (S "gm")
+                expectedAux =
+                    mkBasicTxAuxData
+                        & metadataTxAuxDataL
+                            .~ Map.singleton 674 (S "gm")
+            case tx ^. auxDataTxL of
+                SJust aux -> do
+                    aux `shouldBe` expectedAux
+                    tx ^. bodyTxL . auxDataHashTxBodyL
+                        `shouldBe` SJust (hashTxAuxData aux)
+                _ ->
+                    expectationFailure
+                        "expected auxiliary data"
+
+        it "keeps the last value written for a metadata label" $ do
+            let tx =
+                    draft emptyPParams $ do
+                        setMetadata 674 (S "first")
+                        setMetadata 674 (S "second")
+                expectedAux =
+                    mkBasicTxAuxData
+                        & metadataTxAuxDataL
+                            .~ Map.singleton 674 (S "second")
+            case tx ^. auxDataTxL of
+                SJust aux ->
+                    aux `shouldBe` expectedAux
+                _ ->
+                    expectationFailure
+                        "expected auxiliary data"
 
 ctxSpec :: Spec
 ctxSpec =

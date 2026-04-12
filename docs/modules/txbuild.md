@@ -17,6 +17,8 @@ The current implementation covers the first six slices of the DSL:
 - `Ctx` for pluggable domain queries
 - `Valid` for post-convergence transaction checks
 - reference inputs and validity interval instructions
+- withdrawals with optional rewarding redeemers
+- metadata attachment via transaction auxiliary data
 - pure interpreters with `draft` and `draftWith`
 - effectful building with `build`, including script evaluation,
   `ExUnits` patching, eval retry, oscillation handling, bisection,
@@ -81,6 +83,9 @@ payTo            :: Addr -> MaryValue -> TxBuild q e Word32
 payTo'           :: ToData d => Addr -> MaryValue -> d -> TxBuild q e Word32
 output           :: TxOut ConwayEra -> TxBuild q e Word32
 mint             :: ToData r => PolicyID -> Map AssetName Integer -> r -> TxBuild q e ()
+withdraw         :: RewardAccount -> Coin -> TxBuild q e ()
+withdrawScript   :: ToData r => RewardAccount -> Coin -> r -> TxBuild q e ()
+setMetadata      :: Word64 -> Metadatum -> TxBuild q e ()
 requireSignature :: KeyHash 'Witness -> TxBuild q e ()
 attachScript     :: Script ConwayEra -> TxBuild q e ()
 reference        :: TxIn -> TxBuild q e ()
@@ -201,6 +206,19 @@ windowedTx = do
 This covers the common "read but do not spend" pattern for reference
 inputs together with explicit validity bounds and signer requirements.
 
+### Withdrawal and metadata
+
+```haskell
+annotatedWithdrawal :: TxBuild q e ()
+annotatedWithdrawal = do
+    withdraw rewardsAccount (Coin 1_000_000)
+    setMetadata 674 (S "batched withdrawal")
+```
+
+`withdraw` fills `withdrawalsTxBodyL`. `withdrawScript` also adds a
+`ConwayRewarding` redeemer for the reward account. `setMetadata`
+attaches auxiliary data and keeps `auxDataHashTxBodyL` in sync.
+
 ## Testing status
 
 `TxBuildSpec` currently covers:
@@ -217,6 +235,8 @@ inputs together with explicit validity bounds and signer requirements.
 - `checkTxSize` failures
 - all-pass validation
 - reference-input and validity-interval assembly
+- pub-key and script withdrawals
+- metadata aux-data assembly and hashing
 - eval retry after script-evaluation failure
 - fee oscillation with output re-interpretation
 - `bumpFee` in isolation

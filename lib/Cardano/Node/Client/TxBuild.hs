@@ -34,6 +34,7 @@ module Cardano.Node.Client.TxBuild (
     -- * Witnesses
     SpendWitness (..),
     MintWitness (..),
+    WithdrawWitness (..),
 
     -- * Input combinators
     spend,
@@ -48,6 +49,11 @@ module Cardano.Node.Client.TxBuild (
 
     -- * Minting
     mint,
+
+    -- * Withdrawals and metadata
+    withdraw,
+    withdrawScript,
+    setMetadata,
 
     -- * Constraints
     validFrom,
@@ -96,10 +102,14 @@ import Data.Map.Strict qualified as Map
 import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Numeric.Natural (Natural)
 
-import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Address (
+    Addr,
+    RewardAccount,
+    Withdrawals (..),
+ )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.PParams (getLanguageView)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
@@ -119,6 +129,7 @@ import Cardano.Ledger.Api.Scripts.Data (
  )
 import Cardano.Ledger.Api.Tx (
     Tx,
+    auxDataTxL,
     bodyTxL,
     estimateMinFeeTx,
     mkBasicTx,
@@ -134,6 +145,7 @@ import Cardano.Ledger.Api.Tx.Body (
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
     vldtTxBodyL,
+    withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
@@ -157,7 +169,11 @@ import Cardano.Ledger.Conway.Scripts (
 import Cardano.Ledger.Core (
     PParams,
     Script,
+    auxDataHashTxBodyL,
     hashScript,
+    hashTxAuxData,
+    metadataTxAuxDataL,
+    mkBasicTxAuxData,
  )
 import Cardano.Ledger.Hashes (ScriptHash)
 import Cardano.Ledger.Keys (
@@ -170,6 +186,7 @@ import Cardano.Ledger.Mary.Value (
     MultiAsset (..),
     PolicyID,
  )
+import Cardano.Ledger.Metadata (Metadatum)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
@@ -231,6 +248,13 @@ data MintWitness
     = -- | Plutus script with a typed redeemer.
       forall r. (ToData r) => PlutusScriptWitness r
 
+-- | How a withdrawal is witnessed.
+data WithdrawWitness
+    = -- | Pub-key withdrawal, no redeemer needed.
+      PubKeyWithdraw
+    | -- | Script withdrawal with a typed redeemer.
+      forall r. (ToData r) => ScriptWithdraw r
+
 -- | Pure query interpreter.
 newtype Interpret q = Interpret
     { runInterpret :: forall x. q x -> x
@@ -263,6 +287,17 @@ data TxInstr q e a where
         AssetName ->
         Integer ->
         MintWitness ->
+        TxInstr q e ()
+    -- | Withdraw stake rewards.
+    Withdraw ::
+        RewardAccount ->
+        Coin ->
+        WithdrawWitness ->
+        TxInstr q e ()
+    -- | Set transaction metadata for a label.
+    SetMetadata ::
+        Word64 ->
+        Metadatum ->
         TxInstr q e ()
     -- | Require a key signature.
     ReqSignature ::
@@ -404,6 +439,29 @@ mint pid assets r =
         , q /= 0
         ]
 
+-- | Withdraw stake rewards from a pub-key account.
+withdraw :: RewardAccount -> Coin -> TxBuild q e ()
+withdraw rewardAccount amount =
+    singleton $ Withdraw rewardAccount amount PubKeyWithdraw
+
+-- | Withdraw stake rewards from a script-backed account.
+withdrawScript ::
+    (ToData r) =>
+    RewardAccount ->
+    Coin ->
+    r ->
+    TxBuild q e ()
+withdrawScript rewardAccount amount redeemer =
+    singleton $
+        Withdraw
+            rewardAccount
+            amount
+            (ScriptWithdraw redeemer)
+
+-- | Set transaction metadata for a label.
+setMetadata :: Word64 -> Metadatum -> TxBuild q e ()
+setMetadata label = singleton . SetMetadata label
+
 -- | Set the lower validity bound.
 validFrom :: SlotNo -> TxBuild q e ()
 validFrom = singleton . SetValidFrom
@@ -492,6 +550,9 @@ data TxState e = TxState
           , MintWitness
           )
         ]
+    , tsWithdrawals ::
+        [(RewardAccount, Coin, WithdrawWitness)]
+    , tsMetadata :: Map Word64 Metadatum
     , tsSigners :: Set (KeyHash 'Witness)
     , tsScripts ::
         Map ScriptHash (Script ConwayEra)
@@ -508,6 +569,8 @@ emptyState =
         , tsCollIns = []
         , tsOuts = []
         , tsMints = []
+        , tsWithdrawals = []
+        , tsMetadata = Map.empty
         , tsSigners = Set.empty
         , tsScripts = Map.empty
         , tsValidFrom = SNothing
@@ -582,6 +645,26 @@ interpretWithM runCtx currentTx = go emptyState True
                     }
                 conv
                 (k ())
+        Withdraw rewardAccount amount w :>>= k ->
+            go
+                st
+                    { tsWithdrawals =
+                        tsWithdrawals st
+                            ++ [(rewardAccount, amount, w)]
+                    }
+                conv
+                (k ())
+        SetMetadata label metadatum :>>= k ->
+            go
+                st
+                    { tsMetadata =
+                        Map.insert
+                            label
+                            metadatum
+                            (tsMetadata st)
+                    }
+                conv
+                (k ())
         ReqSignature kh :>>= k ->
             go
                 st
@@ -652,14 +735,35 @@ assembleTxWith extraIns pp st =
         collIns = Set.fromList (tsCollIns st)
         outs = StrictSeq.fromList (tsOuts st)
         mintMA = foldl' addMint mempty (tsMints st)
+        withdrawalEntries =
+            collectWithdrawalEntries
+                (tsWithdrawals st)
+        withdrawals =
+            Withdrawals
+                (Map.map fst withdrawalEntries)
         -- Build redeemers
         spendRdmrs =
             collectSpendRedeemers
                 allSpendIns
                 (tsSpends st)
         mintRdmrs = collectMintRedeemers (tsMints st)
-        rdmrList = spendRdmrs ++ mintRdmrs
+        withdrawalRdmrs =
+            collectWithdrawalRedeemers
+                withdrawals
+                withdrawalEntries
+        rdmrList =
+            spendRdmrs
+                ++ mintRdmrs
+                ++ withdrawalRdmrs
         allRdmrs = Redeemers $ Map.fromList rdmrList
+        auxData =
+            if Map.null (tsMetadata st)
+                then SNothing
+                else
+                    SJust $
+                        mkBasicTxAuxData
+                            & metadataTxAuxDataL
+                                .~ tsMetadata st
         -- Integrity hash (skip if no scripts)
         integrity =
             if null rdmrList
@@ -678,6 +782,7 @@ assembleTxWith extraIns pp st =
                 & referenceInputsTxBodyL .~ refIns
                 & collateralInputsTxBodyL .~ collIns
                 & mintTxBodyL .~ mintMA
+                & withdrawalsTxBodyL .~ withdrawals
                 & reqSignerHashesTxBodyL
                     .~ tsSigners st
                 & vldtTxBodyL
@@ -685,6 +790,8 @@ assembleTxWith extraIns pp st =
                         { invalidBefore = tsValidFrom st
                         , invalidHereafter = tsValidTo st
                         }
+                & auxDataHashTxBodyL
+                    .~ fmap hashTxAuxData auxData
                 & scriptIntegrityHashTxBodyL
                     .~ integrity
      in
@@ -693,6 +800,8 @@ assembleTxWith extraIns pp st =
                 .~ tsScripts st
             & witsTxL . rdmrsTxWitsL
                 .~ allRdmrs
+            & auxDataTxL
+                .~ auxData
 
 -- ----------------------------------------------------
 -- Assembly
@@ -1133,6 +1242,20 @@ spendingIndex needle inputs =
         | x == needle = n
         | otherwise = go (n + 1) xs
 
+withdrawalIndex ::
+    RewardAccount ->
+    Withdrawals ->
+    Word32
+withdrawalIndex needle (Withdrawals withdrawals) =
+    go 0 (Map.keys withdrawals)
+  where
+    go _ [] =
+        error
+            "withdrawalIndex: RewardAccount not in map"
+    go n (x : xs)
+        | x == needle = n
+        | otherwise = go (n + 1) xs
+
 -- | Collect spending redeemers from steps.
 collectSpendRedeemers ::
     Set TxIn ->
@@ -1181,6 +1304,33 @@ collectMintRedeemers mints =
         | (pid, d) <- Map.toList seenData
         ]
 
+collectWithdrawalEntries ::
+    [(RewardAccount, Coin, WithdrawWitness)] ->
+    Map RewardAccount (Coin, Maybe (Data ConwayEra))
+collectWithdrawalEntries =
+    Map.fromList . fmap toEntry
+  where
+    toEntry (rewardAccount, amount, witness) =
+        ( rewardAccount
+        , (amount, withdrawWitnessData witness)
+        )
+
+collectWithdrawalRedeemers ::
+    Withdrawals ->
+    Map RewardAccount (Coin, Maybe (Data ConwayEra)) ->
+    [ ( ConwayPlutusPurpose AsIx ConwayEra
+      , (Data ConwayEra, ExUnits)
+      )
+    ]
+collectWithdrawalRedeemers withdrawals entries =
+    [ ( ConwayRewarding
+            (AsIx (withdrawalIndex rewardAccount withdrawals))
+      , (redeemer, ExUnits 0 0)
+      )
+    | (rewardAccount, (_, Just redeemer)) <-
+        Map.toList entries
+    ]
+
 -- | Accumulate 'MultiAsset' from mint entries.
 addMint ::
     MultiAsset ->
@@ -1193,6 +1343,13 @@ addMint acc (pid, name, qty, _) =
                 pid
                 (Map.singleton name qty)
             )
+
+withdrawWitnessData ::
+    WithdrawWitness ->
+    Maybe (Data ConwayEra)
+withdrawWitnessData PubKeyWithdraw = Nothing
+withdrawWitnessData (ScriptWithdraw redeemer) =
+    Just (toLedgerData redeemer)
 
 -- | Convert a 'ToData' value to ledger 'Data'.
 toLedgerData :: (ToData a) => a -> Data ConwayEra
