@@ -1,7 +1,7 @@
 # WIP: Transaction Builder DSL
 
 ## Status
-Slices 1-6 done, unit tests green. Branch scope complete.
+Slices 1-7 done. Issue #40 adds withdrawals and metadata.
 
 ## Links
 - PR: lambdasistemi/cardano-node-clients#38
@@ -52,8 +52,15 @@ Slices 1-6 done, unit tests green. Branch scope complete.
 - `assembleTx` now fills `referenceInputsTxBodyL` and `vldtTxBodyL`
 - Retract-shaped assembly coverage in `TxBuildSpec`
 
+### Slice 7: Withdrawals + metadata
+- `Withdraw :: RewardAccount -> Coin -> WithdrawWitness -> TxInstr q e ()`
+- `SetMetadata :: Word64 -> Metadatum -> TxInstr q e ()`
+- `withdraw`, `withdrawScript`, `setMetadata`
+- `assembleTx` now fills `withdrawalsTxBodyL`, `auxDataTxL`, and `auxDataHashTxBodyL`
+- Rewarding redeemer coverage in `TxBuildSpec`
+
 ## Tests
-24 `TxBuild` examples passing
+28 `TxBuild` examples targeted
 
 ## Key files
 - `lib/Cardano/Node/Client/TxBuild.hs`
