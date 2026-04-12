@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 
 {- |
 Module      : Cardano.Node.Client.TxBuildSpec
@@ -412,10 +413,9 @@ ctxSpec =
     describe "ctx" $ do
         it "flows interpreted values through subsequent binds" $ do
             let interpret =
-                    Interpret $ \q ->
-                        case q of
-                            GetValue -> 7
-                            RecordFee _ -> ()
+                    Interpret $ \case
+                        GetValue -> 7
+                        RecordFee _ -> ()
                 expected :: TxOut ConwayEra
                 expected =
                     mkBasicTxOut
@@ -722,10 +722,9 @@ buildSpec =
                         (inject (Coin 10_000_000))
                     )
                 interpret =
-                    InterpretIO $ \q ->
-                        case q of
-                            GetValue -> pure 7
-                            RecordFee _ -> pure ()
+                    InterpretIO $ \case
+                        GetValue -> pure 7
+                        RecordFee _ -> pure ()
                 mockEval _ = pure Map.empty
             result <-
                 build
@@ -1148,11 +1147,10 @@ noCtxInterpretIO =
 recordingInterpret ::
     IORef [Coin] -> InterpretIO TestQ
 recordingInterpret feeHistoryRef =
-    InterpretIO $ \q ->
-        case q of
-            GetValue -> pure 7
-            RecordFee fee ->
-                modifyIORef' feeHistoryRef (fee :)
+    InterpretIO $ \case
+        GetValue -> pure 7
+        RecordFee fee ->
+            modifyIORef' feeHistoryRef (fee :)
 
 readRecordedFees :: IORef [Coin] -> IO [Coin]
 readRecordedFees feeHistoryRef =
