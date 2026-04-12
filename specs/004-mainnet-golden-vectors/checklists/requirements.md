@@ -14,4 +14,4 @@
 ## Notes
 
 - The issue originally phased reward-withdrawal vectors behind `#40`, but `#40` is already closed in the current repository state.
-- The implemented test suite passes 11 vectors and keeps `17a8e607...` as an explicit pending case until a decoder-compatible fixture or alternate decode path is available.
+- The original `17a8e607...` Indigo stability vector was removed after verifying it is pre-Conway (`2024-04-22 13:12:14 UTC`).

@@ -91,38 +91,29 @@ spec =
     describe "TxBuild mainnet golden vectors" $
         for_ goldenCases $ \golden ->
             it (goldenName golden) $ do
-                case goldenPendingReason golden of
-                    Just reason ->
-                        pendingWith reason
-                    Nothing -> do
-                        expected <- loadGoldenTx golden
-                        let actual =
-                                draft emptyPParams (txBuildFromTx expected)
-                        assertStructurallyEquivalent expected actual
+                expected <- loadGoldenTx golden
+                let actual =
+                        draft emptyPParams (txBuildFromTx expected)
+                assertStructurallyEquivalent expected actual
 
 data GoldenCase = GoldenCase
     { goldenName :: String
     , goldenHash :: String
-    , goldenPendingReason :: Maybe String
     }
 
 goldenCases :: [GoldenCase]
 goldenCases =
-    [ GoldenCase "Minswap V2 batch" "602a2baba60d7d753dfe513d901bb11fc65c30f1bf99c82a6e188721c4225108" Nothing
-    , GoldenCase "Minswap V2 order" "789f9a1393e3c9eacd19582ebb1b02b777696c8ddcedda2d8752cb5723c42ef6" Nothing
-    , GoldenCase "SundaeSwap V3" "3dc7947885b66b94b862c5eaa3fb3078b164217bfb58962839affc3c3ef6ab0b" Nothing
-    , GoldenCase "SundaeSwap scoop" "5029390a4e5ebc024f6a68628bf1bf8d95e278deeedec620c1dabfbadf85e2f5" Nothing
-    , GoldenCase "Lenfi borrow" "4d219f276f79c39535047649ed2bfe8bb87f749150938c0fdfe654c786033854" Nothing
-    , GoldenCase "Liqwid supply" "bdbfa3f2d1ec9c3fb0351fa6da6672f410ed50fd4f88f0b0348e4eb2b39a8ef2" Nothing
-    , GoldenCase "JPG Store NFT" "919e1b199547f9fb00402ae46c007ea42c1fc382fb090af90357f766e287fa6b" Nothing
-    , GoldenCase "STEAK mine" "0fe086ab41e4b14a070d491a08bcddcc011afa1e48d6c0c6430bf82d7968028e" Nothing
-    , GoldenCase
-        "Indigo stability"
-        "17a8e6072000081991c1aa1fd69be9cca44acf0ab2fae984de7cc020f3fc7fe5"
-        (Just "Blockfrost's CBOR fixture is rejected by cardano-ledger decoders v9-v11 with `Empty list found, expected non-empty`; this vector needs a decoder-compatible replacement or a different decode path.")
-    , GoldenCase "WingRiders swap" "23f8ade58f538e09d9741cd6d7d88fd394ef29fd17880f0539b685018d3d5f29" Nothing
-    , GoldenCase "Indigo iUSD" "b4b28b84f67a21a627d9ad3a64a56aa13e8e31250715d0aa3563a84d94ab4a36" Nothing
-    , GoldenCase "Recent batch" "b28a2813677f60223ef195b2d7f3344b2f98f627b7e0e7957d484fdeb3fed409" Nothing
+    [ GoldenCase "Minswap V2 batch" "602a2baba60d7d753dfe513d901bb11fc65c30f1bf99c82a6e188721c4225108"
+    , GoldenCase "Minswap V2 order" "789f9a1393e3c9eacd19582ebb1b02b777696c8ddcedda2d8752cb5723c42ef6"
+    , GoldenCase "SundaeSwap V3" "3dc7947885b66b94b862c5eaa3fb3078b164217bfb58962839affc3c3ef6ab0b"
+    , GoldenCase "SundaeSwap scoop" "5029390a4e5ebc024f6a68628bf1bf8d95e278deeedec620c1dabfbadf85e2f5"
+    , GoldenCase "Lenfi borrow" "4d219f276f79c39535047649ed2bfe8bb87f749150938c0fdfe654c786033854"
+    , GoldenCase "Liqwid supply" "bdbfa3f2d1ec9c3fb0351fa6da6672f410ed50fd4f88f0b0348e4eb2b39a8ef2"
+    , GoldenCase "JPG Store NFT" "919e1b199547f9fb00402ae46c007ea42c1fc382fb090af90357f766e287fa6b"
+    , GoldenCase "STEAK mine" "0fe086ab41e4b14a070d491a08bcddcc011afa1e48d6c0c6430bf82d7968028e"
+    , GoldenCase "WingRiders swap" "23f8ade58f538e09d9741cd6d7d88fd394ef29fd17880f0539b685018d3d5f29"
+    , GoldenCase "Indigo iUSD" "b4b28b84f67a21a627d9ad3a64a56aa13e8e31250715d0aa3563a84d94ab4a36"
+    , GoldenCase "Recent batch" "b28a2813677f60223ef195b2d7f3344b2f98f627b7e0e7957d484fdeb3fed409"
     ]
 
 loadGoldenTx :: GoldenCase -> IO (Tx ConwayEra)
