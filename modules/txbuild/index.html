@@ -1,0 +1,1010 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://paolino.github.io/cardano-node-clients/modules/txbuild/">
+      
+      
+        <link rel="prev" href="../balance/">
+      
+      
+        <link rel="next" href="../n2c/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+    
+    
+      
+        <title>TxBuild - cardano-node-clients</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#txbuild" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="cardano-node-clients" class="md-header__button md-logo" aria-label="cardano-node-clients" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            cardano-node-clients
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              TxBuild
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lambdasistemi/cardano-node-clients" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="cardano-node-clients" class="md-nav__button md-logo" aria-label="cardano-node-clients" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    cardano-node-clients
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lambdasistemi/cardano-node-clients" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modules
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Modules
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provider/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../submitter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Submitter
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../balance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Balance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TxBuild
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TxBuild
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-exists-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What exists today
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#main-entry-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Main entry points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smart-constructors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smart constructors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Example">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pure-draft" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pure draft
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#context-aware-draft" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context-aware draft
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#build-with-peek-and-valid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build with Peek and Valid
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#effectful-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Effectful build
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reference-input-and-validity-window" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference input and validity window
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withdrawal-and-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Withdrawal and metadata
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing status
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../n2c/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    N2C
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../provider/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Modules
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="txbuild">TxBuild<a class="headerlink" href="#txbuild" title="Permanent link">&para;</a></h1>
+<p>::: {.module}
+<code>Cardano.Node.Client.TxBuild</code>
+:::</p>
+<p>Operational transaction builder DSL for Conway-era transactions.</p>
+<h2 id="what-exists-today">What exists today<a class="headerlink" href="#what-exists-today" title="Permanent link">&para;</a></h2>
+<p>The current implementation covers the first six slices of the DSL:</p>
+<ul>
+<li>spend, script spend, collateral, output, mint, signer, and script
+  attachment instructions</li>
+<li><code>Peek</code> for fixpoint-dependent values such as spend indices, output
+  indices, and fee-driven outputs</li>
+<li><code>Ctx</code> for pluggable domain queries</li>
+<li><code>Valid</code> for post-convergence transaction checks</li>
+<li>reference inputs and validity interval instructions</li>
+<li>withdrawals with optional rewarding redeemers</li>
+<li>metadata attachment via transaction auxiliary data</li>
+<li>pure interpreters with <code>draft</code> and <code>draftWith</code></li>
+<li>effectful building with <code>build</code>, including script evaluation,
+  <code>ExUnits</code> patching, eval retry, oscillation handling, bisection,
+  and balancing</li>
+</ul>
+<h2 id="core-types">Core types<a class="headerlink" href="#core-types" title="Permanent link">&para;</a></h2>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kr">type</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kt">Program</span><span class="w"> </span><span class="p">(</span><span class="kt">TxInstr</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kr">data</span><span class="w"> </span><span class="kt">Convergence</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="ow">=</span><span class="w"> </span><span class="kt">Iterate</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="kt">Ok</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="kr">newtype</span><span class="w"> </span><span class="kt">Interpret</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kt">Interpret</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="n">runInterpret</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="n">forall</span><span class="w"> </span><span class="n">x</span><span class="o">.</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="n">x</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="kr">newtype</span><span class="w"> </span><span class="kt">InterpretIO</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kt">InterpretIO</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="n">runInterpretIO</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="n">forall</span><span class="w"> </span><span class="n">x</span><span class="o">.</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">IO</span><span class="w"> </span><span class="n">x</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="p">}</span>
+</span></code></pre></div>
+<p><code>q</code> is the query GADT used by <code>Ctx</code>. <code>e</code> is reserved for custom
+validation errors carried by <code>Valid</code>.</p>
+<h2 id="main-entry-points">Main entry points<a class="headerlink" href="#main-entry-points" title="Permanent link">&para;</a></h2>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nf">draft</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="ow">::</span><span class="w"> </span><span class="kt">PParams</span><span class="w"> </span><span class="kt">ConwayEra</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nf">draftWith</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="ow">::</span><span class="w"> </span><span class="kt">PParams</span><span class="w"> </span><span class="kt">ConwayEra</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Interpret</span><span class="w"> </span><span class="n">q</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="nf">build</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="ow">::</span><span class="w"> </span><span class="kt">PParams</span><span class="w"> </span><span class="kt">ConwayEra</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">InterpretIO</span><span class="w"> </span><span class="n">q</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="p">(</span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">IO</span><span class="w"> </span><span class="p">(</span><span class="kt">Map</span><span class="w"> </span><span class="p">(</span><span class="kt">ConwayPlutusPurpose</span><span class="w"> </span><span class="kt">AsIx</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">Either</span><span class="w"> </span><span class="kt">String</span><span class="w"> </span><span class="kt">ExUnits</span><span class="p">)))</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="p">[(</span><span class="kt">TxIn</span><span class="p">,</span><span class="w"> </span><span class="kt">TxOut</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="p">)]</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Addr</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">IO</span><span class="w"> </span><span class="p">(</span><span class="kt">Either</span><span class="w"> </span><span class="p">(</span><span class="kt">BuildError</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="p">))</span>
+</span></code></pre></div>
+<p>Use <code>draft</code> when the program has no <code>Ctx</code>. Use <code>draftWith</code> when it
+does. Use <code>build</code> when the transaction needs full script evaluation and
+balancing.</p>
+<h2 id="smart-constructors">Smart constructors<a class="headerlink" href="#smart-constructors" title="Permanent link">&para;</a></h2>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nf">spend</span><span class="w">            </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxIn</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="kt">Word32</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nf">spendScript</span><span class="w">      </span><span class="ow">::</span><span class="w"> </span><span class="kt">ToData</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="ow">=&gt;</span><span class="w"> </span><span class="kt">TxIn</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="kt">Word32</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nf">collateral</span><span class="w">       </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxIn</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nf">payTo</span><span class="w">            </span><span class="ow">::</span><span class="w"> </span><span class="kt">Addr</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">MaryValue</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="kt">Word32</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nf">payTo&#39;</span><span class="w">           </span><span class="ow">::</span><span class="w"> </span><span class="kt">ToData</span><span class="w"> </span><span class="n">d</span><span class="w"> </span><span class="ow">=&gt;</span><span class="w"> </span><span class="kt">Addr</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">MaryValue</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="n">d</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="kt">Word32</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nf">output</span><span class="w">           </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxOut</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="kt">Word32</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nf">mint</span><span class="w">             </span><span class="ow">::</span><span class="w"> </span><span class="kt">ToData</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="ow">=&gt;</span><span class="w"> </span><span class="kt">PolicyID</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Map</span><span class="w"> </span><span class="kt">AssetName</span><span class="w"> </span><span class="kt">Integer</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nf">withdraw</span><span class="w">         </span><span class="ow">::</span><span class="w"> </span><span class="kt">RewardAccount</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Coin</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="nf">withdrawScript</span><span class="w">   </span><span class="ow">::</span><span class="w"> </span><span class="kt">ToData</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="ow">=&gt;</span><span class="w"> </span><span class="kt">RewardAccount</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Coin</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nf">setMetadata</span><span class="w">      </span><span class="ow">::</span><span class="w"> </span><span class="kt">Word64</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Metadatum</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="nf">requireSignature</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">KeyHash</span><span class="w"> </span><span class="kt">&#39;Witness</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="nf">attachScript</span><span class="w">     </span><span class="ow">::</span><span class="w"> </span><span class="kt">Script</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="nf">reference</span><span class="w">        </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxIn</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="nf">validFrom</span><span class="w">        </span><span class="ow">::</span><span class="w"> </span><span class="kt">SlotNo</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="nf">validTo</span><span class="w">          </span><span class="ow">::</span><span class="w"> </span><span class="kt">SlotNo</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="nf">peek</span><span class="w">             </span><span class="ow">::</span><span class="w"> </span><span class="p">(</span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Convergence</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="nf">ctx</span><span class="w">              </span><span class="ow">::</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="n">a</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="nf">valid</span><span class="w">            </span><span class="ow">::</span><span class="w"> </span><span class="p">(</span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Check</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="nf">checkMinUtxo</span><span class="w">     </span><span class="ow">::</span><span class="w"> </span><span class="kt">PParams</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">Word32</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="nf">checkTxSize</span><span class="w">      </span><span class="ow">::</span><span class="w"> </span><span class="kt">PParams</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span></code></pre></div>
+<p>Position-dependent combinators such as <code>spend</code> and <code>payTo</code> use <code>Peek</code>
+internally so the caller gets the final index after assembly.</p>
+<h2 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h2>
+<h3 id="pure-draft">Pure draft<a class="headerlink" href="#pure-draft" title="Permanent link">&para;</a></h3>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="cm">{-# LANGUAGE OverloadedStrings #-}</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="kr">import</span><span class="w"> </span><span class="nn">Cardano.Ledger.BaseTypes</span><span class="w"> </span><span class="p">(</span><span class="kt">Inject</span><span class="w"> </span><span class="p">(</span><span class="nf">inject</span><span class="p">))</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="kr">import</span><span class="w"> </span><span class="nn">Cardano.Ledger.Coin</span><span class="w"> </span><span class="p">(</span><span class="kt">Coin</span><span class="w"> </span><span class="p">(</span><span class="o">..</span><span class="p">))</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nf">simpleTransfer</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="nf">simpleTransfer</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kr">do</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="kr">_</span><span class="w"> </span><span class="ow">&lt;-</span><span class="w"> </span><span class="n">spend</span><span class="w"> </span><span class="n">walletInput</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="n">collateral</span><span class="w"> </span><span class="n">collateralInput</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="kr">_</span><span class="w"> </span><span class="ow">&lt;-</span><span class="w"> </span><span class="n">payTo</span><span class="w"> </span><span class="n">recipientAddr</span><span class="w"> </span><span class="p">(</span><span class="n">inject</span><span class="w"> </span><span class="p">(</span><span class="kt">Coin</span><span class="w"> </span><span class="mi">7_000_000</span><span class="p">))</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="n">pure</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="nf">tx</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="nf">tx</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="n">draft</span><span class="w"> </span><span class="n">emptyPParams</span><span class="w"> </span><span class="n">simpleTransfer</span>
+</span></code></pre></div>
+<p>This is the smallest useful shape: spend a wallet input, add
+collateral, and assemble a pure draft transaction.</p>
+<h3 id="context-aware-draft">Context-aware draft<a class="headerlink" href="#context-aware-draft" title="Permanent link">&para;</a></h3>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="cm">{-# LANGUAGE GADTs #-}</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="kr">data</span><span class="w"> </span><span class="kt">TestQ</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="kr">where</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="kt">GetLovelace</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">TestQ</span><span class="w"> </span><span class="kt">Integer</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nf">example</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="kt">TestQ</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nf">example</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kr">do</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="n">amount</span><span class="w"> </span><span class="ow">&lt;-</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="kt">GetLovelace</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="kr">_</span><span class="w"> </span><span class="ow">&lt;-</span><span class="w"> </span><span class="n">payTo</span><span class="w"> </span><span class="n">someAddr</span><span class="w"> </span><span class="p">(</span><span class="n">inject</span><span class="w"> </span><span class="p">(</span><span class="kt">Coin</span><span class="w"> </span><span class="n">amount</span><span class="p">))</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="n">pure</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="nf">tx</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">Tx</span><span class="w"> </span><span class="kt">ConwayEra</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="nf">tx</span><span class="w"> </span><span class="ow">=</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="n">draftWith</span><span class="w"> </span><span class="n">emptyPParams</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">        </span><span class="p">(</span><span class="kt">Interpret</span><span class="w"> </span><span class="p">(</span><span class="nf">\</span><span class="kt">GetLovelace</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="mi">7_000_000</span><span class="p">))</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">        </span><span class="n">example</span>
+</span></code></pre></div>
+<p>Use <code>draftWith</code> when the builder depends on domain queries but still
+needs a pure interpreter for testing.</p>
+<h3 id="build-with-peek-and-valid">Build with <code>Peek</code> and <code>Valid</code><a class="headerlink" href="#build-with-peek-and-valid" title="Permanent link">&para;</a></h3>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="cm">{-# LANGUAGE GADTs #-}</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="kr">data</span><span class="w"> </span><span class="kt">WalletQ</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="kr">where</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="kt">GetProtocolParams</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">WalletQ</span><span class="w"> </span><span class="p">(</span><span class="kt">PParams</span><span class="w"> </span><span class="kt">ConwayEra</span><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nf">checkedTx</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="kt">WalletQ</span><span class="w"> </span><span class="kt">String</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="nf">checkedTx</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kr">do</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="n">pp</span><span class="w"> </span><span class="ow">&lt;-</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="kt">GetProtocolParams</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="n">outIx</span><span class="w"> </span><span class="ow">&lt;-</span><span class="w"> </span><span class="n">payTo</span><span class="w"> </span><span class="n">recipientAddr</span><span class="w"> </span><span class="p">(</span><span class="n">inject</span><span class="w"> </span><span class="p">(</span><span class="kt">Coin</span><span class="w"> </span><span class="mi">2_000_000</span><span class="p">))</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="n">checkMinUtxo</span><span class="w"> </span><span class="n">pp</span><span class="w"> </span><span class="n">outIx</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="n">checkTxSize</span><span class="w"> </span><span class="n">pp</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="n">fee</span><span class="w"> </span><span class="ow">&lt;-</span><span class="w"> </span><span class="n">peek</span><span class="w"> </span><span class="o">$</span><span class="w"> </span><span class="nf">\</span><span class="n">tx</span><span class="w"> </span><span class="ow">-&gt;</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">        </span><span class="kt">Ok</span><span class="w"> </span><span class="p">(</span><span class="n">tx</span><span class="w"> </span><span class="o">^.</span><span class="w"> </span><span class="n">bodyTxL</span><span class="w"> </span><span class="o">.</span><span class="w"> </span><span class="n">feeTxBodyL</span><span class="p">)</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">    </span><span class="n">valid</span><span class="w"> </span><span class="o">$</span><span class="w"> </span><span class="nf">\</span><span class="n">_tx</span><span class="w"> </span><span class="ow">-&gt;</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">        </span><span class="kr">if</span><span class="w"> </span><span class="n">fee</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="kt">Coin</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">            </span><span class="kr">then</span><span class="w"> </span><span class="kt">Pass</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">            </span><span class="kr">else</span><span class="w"> </span><span class="kt">CustomFail</span><span class="w"> </span><span class="s">&quot;negative fee&quot;</span>
+</span></code></pre></div>
+<p><code>Peek</code> is for values that only exist after assembly or balancing, such
+as spending indices, output indices, and the final fee. <code>Valid</code> runs
+after convergence, so checks see the final balanced transaction.</p>
+<h3 id="effectful-build">Effectful build<a class="headerlink" href="#effectful-build" title="Permanent link">&para;</a></h3>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nf">txOrErr</span><span class="w"> </span><span class="ow">&lt;-</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="n">build</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">        </span><span class="n">pp</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">        </span><span class="p">(</span><span class="kt">InterpretIO</span><span class="w"> </span><span class="n">runWalletQuery</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">        </span><span class="n">evaluateTx</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">        </span><span class="n">inputUtxos</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">        </span><span class="n">changeAddr</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">        </span><span class="n">checkedTx</span>
+</span></code></pre></div>
+<p>The same program can move from pure tests to production by swapping the
+interpreter and calling <code>build</code> instead of <code>draftWith</code>.</p>
+<h3 id="reference-input-and-validity-window">Reference input and validity window<a class="headerlink" href="#reference-input-and-validity-window" title="Permanent link">&para;</a></h3>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nf">windowedTx</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nf">windowedTx</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kr">do</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="n">reference</span><span class="w"> </span><span class="n">oracleRef</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="n">validFrom</span><span class="w"> </span><span class="n">lowerBound</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="n">validTo</span><span class="w"> </span><span class="n">upperBound</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="n">requireSignature</span><span class="w"> </span><span class="n">ownerWkh</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="n">pure</span><span class="w"> </span><span class="nb">()</span>
+</span></code></pre></div>
+<p>This covers the common "read but do not spend" pattern for reference
+inputs together with explicit validity bounds and signer requirements.</p>
+<h3 id="withdrawal-and-metadata">Withdrawal and metadata<a class="headerlink" href="#withdrawal-and-metadata" title="Permanent link">&para;</a></h3>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nf">annotatedWithdrawal</span><span class="w"> </span><span class="ow">::</span><span class="w"> </span><span class="kt">TxBuild</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="nb">()</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nf">annotatedWithdrawal</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="kr">do</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="n">withdraw</span><span class="w"> </span><span class="n">rewardsAccount</span><span class="w"> </span><span class="p">(</span><span class="kt">Coin</span><span class="w"> </span><span class="mi">1_000_000</span><span class="p">)</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="n">setMetadata</span><span class="w"> </span><span class="mi">674</span><span class="w"> </span><span class="p">(</span><span class="kt">S</span><span class="w"> </span><span class="s">&quot;batched withdrawal&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<p><code>withdraw</code> fills <code>withdrawalsTxBodyL</code>. <code>withdrawScript</code> also adds a
+<code>ConwayRewarding</code> redeemer for the reward account. <code>setMetadata</code>
+attaches auxiliary data and keeps <code>auxDataHashTxBodyL</code> in sync.</p>
+<h2 id="testing-status">Testing status<a class="headerlink" href="#testing-status" title="Permanent link">&para;</a></h2>
+<p><code>TxBuildSpec</code> currently covers:</p>
+<ul>
+<li>spend and pay-to assembly</li>
+<li>collateral handling</li>
+<li>spend index ordering</li>
+<li>script-spend redeemers</li>
+<li>mint and burn redeemers</li>
+<li><code>Peek</code> through <code>build</code></li>
+<li><code>Ctx</code> through both <code>draftWith</code> and <code>build</code></li>
+<li><code>Valid</code> custom failures</li>
+<li><code>checkMinUtxo</code> failures</li>
+<li><code>checkTxSize</code> failures</li>
+<li>all-pass validation</li>
+<li>reference-input and validity-interval assembly</li>
+<li>pub-key and script withdrawals</li>
+<li>metadata aux-data assembly and hashing</li>
+<li>eval retry after script-evaluation failure</li>
+<li>fee oscillation with output re-interpretation</li>
+<li><code>bumpFee</code> in isolation</li>
+</ul>
+<p><code>TxBuild</code> E2E coverage currently covers:</p>
+<ul>
+<li>submitted devnet transactions built with <code>build</code></li>
+<li><code>spend</code>, <code>payTo</code>, and <code>payTo'</code></li>
+<li><code>Ctx</code>, <code>Peek</code>, and <code>Valid</code></li>
+<li>required signers and explicit validity intervals</li>
+</ul>
+<p>Script-specific builder features such as <code>spendScript</code>, <code>mint</code>,
+<code>attachScript</code>, and the real reference/collateral script paths are
+still primarily covered by unit tests and downstream integration tests.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.indexes", "toc.integrate", "content.code.copy", "navigation.path"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+    
+  </body>
+</html>
