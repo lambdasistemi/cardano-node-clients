@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
@@ -8,14 +9,17 @@ module Cardano.Node.Client.TxBuildGoldenSpec (spec) where
 
 import Control.Monad (void)
 import Data.Foldable (for_, toList)
+import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Word (Word32, Word64)
-import Lens.Micro ((^.))
+import Lens.Micro ((&), (.~), (^.))
 import Test.Hspec
 
+import Cardano.Crypto.Hash (hashFromStringAsHex)
 import Cardano.Ledger.Address (
+    Addr,
     RewardAccount,
     Withdrawals (..),
  )
@@ -24,8 +28,18 @@ import Cardano.Ledger.Allegra.Scripts (
  )
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
-import Cardano.Ledger.Api.PParams (emptyPParams)
-import Cardano.Ledger.Api.Scripts.Data (Data)
+import Cardano.Ledger.Api.PParams (
+    CoinPerByte (..),
+    emptyPParams,
+    ppCoinsPerUTxOByteL,
+    ppMaxTxSizeL,
+    ppMinFeeAL,
+    ppMinFeeBL,
+ )
+import Cardano.Ledger.Api.Scripts.Data (
+    Data,
+    Datum (NoDatum),
+ )
 import Cardano.Ledger.Api.Tx (
     Tx,
     auxDataTxL,
@@ -35,6 +49,7 @@ import Cardano.Ledger.Api.Tx (
  )
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
+    feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
@@ -43,12 +58,19 @@ import Cardano.Ledger.Api.Tx.Body (
     vldtTxBodyL,
     withdrawalsTxBodyL,
  )
+import Cardano.Ledger.Api.Tx.Out (
+    TxOut,
+    datumTxOutL,
+    mkBasicTxOut,
+ )
 import Cardano.Ledger.Api.Tx.Wits (
     rdmrsTxWitsL,
     scriptTxWitsL,
  )
 import Cardano.Ledger.BaseTypes (
+    Inject (..),
     StrictMaybe (SJust, SNothing),
+    TxIx (..),
  )
 import Cardano.Ledger.Binary (
     Annotator,
@@ -57,16 +79,29 @@ import Cardano.Ledger.Binary (
     decodeFullAnnotatorFromHexText,
     natVersion,
  )
+import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
-import Cardano.Ledger.Core (metadataTxAuxDataL)
+import Cardano.Ledger.Core (
+    PParams,
+    addrTxOutL,
+    metadataTxAuxDataL,
+ )
+import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
 import Cardano.Ledger.Mary.Value (
     MultiAsset (..),
  )
 import Cardano.Ledger.Metadata (Metadatum)
+import Cardano.Ledger.Plutus.ExUnits (ExUnits)
+import Cardano.Ledger.TxIn (
+    TxId (..),
+    TxIn (..),
+ )
 import Cardano.Node.Client.TxBuild (
+    InterpretIO (..),
     TxBuild,
     attachScript,
+    build,
     collateral,
     draft,
     mint,
@@ -85,21 +120,27 @@ import Cardano.Slotting.Slot (SlotNo)
 import PlutusCore.Data qualified as PLC
 import PlutusTx.Builtins.Internal (BuiltinData (..))
 import PlutusTx.IsData.Class (ToData (..))
+import Text.Read (readMaybe)
 
 spec :: Spec
 spec =
     describe "TxBuild mainnet golden vectors" $
         for_ goldenCases $ \golden ->
-            it (goldenName golden) $ do
+            it (goldenName golden <> " draft/build") $ do
                 expected <- loadGoldenTx golden
+                inputCoins <- loadGoldenInputCoins golden
                 let actual =
-                        draft emptyPParams (txBuildFromTx expected)
+                        draft goldenBuildPParams (txBuildFromTx expected)
                 assertStructurallyEquivalent expected actual
+                built <- buildGoldenTx expected inputCoins
+                assertBalancedStructurallyEquivalent expected built
 
 data GoldenCase = GoldenCase
     { goldenName :: String
     , goldenHash :: String
     }
+
+data NoCtx a
 
 goldenCases :: [GoldenCase]
 goldenCases =
@@ -136,6 +177,10 @@ loadGoldenTx golden = do
 fixturePath :: String -> FilePath
 fixturePath hash =
     "test/fixtures/mainnet-txbuild/" <> hash <> ".cbor.hex"
+
+inputFixturePath :: String -> FilePath
+inputFixturePath hash =
+    "test/fixtures/mainnet-txbuild/inputs/" <> hash <> ".inputs"
 
 txBuildFromTx :: Tx ConwayEra -> TxBuild q e ()
 txBuildFromTx tx = do
@@ -215,6 +260,42 @@ assertStructurallyEquivalent expected actual = do
         `shouldBe` (expected ^. witsTxL . scriptTxWitsL)
     normalizedRedeemers actual `shouldBe` normalizedRedeemers expected
 
+assertBalancedStructurallyEquivalent ::
+    Tx ConwayEra -> Tx ConwayEra -> Expectation
+assertBalancedStructurallyEquivalent expected actual = do
+    let expectedOutputs = toList (expected ^. bodyTxL . outputsTxBodyL)
+        actualOutputs = toList (actual ^. bodyTxL . outputsTxBodyL)
+        changeAddr = selectChangeAddr expectedOutputs
+    actual ^. bodyTxL . inputsTxBodyL
+        `shouldBe` (expected ^. bodyTxL . inputsTxBodyL)
+    actual ^. bodyTxL . collateralInputsTxBodyL
+        `shouldBe` (expected ^. bodyTxL . collateralInputsTxBodyL)
+    actual ^. bodyTxL . referenceInputsTxBodyL
+        `shouldBe` (expected ^. bodyTxL . referenceInputsTxBodyL)
+    take (length expectedOutputs) actualOutputs
+        `shouldBe` expectedOutputs
+    length actualOutputs
+        `shouldBe` (length expectedOutputs + 1)
+    last actualOutputs ^. addrTxOutL
+        `shouldBe` changeAddr
+    last actualOutputs ^. datumTxOutL
+        `shouldBe` NoDatum
+    actual ^. bodyTxL . feeTxBodyL
+        `shouldSatisfy` (> Coin 0)
+    actual ^. bodyTxL . mintTxBodyL
+        `shouldBe` (expected ^. bodyTxL . mintTxBodyL)
+    actual ^. bodyTxL . withdrawalsTxBodyL
+        `shouldBe` (expected ^. bodyTxL . withdrawalsTxBodyL)
+    actual ^. bodyTxL . reqSignerHashesTxBodyL
+        `shouldBe` (expected ^. bodyTxL . reqSignerHashesTxBodyL)
+    actual ^. bodyTxL . vldtTxBodyL
+        `shouldBe` (expected ^. bodyTxL . vldtTxBodyL)
+    txMetadata actual `shouldBe` txMetadata expected
+    actual ^. witsTxL . scriptTxWitsL
+        `shouldBe` (expected ^. witsTxL . scriptTxWitsL)
+    normalizedRedeemersWithExUnits actual
+        `shouldBe` normalizedRedeemersWithExUnits expected
+
 txMetadata :: Tx ConwayEra -> Map.Map Word64 Metadatum
 txMetadata tx =
     case tx ^. auxDataTxL of
@@ -226,6 +307,16 @@ normalizedRedeemers ::
     Map.Map (ConwayPlutusPurpose AsIx ConwayEra) PLC.Data
 normalizedRedeemers tx =
     Map.map (getPlutusData . fst) redeemers
+  where
+    Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
+
+normalizedRedeemersWithExUnits ::
+    Tx ConwayEra ->
+    Map.Map
+        (ConwayPlutusPurpose AsIx ConwayEra)
+        (PLC.Data, ExUnits)
+normalizedRedeemersWithExUnits tx =
+    Map.map (\(redeemer, exUnits) -> (getPlutusData redeemer, exUnits)) redeemers
   where
     Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
 
@@ -283,3 +374,94 @@ newtype RawPlutusData = RawPlutusData PLC.Data
 instance ToData RawPlutusData where
     toBuiltinData (RawPlutusData datum) =
         BuiltinData datum
+
+goldenBuildPParams :: PParams ConwayEra
+goldenBuildPParams =
+    emptyPParams
+        & ppMaxTxSizeL .~ 16_384
+        & ppMinFeeAL .~ Coin 44
+        & ppMinFeeBL .~ Coin 155_381
+        & ppCoinsPerUTxOByteL .~ CoinPerByte (Coin 4_310)
+
+loadGoldenInputCoins :: GoldenCase -> IO [(TxIn, Coin)]
+loadGoldenInputCoins golden = do
+    contents <- readFile (inputFixturePath (goldenHash golden))
+    traverse parseInputCoinLine (lines contents)
+  where
+    parseInputCoinLine line =
+        case words line of
+            [ref, lovelaceText] ->
+                case break (== '#') ref of
+                    (txHash, '#' : indexText) ->
+                        case (mkTxInFromText txHash indexText, readMaybe lovelaceText) of
+                            (Just txIn, Just lovelace) ->
+                                pure (txIn, Coin lovelace)
+                            _ ->
+                                fixtureFailure line
+                    _ ->
+                        fixtureFailure line
+            _ ->
+                fixtureFailure line
+
+    fixtureFailure line =
+        expectationFailure
+            ("failed to parse input fixture line for " <> goldenHash golden <> ": " <> line)
+            >> fail "input fixture parse failed"
+
+mkTxInFromText :: String -> String -> Maybe TxIn
+mkTxInFromText txHashText indexText = do
+    h <- hashFromStringAsHex txHashText
+    ix <- readMaybe indexText
+    pure $
+        TxIn
+            (TxId (unsafeMakeSafeHash h))
+            (TxIx ix)
+
+buildGoldenTx :: Tx ConwayEra -> [(TxIn, Coin)] -> IO (Tx ConwayEra)
+buildGoldenTx expected inputCoins =
+    build
+        goldenBuildPParams
+        noCtxInterpretIO
+        (\_ -> pure (expectedExUnits expected))
+        inputUtxos
+        changeAddr
+        (txBuildFromTx expected :: TxBuild NoCtx () ())
+        >>= \case
+            Left err ->
+                expectationFailure ("golden build failed: " <> show err)
+                    >> fail "golden build failed"
+            Right tx ->
+                pure tx
+  where
+    expectedOutputs = toList (expected ^. bodyTxL . outputsTxBodyL)
+    changeAddr = selectChangeAddr expectedOutputs
+    inputUtxos =
+        [ (txIn, mkBasicTxOut changeAddr (inject coin))
+        | (txIn, coin) <- inputCoins
+        ]
+
+selectChangeAddr ::
+    [TxOut ConwayEra] ->
+    Addr
+selectChangeAddr outputs =
+    case find ((== NoDatum) . (^. datumTxOutL)) outputs of
+        Just txOut -> txOut ^. addrTxOutL
+        Nothing ->
+            case outputs of
+                txOut : _ -> txOut ^. addrTxOutL
+                [] -> error "expected at least one output in golden tx"
+
+expectedExUnits ::
+    Tx ConwayEra ->
+    Map.Map
+        (ConwayPlutusPurpose AsIx ConwayEra)
+        (Either String ExUnits)
+expectedExUnits tx =
+    Map.map Right exUnitsByPurpose
+  where
+    Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
+    exUnitsByPurpose = Map.map snd redeemers
+
+noCtxInterpretIO :: InterpretIO NoCtx
+noCtxInterpretIO =
+    InterpretIO $ \case {}
