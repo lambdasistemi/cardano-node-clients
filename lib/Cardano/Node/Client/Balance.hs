@@ -37,6 +37,7 @@ import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
 import Data.Word (Word32)
 import Lens.Micro ((&), (.~), (^.))
+import System.IO.Unsafe (unsafePerformIO)
 
 import Cardano.Ledger.Address (Addr)
 import Cardano.Ledger.Alonzo.PParams (
@@ -55,7 +56,11 @@ import Cardano.Ledger.Api.Tx (
     Tx,
     bodyTxL,
     estimateMinFeeTx,
+    witsTxL,
  )
+import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
+import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
+import Data.Map.Strict qualified as Map
 import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     inputsTxBodyL,
@@ -165,6 +170,14 @@ balanceTx pp inputUtxos changeAddr tx =
             | otherwise =
                 let candidate =
                         buildTx currentFee
+                    Redeemers candRdmrs =
+                        candidate
+                            ^. witsTxL . rdmrsTxWitsL
+                    candEUs =
+                        [ (show p, show eu)
+                        | (p, (_, eu)) <-
+                            Map.toList candRdmrs
+                        ]
                     newFee =
                         estimateMinFeeTx
                             pp
@@ -172,9 +185,25 @@ balanceTx pp inputUtxos changeAddr tx =
                             1 -- key witnesses
                             0 -- Byron witnesses
                             0 -- ref scripts bytes
-                 in if newFee <= currentFee
-                        then currentFee
-                        else go (n + 1) newFee
+                 in unsafePerformIO
+                        ( appendFile
+                            "/tmp/txbuild-debug.log"
+                            ( "BALANCE-GO: n="
+                                <> show n
+                                <> " currentFee="
+                                <> show currentFee
+                                <> " newFee="
+                                <> show newFee
+                                <> " candidate-EUs="
+                                <> show candEUs
+                                <> "\n"
+                            )
+                            >> pure
+                                ( if newFee <= currentFee
+                                    then currentFee
+                                    else go (n + 1) newFee
+                                )
+                        )
         initFee = Coin 0
         fee = go 0 initFee
         Coin available = inputCoin

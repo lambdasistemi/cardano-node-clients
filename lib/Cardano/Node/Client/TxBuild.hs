@@ -930,6 +930,28 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                 | (p, Left e) <-
                     Map.toList evalResult
                 ]
+            evalEUs =
+                [ (show p, show eu)
+                | (p, Right eu) <-
+                    Map.toList evalResult
+                ]
+            Redeemers assembledRdmrs =
+                tx ^. witsTxL . rdmrsTxWitsL
+            assembledEUs =
+                [ (show p, show eu)
+                | (p, (_, eu)) <-
+                    Map.toList assembledRdmrs
+                ]
+        appendFile "/tmp/txbuild-debug.log"
+            $ "STEP: prevFee="
+                <> show prevFee
+                <> " assembled-EUs="
+                <> show assembledEUs
+                <> " eval-EUs="
+                <> show evalEUs
+                <> " failures="
+                <> show (length failures)
+                <> "\n"
         case failures of
             ((_, _) : _) -> do
                 -- Eval failed. Retry with estimate.
@@ -940,7 +962,14 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             1
                             0
                             0
-                    retryTx =
+                appendFile "/tmp/txbuild-debug.log"
+                    $ "EVAL-FAIL: estFee="
+                        <> show estFee
+                        <> " errors="
+                        <> show
+                            (map snd failures)
+                        <> "\n"
+                let retryTx =
                         tx
                             & bodyTxL . feeTxBodyL
                                 .~ estFee
@@ -951,6 +980,27 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                 --    real script cost.
                 let patchedTx =
                         patchExUnits tx evalResult
+                    Redeemers patchedRdmrs =
+                        patchedTx
+                            ^. witsTxL . rdmrsTxWitsL
+                    patchedEUs =
+                        [ (show p, show eu)
+                        | (p, (_, eu)) <-
+                            Map.toList patchedRdmrs
+                        ]
+                    preBalanceEst =
+                        estimateMinFeeTx
+                            pp
+                            patchedTx
+                            1
+                            0
+                            0
+                appendFile "/tmp/txbuild-debug.log"
+                    $ "PRE-BALANCE: patched-EUs="
+                        <> show patchedEUs
+                        <> " estimateMinFee="
+                        <> show preBalanceEst
+                        <> "\n"
                 case balanceTx
                     pp
                     inputUtxos
@@ -967,6 +1017,34 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                         . feeTxBodyL
                             newMax =
                                 max maxFee finalFee
+                            Redeemers balRdmrs =
+                                balanced
+                                    ^. witsTxL
+                                        . rdmrsTxWitsL
+                            balEUs =
+                                [ (show p, show eu)
+                                | (p, (_, eu)) <-
+                                    Map.toList
+                                        balRdmrs
+                                ]
+                            postBalanceEst =
+                                estimateMinFeeTx
+                                    pp
+                                    balanced
+                                    1
+                                    0
+                                    0
+                        appendFile "/tmp/txbuild-debug.log"
+                            $ "POST-BALANCE:"
+                                <> " finalFee="
+                                <> show finalFee
+                                <> " prevFee="
+                                <> show prevFee
+                                <> " balanced-EUs="
+                                <> show balEUs
+                                <> " postEstimate="
+                                <> show postBalanceEst
+                                <> "\n"
                         if finalFee == prevFee
                             then
                                 if newMax > finalFee
