@@ -1464,6 +1464,144 @@ buildSpec =
                         fee
                             `shouldSatisfy` (> 190_000)
 
+        it
+            "fee includes ExUnits cost after \
+            \eval failure + retry"
+            $ do
+                let pp =
+                        emptyPParams
+                            & ppMaxTxSizeL .~ 16384
+                            & ppMinFeeAL .~ Coin 44
+                            & ppMinFeeBL .~ Coin 155381
+                            & ppCoinsPerUTxOByteL
+                                .~ CoinPerByte
+                                    (Coin 4310)
+                            & ppPricesL
+                                .~ Prices
+                                    ( fromJust $
+                                        boundRational
+                                            (577 % 10000)
+                                    )
+                                    ( fromJust $
+                                        boundRational
+                                            (721 % 10000000)
+                                    )
+                    inputVal = 5_000_000
+                    tip = 1_000_000
+                    scriptUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin inputVal))
+                        )
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            ( inject
+                                (Coin 50_000_000)
+                            )
+                        )
+                    realExUnits =
+                        ExUnits 348287 111949780
+                    prog ::
+                        TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <-
+                            spendScript
+                                (mkTxIn 2)
+                                (42 :: Integer)
+                        Coin fee <- peek $ \tx ->
+                            let f =
+                                    tx
+                                        ^. bodyTxL
+                                            . feeTxBodyL
+                             in if f > Coin 0
+                                    then Ok f
+                                    else Iterate f
+                        let refund =
+                                inputVal - tip - fee
+                        _ <-
+                            payTo
+                                (mkAddr 4)
+                                (inject (Coin refund))
+                        collateral (mkTxIn 1)
+                        pure ()
+                let mockEval tx = do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                            outs =
+                                toList
+                                    ( tx
+                                        ^. bodyTxL
+                                            . outputsTxBodyL
+                                    )
+                            refund = case outs of
+                                (o : _) ->
+                                    let Coin c =
+                                            o
+                                                ^. coinTxOutL
+                                     in c
+                                [] -> 0
+                            ins =
+                                tx
+                                    ^. bodyTxL
+                                        . inputsTxBodyL
+                            sorted =
+                                Set.toAscList ins
+                            ixOf ti =
+                                fromIntegral
+                                    . fromJust
+                                    $ elemIndex
+                                        ti
+                                        sorted
+                            k =
+                                ConwaySpending
+                                    ( AsIx
+                                        (ixOf (mkTxIn 2))
+                                    )
+                        -- Conservation check: like
+                        -- MPFS cage script
+                        if fee + refund + tip
+                            == inputVal
+                            then
+                                pure
+                                    ( Map.singleton
+                                        k
+                                        ( Right
+                                            realExUnits
+                                        )
+                                    )
+                            else
+                                pure
+                                    ( Map.singleton
+                                        k
+                                        ( Left
+                                            "conservation"
+                                        )
+                                    )
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [feeUtxo, scriptUtxo]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left err ->
+                        expectationFailure $
+                            show err
+                    Right tx -> do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                        fee
+                            `shouldSatisfy` (> 190_000)
+
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
 isSpend (ConwaySpending _) = True
