@@ -9,6 +9,7 @@ module Cardano.Node.Client.E2E.TxBuildSpec (spec) where
 import Control.Concurrent (threadDelay)
 import Data.ByteString.Char8 qualified as BS8
 import Data.Foldable (toList)
+import Data.IORef
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Lens.Micro ((^.))
@@ -120,6 +121,9 @@ spec =
             it
                 "builds and submits a Plutus script tx with real ExUnits"
                 scriptSpendE2E
+            it
+                "script tx survives eval failure on first iteration"
+                scriptSpendWithEvalFailure
 
 type Env =
     ( Provider IO
@@ -270,6 +274,176 @@ buildAndSubmit (provider, submitter, pp, utxos) = do
                     _ ->
                         expectationFailure
                             "expected recipient UTxOs"
+
+{- | Same as scriptSpendE2E but the evaluator
+fails on the first call (returning Left for all
+redeemers), forcing the DSL's retry path. This
+mirrors the MPFS pattern where the conservation-
+aware script errors with fee=0 on the first eval.
+-}
+scriptSpendWithEvalFailure :: Env -> IO ()
+scriptSpendWithEvalFailure
+    (provider, submitter, pp, utxos) = do
+        seed@(seedIn, _) <- case utxos of
+            u : _ -> pure u
+            [] -> fail "no genesis UTxOs"
+        let script = alwaysSucceedsScript
+            scriptHash = hashScript script
+            scriptAddr =
+                Addr
+                    Testnet
+                    (ScriptHashObj scriptHash)
+                    StakeRefNull
+            scriptOut1 =
+                mkBasicTxOut
+                    scriptAddr
+                    (inject (Coin 5_000_000))
+            scriptOut2 =
+                mkBasicTxOut
+                    scriptAddr
+                    (inject (Coin 3_000_000))
+            fundProg :: TxBuild TestQ TestErr ()
+            fundProg = do
+                _ <- spend seedIn
+                _ <- output scriptOut1
+                _ <- output scriptOut2
+                pure ()
+            fundEval _ = pure Map.empty
+            noCtxInterp =
+                InterpretIO $ \case
+                    PlainOutputCoin -> pure (Coin 0)
+                    DatumBaseCoin -> pure (Coin 0)
+                    DatumTag -> pure 0
+        fundResult <-
+            build
+                pp
+                noCtxInterp
+                fundEval
+                [seed]
+                genesisAddr
+                fundProg
+        fundTx <- case fundResult of
+            Left err -> fail $ show err
+            Right tx -> pure tx
+        let fundSigned =
+                addKeyWitness genesisSignKey fundTx
+        submitTx submitter fundSigned >>= \case
+            Submitted _ -> pure ()
+            Rejected r ->
+                fail $ "fund script: " <> show r
+        scriptUtxos <-
+            waitForNUtxos provider scriptAddr 2 30
+        (scriptIn1, scriptOut1') <-
+            case scriptUtxos of
+                u : _ -> pure u
+                [] -> fail "no script UTxO 1"
+        (scriptIn2, scriptOut2') <-
+            case drop 1 scriptUtxos of
+                u : _ -> pure u
+                [] -> fail "no script UTxO 2"
+        walletUtxos <-
+            queryUTxOs provider genesisAddr
+        feeUtxo@(feeIn, _) <- case walletUtxos of
+            u : _ -> pure u
+            [] -> fail "no wallet UTxOs"
+        -- Evaluator that fails on first call
+        evalCount <- newIORef (0 :: Int)
+        let failFirstEval tx = do
+                n <- readIORef evalCount
+                modifyIORef' evalCount (+ 1)
+                realResult <-
+                    fmap
+                        ( Map.map
+                            ( either
+                                (Left . show)
+                                Right
+                            )
+                        )
+                        (evaluateTx provider tx)
+                if n == 0
+                    then
+                        -- First call: fail all
+                        pure $
+                            Map.map
+                                ( const $
+                                    Left
+                                        "simulated \
+                                        \conservation \
+                                        \failure"
+                                )
+                                realResult
+                    else pure realResult
+            spendProg ::
+                TxBuild TestQ TestErr ()
+            spendProg = do
+                _ <-
+                    spendScript
+                        scriptIn1
+                        (42 :: Integer)
+                _ <-
+                    spendScript
+                        scriptIn2
+                        (43 :: Integer)
+                Coin fee <- peek $ \tx ->
+                    let f =
+                            tx
+                                ^. bodyTxL
+                                    . feeTxBodyL
+                     in if f > Coin 0
+                            then Ok f
+                            else Iterate f
+                let Coin in1 =
+                        scriptOut1' ^. coinTxOutL
+                    Coin in2 =
+                        scriptOut2' ^. coinTxOutL
+                    totalIn = in1 + in2
+                    refund = totalIn - fee
+                _ <-
+                    payTo
+                        genesisAddr
+                        (inject (Coin refund))
+                attachScript script
+                collateral feeIn
+                pure ()
+        spendResult <-
+            build
+                pp
+                noCtxInterp
+                failFirstEval
+                [ feeUtxo
+                , (scriptIn1, scriptOut1')
+                , (scriptIn2, scriptOut2')
+                ]
+                genesisAddr
+                spendProg
+        spendTx <- case spendResult of
+            Left err -> fail $ show err
+            Right tx -> pure tx
+        -- Verify ExUnits are patched
+        let Redeemers rdmrs =
+                spendTx ^. witsTxL . rdmrsTxWitsL
+            allEUs =
+                [ eu
+                | (_, (_, eu)) <-
+                    Map.toList rdmrs
+                ]
+        all
+            (\(ExUnits m s) -> m > 0 && s > 0)
+            allEUs
+            `shouldBe` True
+        -- Fee must include ExUnits cost
+        let Coin fee =
+                spendTx ^. bodyTxL . feeTxBodyL
+        fee `shouldSatisfy` (> 0)
+        -- Submit
+        let spendSigned =
+                addKeyWitness genesisSignKey spendTx
+        submitTx submitter spendSigned >>= \case
+            Submitted _ -> pure ()
+            Rejected r ->
+                fail $
+                    "spend script (eval-retry): "
+                        <> show r
 
 waitForUtxos ::
     Provider IO ->
