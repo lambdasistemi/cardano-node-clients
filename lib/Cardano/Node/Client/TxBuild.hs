@@ -970,10 +970,11 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                         <> show
                             (map snd failures)
                         <> "\n"
-                let retryTx =
+                let retryFee = max estFee prevFee
+                    retryTx =
                         tx
                             & bodyTxL . feeTxBodyL
-                                .~ estFee
+                                .~ retryFee
                 step seenFees maxFee retryTx
             [] -> do
                 -- 3. Patch ExUnits THEN balance.
