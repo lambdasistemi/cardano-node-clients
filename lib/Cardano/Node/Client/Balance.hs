@@ -369,4 +369,4 @@ After calling 'evaluateTx', patch the redeemers
 with the real values.
 -}
 placeholderExUnits :: ExUnits
-placeholderExUnits = ExUnits 0 0
+placeholderExUnits = ExUnits 14_000_000 10_000_000_000
