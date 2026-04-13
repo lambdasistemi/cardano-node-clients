@@ -932,16 +932,20 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                 ]
         case failures of
             ((_, _) : _) -> do
-                -- Eval failed. Retry with estimate.
-                let estFee =
+                -- Eval failed. Patch whatever
+                -- ExUnits succeeded so the fee
+                -- estimate includes script cost.
+                let patched =
+                        patchExUnits tx evalResult
+                    estFee =
                         estimateMinFeeTx
                             pp
-                            txForEval
+                            patched
                             1
                             0
                             0
                     retryTx =
-                        tx
+                        patched
                             & bodyTxL . feeTxBodyL
                                 .~ estFee
                 step seenFees maxFee retryTx
