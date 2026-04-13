@@ -27,6 +27,7 @@ import Cardano.Ledger.Address (
     Withdrawals (..),
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Alonzo.PParams (ppPricesL)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.PParams (
@@ -65,6 +66,7 @@ import Cardano.Ledger.BaseTypes (
     Network (..),
     StrictMaybe (SJust),
     TxIx (..),
+    boundRational,
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
@@ -96,6 +98,7 @@ import Cardano.Ledger.Mary.Value (
  )
 import Cardano.Ledger.Metadata (Metadatum (..))
 import Cardano.Ledger.Plutus (ExUnits (..))
+import Cardano.Ledger.Plutus.ExUnits (Prices (..))
 import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
@@ -113,8 +116,11 @@ import Cardano.Crypto.Hash (
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
 import Data.Foldable (toList)
+import Data.List (elemIndex)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust)
+import Data.Ratio ((%))
+
 import Data.Word (Word8)
 
 -- --------------------------------------------------
@@ -1196,6 +1202,405 @@ buildSpec =
                 `shouldBe` [ Coin 3_000_000
                            , Coin 6_999_700
                            ]
+
+        it
+            "balanceTx fee includes ExUnits cost \
+            \(index-aware mock)"
+            $ do
+                -- Build a tx with a script redeemer
+                -- that has real ExUnits, then check
+                -- that balanceTx produces a fee that
+                -- includes the script execution cost.
+                let pp =
+                        emptyPParams
+                            & ppMaxTxSizeL .~ 16384
+                            & ppMinFeeAL .~ Coin 44
+                            & ppMinFeeBL .~ Coin 155381
+                            & ppCoinsPerUTxOByteL
+                                .~ CoinPerByte
+                                    (Coin 4310)
+                            & ppPricesL
+                                .~ Prices
+                                    ( fromJust $
+                                        boundRational
+                                            (577 % 10000)
+                                    )
+                                    ( fromJust $
+                                        boundRational
+                                            (721 % 10000000)
+                                    )
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            ( inject
+                                (Coin 50_000_000)
+                            )
+                        )
+                    -- Manually build a tx with a
+                    -- script spend redeemer that has
+                    -- real ExUnits.
+                    prog ::
+                        TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <-
+                            spendScript
+                                (mkTxIn 2)
+                                (42 :: Integer)
+                        _ <-
+                            payTo
+                                (mkAddr 2)
+                                (inject (Coin 3_000_000))
+                        collateral (mkTxIn 1)
+                        pure ()
+                    scriptUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin 5_000_000))
+                        )
+                    -- Mock eval returns large ExUnits
+                    -- (similar to real Plutus scripts)
+                    realExUnits =
+                        ExUnits 348287 111949780
+                    -- A real evaluator returns results
+                    -- keyed by the index of each
+                    -- script input in the tx body's
+                    -- sorted input set. We find the
+                    -- index of mkTxIn 2 dynamically.
+                    mockEval tx =
+                        let ins =
+                                tx
+                                    ^. bodyTxL
+                                        . inputsTxBodyL
+                            sorted =
+                                Set.toAscList ins
+                            mIx =
+                                elemIndex
+                                    (mkTxIn 2)
+                                    sorted
+                         in case mIx of
+                                Just ix ->
+                                    pure
+                                        ( Map.singleton
+                                            ( ConwaySpending
+                                                ( AsIx
+                                                    ( fromIntegral
+                                                        ix
+                                                    )
+                                                )
+                                            )
+                                            ( Right
+                                                realExUnits
+                                            )
+                                        )
+                                Nothing ->
+                                    pure Map.empty
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [feeUtxo, scriptUtxo]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left err ->
+                        expectationFailure $
+                            show err
+                    Right tx -> do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                        -- The fee must include the
+                        -- script execution cost.
+                        -- With prices ~0.0577/mem and
+                        -- ~0.0000721/step, the cost
+                        -- for (348287, 111949780) is
+                        -- ~28K lovelace. The fee
+                        -- without ExUnits would be
+                        -- ~170K. With ExUnits it
+                        -- should be ~200K+.
+                        fee
+                            `shouldSatisfy` (> 190_000)
+
+        it
+            "two script spends + fee UTxO: \
+            \ExUnits patched correctly"
+            $ do
+                -- Reproduces MPFS pattern: two
+                -- script spends (state + request)
+                -- plus fee UTxO in between.
+                let pp =
+                        emptyPParams
+                            & ppMaxTxSizeL .~ 16384
+                            & ppMinFeeAL .~ Coin 44
+                            & ppMinFeeBL .~ Coin 155381
+                            & ppCoinsPerUTxOByteL
+                                .~ CoinPerByte
+                                    (Coin 4310)
+                            & ppPricesL
+                                .~ Prices
+                                    ( fromJust $
+                                        boundRational
+                                            (577 % 10000)
+                                    )
+                                    ( fromJust $
+                                        boundRational
+                                            (721 % 10000000)
+                                    )
+                    -- Fee UTxO sorts between the
+                    -- two script inputs.
+                    stateUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin 2_000_000))
+                        )
+                    feeUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            ( inject
+                                (Coin 50_000_000)
+                            )
+                        )
+                    reqUtxo =
+                        ( mkTxIn 3
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin 3_000_000))
+                        )
+                    prog ::
+                        TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <-
+                            spendScript
+                                (mkTxIn 1)
+                                (1 :: Integer)
+                        _ <-
+                            spendScript
+                                (mkTxIn 3)
+                                (2 :: Integer)
+                        _ <-
+                            payTo
+                                (mkAddr 4)
+                                (inject (Coin 2_000_000))
+                        collateral (mkTxIn 2)
+                        pure ()
+                    -- Index-aware mock: return
+                    -- ExUnits for BOTH script
+                    -- inputs based on their
+                    -- position in the tx.
+                    stateEU = ExUnits 200000 80000000
+                    reqEU = ExUnits 150000 50000000
+                    mockEval tx =
+                        let ins =
+                                tx
+                                    ^. bodyTxL
+                                        . inputsTxBodyL
+                            sorted =
+                                Set.toAscList ins
+                            ixOf ti =
+                                fromIntegral
+                                    . fromJust
+                                    $ elemIndex
+                                        ti
+                                        sorted
+                         in pure
+                                ( Map.fromList
+                                    [
+                                        ( ConwaySpending
+                                            ( AsIx
+                                                (ixOf (mkTxIn 1))
+                                            )
+                                        , Right stateEU
+                                        )
+                                    ,
+                                        ( ConwaySpending
+                                            ( AsIx
+                                                (ixOf (mkTxIn 3))
+                                            )
+                                        , Right reqEU
+                                        )
+                                    ]
+                                )
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [ feeUtxo
+                        , stateUtxo
+                        , reqUtxo
+                        ]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left err ->
+                        expectationFailure $
+                            show err
+                    Right tx -> do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                            Redeemers rdmrs =
+                                tx
+                                    ^. witsTxL
+                                        . rdmrsTxWitsL
+                            eus =
+                                [ eu
+                                | (_, (_, eu)) <-
+                                    Map.toList rdmrs
+                                ]
+                        -- Both redeemers should
+                        -- have real ExUnits.
+                        all (/= ExUnits 0 0) eus
+                            `shouldBe` True
+                        -- Fee should include
+                        -- script cost (~21K+).
+                        fee
+                            `shouldSatisfy` (> 190_000)
+
+        it
+            "fee includes ExUnits cost after \
+            \eval failure + retry"
+            $ do
+                let pp =
+                        emptyPParams
+                            & ppMaxTxSizeL .~ 16384
+                            & ppMinFeeAL .~ Coin 44
+                            & ppMinFeeBL .~ Coin 155381
+                            & ppCoinsPerUTxOByteL
+                                .~ CoinPerByte
+                                    (Coin 4310)
+                            & ppPricesL
+                                .~ Prices
+                                    ( fromJust $
+                                        boundRational
+                                            (577 % 10000)
+                                    )
+                                    ( fromJust $
+                                        boundRational
+                                            (721 % 10000000)
+                                    )
+                    inputVal = 5_000_000
+                    tip = 1_000_000
+                    scriptUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin inputVal))
+                        )
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            ( inject
+                                (Coin 50_000_000)
+                            )
+                        )
+                    realExUnits =
+                        ExUnits 348287 111949780
+                    prog ::
+                        TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <-
+                            spendScript
+                                (mkTxIn 2)
+                                (42 :: Integer)
+                        Coin fee <- peek $ \tx ->
+                            let f =
+                                    tx
+                                        ^. bodyTxL
+                                            . feeTxBodyL
+                             in if f > Coin 0
+                                    then Ok f
+                                    else Iterate f
+                        let refund =
+                                inputVal - tip - fee
+                        _ <-
+                            payTo
+                                (mkAddr 4)
+                                (inject (Coin refund))
+                        collateral (mkTxIn 1)
+                        pure ()
+                let mockEval tx = do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                            outs =
+                                toList
+                                    ( tx
+                                        ^. bodyTxL
+                                            . outputsTxBodyL
+                                    )
+                            refund = case outs of
+                                (o : _) ->
+                                    let Coin c =
+                                            o
+                                                ^. coinTxOutL
+                                     in c
+                                [] -> 0
+                            ins =
+                                tx
+                                    ^. bodyTxL
+                                        . inputsTxBodyL
+                            sorted =
+                                Set.toAscList ins
+                            ixOf ti =
+                                fromIntegral
+                                    . fromJust
+                                    $ elemIndex
+                                        ti
+                                        sorted
+                            k =
+                                ConwaySpending
+                                    ( AsIx
+                                        (ixOf (mkTxIn 2))
+                                    )
+                        -- Conservation check: like
+                        -- MPFS cage script
+                        if fee + refund + tip
+                            == inputVal
+                            then
+                                pure
+                                    ( Map.singleton
+                                        k
+                                        ( Right
+                                            realExUnits
+                                        )
+                                    )
+                            else
+                                pure
+                                    ( Map.singleton
+                                        k
+                                        ( Left
+                                            "conservation"
+                                        )
+                                    )
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [feeUtxo, scriptUtxo]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left err ->
+                        expectationFailure $
+                            show err
+                    Right tx -> do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                        fee
+                            `shouldSatisfy` (> 190_000)
 
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
