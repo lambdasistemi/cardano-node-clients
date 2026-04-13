@@ -7,12 +7,10 @@ License     : Apache-2.0
 
 Balance an unsigned Conway-era transaction by adding
 fee-paying inputs and a change output. The fee is
-computed iteratively via the exact ledger
-'getMinFeeTx' function, plus VKey witness padding
-for the unsigned transaction size (at most 10
-rounds). 'balanceFeeLoop' still uses
-'estimateMinFeeTx' for fee-dependent output
-fixpoints.
+estimated iteratively via 'estimateMinFeeTx' from
+@cardano-ledger-api@ until the value converges
+(at most 10 rounds). The function internally injects
+dummy VKey witnesses for correct size estimation.
 
 This is a simplified balancer that only handles
 ADA-only fee inputs. Multi-asset coin selection is
@@ -53,7 +51,6 @@ import Cardano.Ledger.Alonzo.TxWits (
     Redeemers,
     TxDats (..),
  )
-import Cardano.Ledger.Api.PParams (ppMinFeeAL)
 import Cardano.Ledger.Api.Tx (
     Tx,
     bodyTxL,
@@ -75,7 +72,7 @@ import Cardano.Ledger.BaseTypes (
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Core (PParams, getMinFeeTx)
+import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
@@ -91,11 +88,11 @@ and a change output.
 
 One additional key witness is assumed for the fee
 input. The fee is found by iterating
-'getMinFeeTx' to a fixpoint: each round builds
+'estimateMinFeeTx' to a fixpoint: each round builds
 the full transaction (with change output and fee
-field set), computes the exact minimum fee for
-that serialized transaction, and adds witness
-padding until the fee stabilises.
+field set) and re-estimates until the fee stabilises.
+'estimateMinFeeTx' internally pads the unsigned tx
+with dummy VKey witnesses for correct size.
 -}
 balanceTx ::
     PParams ConwayEra ->
@@ -168,25 +165,13 @@ balanceTx pp inputUtxos changeAddr tx =
             | otherwise =
                 let candidate =
                         buildTx currentFee
-                    -- getMinFeeTx computes the exact
-                    -- fee for the serialized tx. Add
-                    -- VKey witness padding because
-                    -- the tx is unsigned at this
-                    -- point; the signed tx will be
-                    -- larger by ~102 bytes per VKey.
-                    Coin baseFee =
-                        getMinFeeTx
+                    newFee =
+                        estimateMinFeeTx
                             pp
                             candidate
-                            0
-                    Coin feePerByte =
-                        pp ^. ppMinFeeAL
-                    -- 106 bytes: CBOR overhead +
-                    -- 32 VKey + 64 Ed25519 sig +
-                    -- map entry + length prefixes
-                    vkeyPadding = 106 * feePerByte
-                    newFee =
-                        Coin (baseFee + vkeyPadding)
+                            1 -- key witnesses
+                            0 -- Byron witnesses
+                            0 -- ref scripts bytes
                  in if newFee <= currentFee
                         then currentFee
                         else go (n + 1) newFee
