@@ -178,7 +178,9 @@ test-suite e2e-tests
     , base
     , bytestring
     , cardano-crypto-class
+    , base16-bytestring
     , cardano-ledger-allegra
+    , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
