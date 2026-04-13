@@ -195,6 +195,7 @@ import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Balance (
     BalanceError,
     balanceTx,
+    placeholderExUnits,
  )
 import Cardano.Slotting.Slot (SlotNo)
 import Lens.Micro ((&), (.~), (^.))
@@ -1344,7 +1345,7 @@ collectSpendRedeemers ::
     ]
 collectSpendRedeemers allIns spends =
     [ ( ConwaySpending (AsIx ix)
-      , (toLedgerData r, ExUnits 0 0)
+      , (toLedgerData r, placeholderExUnits)
       )
     | (txIn, ScriptWitness r) <- spends
     , let ix = spendingIndex txIn allIns
@@ -1377,7 +1378,7 @@ collectMintRedeemers mints =
                 Map.insert pid (toLedgerData r) acc
      in
         [ ( ConwayMinting (AsIx (policyIdx pid))
-          , (d, ExUnits 0 0)
+          , (d, placeholderExUnits)
           )
         | (pid, d) <- Map.toList seenData
         ]
@@ -1403,7 +1404,7 @@ collectWithdrawalRedeemers ::
 collectWithdrawalRedeemers withdrawals entries =
     [ ( ConwayRewarding
             (AsIx (withdrawalIndex rewardAccount withdrawals))
-      , (redeemer, ExUnits 0 0)
+      , (redeemer, placeholderExUnits)
       )
     | (rewardAccount, (_, Just redeemer)) <-
         Map.toList entries
