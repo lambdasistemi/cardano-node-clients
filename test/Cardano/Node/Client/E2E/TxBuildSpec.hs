@@ -276,17 +276,33 @@ waitForUtxos ::
     Addr ->
     Int ->
     IO [(TxIn, TxOut ConwayEra)]
-waitForUtxos provider addr attempts
+waitForUtxos = waitForNUtxos' 1
+
+waitForNUtxos ::
+    Provider IO ->
+    Addr ->
+    Int ->
+    Int ->
+    IO [(TxIn, TxOut ConwayEra)]
+waitForNUtxos prov addr n = waitForNUtxos' n prov addr
+
+waitForNUtxos' ::
+    Int ->
+    Provider IO ->
+    Addr ->
+    Int ->
+    IO [(TxIn, TxOut ConwayEra)]
+waitForNUtxos' minCount provider addr attempts
     | attempts <= 0 =
         expectationFailure
             ("timed out waiting for UTxOs at " <> show addr)
             >> pure []
     | otherwise = do
         utxos <- queryUTxOs provider addr
-        if null utxos
+        if length utxos < minCount
             then do
                 threadDelay 1_000_000
-                waitForUtxos provider addr (attempts - 1)
+                waitForNUtxos' minCount provider addr (attempts - 1)
             else pure utxos
 
 witnessKeyHashFromSignKey ::
@@ -329,7 +345,8 @@ scriptSpendE2E (provider, submitter, pp, utxos) = do
     seed@(seedIn, _) <- case utxos of
         u : _ -> pure u
         [] -> fail "no genesis UTxOs"
-    -- Step 1: Send ADA to the script address
+    -- Step 1: Fund TWO script UTxOs (like MPFS
+    -- state + request pattern)
     let script = alwaysSucceedsScript
         scriptHash = hashScript script
         scriptAddr =
@@ -337,17 +354,22 @@ scriptSpendE2E (provider, submitter, pp, utxos) = do
                 Testnet
                 (ScriptHashObj scriptHash)
                 StakeRefNull
-        scriptOut =
+        scriptOut1 =
             mkBasicTxOut
                 scriptAddr
                 (inject (Coin 5_000_000))
+        scriptOut2 =
+            mkBasicTxOut
+                scriptAddr
+                (inject (Coin 3_000_000))
         fundProg :: TxBuild TestQ TestErr ()
         fundProg = do
             _ <- spend seedIn
-            _ <- output scriptOut
+            _ <- output scriptOut1
+            _ <- output scriptOut2
             pure ()
         fundEval _ = pure Map.empty
-        fundInterpret =
+        noCtxInterp =
             InterpretIO $ \case
                 PlainOutputCoin -> pure (Coin 0)
                 DatumBaseCoin -> pure (Coin 0)
@@ -355,7 +377,7 @@ scriptSpendE2E (provider, submitter, pp, utxos) = do
     fundResult <-
         build
             pp
-            fundInterpret
+            noCtxInterp
             fundEval
             [seed]
             genesisAddr
@@ -369,29 +391,52 @@ scriptSpendE2E (provider, submitter, pp, utxos) = do
         Submitted _ -> pure ()
         Rejected r ->
             fail $ "fund script: " <> show r
-    -- Wait for UTxO at script address
+    -- Wait for TWO UTxOs at script address
     scriptUtxos <-
-        waitForUtxos provider scriptAddr 30
-    (scriptIn, scriptOut') <- case scriptUtxos of
+        waitForNUtxos provider scriptAddr 2 30
+    (scriptIn1, scriptOut1') <- case scriptUtxos of
         u : _ -> pure u
-        [] -> fail "no script UTxOs"
+        [] -> fail "no script UTxO 1"
+    (scriptIn2, scriptOut2') <-
+        case drop 1 scriptUtxos of
+            u : _ -> pure u
+            [] -> fail "no script UTxO 2"
     -- Get fresh wallet UTxOs for fee
     walletUtxos <-
         queryUTxOs provider genesisAddr
     feeUtxo@(feeIn, _) <- case walletUtxos of
         u : _ -> pure u
         [] -> fail "no wallet UTxOs"
-    -- Step 2: Spend from script
+    -- Step 2: Spend BOTH script UTxOs in one tx.
+    -- Use peek to read fee and compute a
+    -- fee-dependent output (like MPFS refund).
     let spendProg :: TxBuild TestQ TestErr ()
         spendProg = do
             _ <-
                 spendScript
-                    scriptIn
+                    scriptIn1
                     (42 :: Integer)
+            _ <-
+                spendScript
+                    scriptIn2
+                    (43 :: Integer)
+            -- Fee-dependent output (MPFS pattern)
+            Coin fee <- peek $ \tx ->
+                let f =
+                        tx ^. bodyTxL . feeTxBodyL
+                 in if f > Coin 0
+                        then Ok f
+                        else Iterate f
+            let Coin in1 =
+                    scriptOut1' ^. coinTxOutL
+                Coin in2 =
+                    scriptOut2' ^. coinTxOutL
+                totalIn = in1 + in2
+                refund = totalIn - fee
             _ <-
                 payTo
                     genesisAddr
-                    (inject (Coin 3_000_000))
+                    (inject (Coin refund))
             attachScript script
             collateral feeIn
             pure ()
@@ -404,9 +449,12 @@ scriptSpendE2E (provider, submitter, pp, utxos) = do
     spendResult <-
         build
             pp
-            fundInterpret
+            noCtxInterp
             spendEval
-            [feeUtxo, (scriptIn, scriptOut')]
+            [ feeUtxo
+            , (scriptIn1, scriptOut1')
+            , (scriptIn2, scriptOut2')
+            ]
             genesisAddr
             spendProg
     spendTx <- case spendResult of
