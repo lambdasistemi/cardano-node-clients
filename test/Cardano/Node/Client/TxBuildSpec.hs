@@ -27,6 +27,7 @@ import Cardano.Ledger.Address (
     Withdrawals (..),
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Alonzo.PParams (ppPricesL)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.PParams (
@@ -65,6 +66,7 @@ import Cardano.Ledger.BaseTypes (
     Network (..),
     StrictMaybe (SJust),
     TxIx (..),
+    boundRational,
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
@@ -96,6 +98,7 @@ import Cardano.Ledger.Mary.Value (
  )
 import Cardano.Ledger.Metadata (Metadatum (..))
 import Cardano.Ledger.Plutus (ExUnits (..))
+import Cardano.Ledger.Plutus.ExUnits (Prices (..))
 import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
@@ -115,6 +118,8 @@ import Data.ByteString.Short qualified as SBS
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust)
+import Data.Ratio ((%))
+
 import Data.Word (Word8)
 
 -- --------------------------------------------------
@@ -1196,6 +1201,104 @@ buildSpec =
                 `shouldBe` [ Coin 3_000_000
                            , Coin 6_999_700
                            ]
+
+        it
+            "balanceTx fee includes ExUnits cost"
+            $ do
+                -- Build a tx with a script redeemer
+                -- that has real ExUnits, then check
+                -- that balanceTx produces a fee that
+                -- includes the script execution cost.
+                let pp =
+                        emptyPParams
+                            & ppMaxTxSizeL .~ 16384
+                            & ppMinFeeAL .~ Coin 44
+                            & ppMinFeeBL .~ Coin 155381
+                            & ppCoinsPerUTxOByteL
+                                .~ CoinPerByte
+                                    (Coin 4310)
+                            & ppPricesL
+                                .~ Prices
+                                    ( fromJust $
+                                        boundRational
+                                            (577 % 10000)
+                                    )
+                                    ( fromJust $
+                                        boundRational
+                                            (721 % 10000000)
+                                    )
+                    feeUtxo =
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            ( inject
+                                (Coin 50_000_000)
+                            )
+                        )
+                    -- Manually build a tx with a
+                    -- script spend redeemer that has
+                    -- real ExUnits.
+                    prog ::
+                        TxBuild TestQ TestErr ()
+                    prog = do
+                        _ <-
+                            spendScript
+                                (mkTxIn 2)
+                                (42 :: Integer)
+                        _ <-
+                            payTo
+                                (mkAddr 2)
+                                (inject (Coin 3_000_000))
+                        collateral (mkTxIn 1)
+                        pure ()
+                    scriptUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin 5_000_000))
+                        )
+                    -- Mock eval returns large ExUnits
+                    -- (similar to real Plutus scripts)
+                    realExUnits =
+                        ExUnits 348287 111949780
+                    -- mkTxIn 2 is at index 1 in the
+                    -- sorted input set {1, 2}.
+                    mockEval _ =
+                        pure
+                            ( Map.singleton
+                                ( ConwaySpending
+                                    (AsIx 1)
+                                )
+                                (Right realExUnits)
+                            )
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [feeUtxo, scriptUtxo]
+                        (mkAddr 1)
+                        prog
+                case result of
+                    Left err ->
+                        expectationFailure $
+                            show err
+                    Right tx -> do
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                        -- The fee must include the
+                        -- script execution cost.
+                        -- With prices ~0.0577/mem and
+                        -- ~0.0000721/step, the cost
+                        -- for (348287, 111949780) is
+                        -- ~28K lovelace. The fee
+                        -- without ExUnits would be
+                        -- ~170K. With ExUnits it
+                        -- should be ~200K+.
+                        fee
+                            `shouldSatisfy` (> 190_000)
 
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
