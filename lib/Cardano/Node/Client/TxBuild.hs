@@ -893,7 +893,7 @@ build ::
     TxBuild q e a ->
     IO (Either (BuildError e) (Tx ConwayEra))
 build pp interpret evaluateTx inputUtxos changeAddr prog =
-    step Set.empty (Coin 0) (mkBasicTx mkBasicTxBody)
+    step Set.empty (Coin 0) 0 (mkBasicTx mkBasicTxBody)
   where
     -- Pre-compute the extra TxIns from inputUtxos
     -- so Peek-based index computation sees ALL
@@ -910,7 +910,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
     -- \| One iteration: interpret, assemble, eval,
     -- patch, balance. Track seen fees to detect
     -- oscillation and bisect.
-    step seenFees maxFee prevTx = do
+    step seenFees maxFee evalRetries prevTx = do
         -- 1. Interpret
         let prevWithIns = addExtras prevTx
         (st, _, _) <-
@@ -965,10 +965,10 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                     Map.toList evalResult
                 ]
         case failures of
-            ((_, _) : _) -> do
-                -- Eval failed. Retry with estimate.
-                -- Use max of estimate and previous
-                -- fee to converge from above.
+            ((purpose, msg) : _) -> do
+                -- Eval failed. Distinguish terminal
+                -- script failures from retryable
+                -- fee-search failures.
                 let estFee =
                         estimateMinFeeTx
                             pp
@@ -976,24 +976,21 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             1
                             0
                             0
-                if estFee >= prevFee
-                    then do
-                        -- Fee grew; retry with the
-                        -- higher estimate.
-                        let retryTx =
-                                tx
-                                    & bodyTxL
-                                        . feeTxBodyL
-                                        .~ estFee
-                        step seenFees maxFee retryTx
+                if evalRetries >= (1 :: Int)
+                    then
+                        -- Already retried once with a
+                        -- fee estimate. The failure is
+                        -- stable — surface it.
+                        pure $
+                            Left $
+                                EvalFailure purpose msg
                     else
                         if prevFee > Coin 0
                             then do
-                                -- Not the first iteration
-                                -- and fee can't improve.
-                                -- Reuse ExUnits from the
-                                -- previous successful tx
-                                -- to avoid a retry loop.
+                                -- A prior iteration
+                                -- succeeded. Reuse its
+                                -- ExUnits to avoid a
+                                -- retry loop.
                                 let prevEUs =
                                         Map.map Right $
                                             fmap snd $
@@ -1037,6 +1034,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                                         maxFee
                                                         finalFee
                                                     )
+                                                    0
                                                     balanced
                             else do
                                 -- First iteration
@@ -1050,6 +1048,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                 step
                                     seenFees
                                     maxFee
+                                    (evalRetries + 1)
                                     retryTx
             [] -> do
                 -- 3. Patch ExUnits THEN balance.
@@ -1086,6 +1085,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                         step
                                             seenFees
                                             newMax
+                                            0
                                             ( bumpFee
                                                 balanced
                                                 newMax
@@ -1132,6 +1132,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                                 seenFees
                                             )
                                             newMax
+                                            0
                                             balanced
 
     -- \| Binary search for the smallest fee where
