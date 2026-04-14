@@ -26,6 +26,7 @@ module Cardano.Node.Client.Balance (
     computeScriptIntegrity,
     spendingIndex,
     placeholderExUnits,
+    evalBudgetExUnits,
 
     -- * Errors
     BalanceError (..),
@@ -341,3 +342,14 @@ with the real values.
 -}
 placeholderExUnits :: ExUnits
 placeholderExUnits = ExUnits 0 0
+
+{- | Max-budget execution units for script
+evaluation. The ledger evaluator uses redeemer
+ExUnits as the execution budget; scripts that
+exceed the budget are terminated. This value is
+injected before 'evaluateTx' so scripts get
+enough room to run, then replaced by the real
+ExUnits from the evaluation result.
+-}
+evalBudgetExUnits :: ExUnits
+evalBudgetExUnits = ExUnits 14_000_000 10_000_000_000
