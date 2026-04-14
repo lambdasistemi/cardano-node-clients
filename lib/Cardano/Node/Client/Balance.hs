@@ -78,10 +78,12 @@ import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
 
--- | Fee-paying UTxO has insufficient ada.
+-- | Errors from 'balanceTx'.
 data BalanceError
     = -- | @InsufficientFee required available@
       InsufficientFee !Coin !Coin
+    | -- | Fee did not converge within 10 iterations.
+      FeeNotConverged
     deriving (Eq, Show)
 
 {- | Balance a transaction by adding input UTxOs
@@ -160,9 +162,7 @@ balanceTx pp inputUtxos changeAddr tx =
         -- Iterate until the fee stabilises.
         go !n currentFee
             | n > (10 :: Int) =
-                error
-                    "balanceTx: fee did not \
-                    \converge in 10 iterations"
+                Left FeeNotConverged
             | otherwise =
                 let candidate =
                         buildTx currentFee
@@ -174,18 +174,24 @@ balanceTx pp inputUtxos changeAddr tx =
                             0 -- Byron witnesses
                             0 -- ref scripts bytes
                  in if newFee <= currentFee
-                        then currentFee
+                        then Right currentFee
                         else go (n + 1) newFee
         initFee = Coin 0
-        fee = go 0 initFee
-        Coin available = inputCoin
-        Coin required = fee
-        changeAmount =
-            available - required - origAda
-     in if changeAmount < 0
-            then
-                Left (InsufficientFee fee inputCoin)
-            else Right (buildTx fee)
+     in case go 0 initFee of
+            Left err -> Left err
+            Right fee ->
+                let Coin available = inputCoin
+                    Coin required = fee
+                    changeAmount =
+                        available - required - origAda
+                 in if changeAmount < 0
+                        then
+                            Left
+                                ( InsufficientFee
+                                    fee
+                                    inputCoin
+                                )
+                        else Right (buildTx fee)
 
 {- | Output function rejected the fee, or the
 iteration did not converge.

@@ -858,6 +858,8 @@ data BuildError e
       BalanceFailed BalanceError
     | -- | Validation failures on the final Tx.
       ChecksFailed [Check e]
+    | -- | Internal error adjusting the fee.
+      BumpFeeFailed String
     deriving (Show)
 
 {- | Assemble, evaluate scripts, and balance.
@@ -1082,14 +1084,20 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                         -- once with max
                                         -- so Peek sees
                                         -- the right fee.
-                                        step
-                                            seenFees
-                                            newMax
-                                            0
-                                            ( bumpFee
-                                                balanced
-                                                newMax
-                                            )
+                                        case bumpFee
+                                            balanced
+                                            newMax of
+                                            Left msg ->
+                                                pure $
+                                                    Left $
+                                                        BumpFeeFailed
+                                                            msg
+                                            Right bumped ->
+                                                step
+                                                    seenFees
+                                                    newMax
+                                                    0
+                                                    bumped
                                     else
                                         -- Truly
                                         -- converged.
@@ -1149,60 +1157,71 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             + (unCoin hi - unCoin lo)
                                 `div` 2
             -- Re-interpret with mid fee
-            let midTx =
-                    bumpFee templateTx mid
-                midWithIns = addExtras midTx
-            (st', _, _) <-
-                interpretWithM
-                    (runInterpretIO interpret)
-                    midWithIns
-                    prog
-            let tx' =
-                    assembleTxWith extraIns pp st'
-                        & bodyTxL . feeTxBodyL .~ mid
-            -- Balance to get change output
-            case balanceTx
-                pp
-                inputUtxos
-                changeAddr
-                tx' of
-                Left _ ->
-                    -- Can't balance at mid, go hi
-                    bisect
-                        st
-                        evalResult
-                        templateTx
-                        mid
-                        hi
-                Right balanced -> do
-                    let midBal =
-                            bumpFee balanced mid
-                    -- Evaluate with change output
-                    evalResult' <-
-                        evaluateTx midBal
-                    let failures' =
-                            [ e
-                            | (_, Left e) <-
-                                Map.toList
-                                    evalResult'
-                            ]
-                    if null failures'
-                        then
-                            -- mid works, try lower
-                            bisect
+            case bumpFee templateTx mid of
+                Left msg ->
+                    pure $ Left $ BumpFeeFailed msg
+                Right midTx -> do
+                    let midWithIns = addExtras midTx
+                    (st', _, _) <-
+                        interpretWithM
+                            (runInterpretIO interpret)
+                            midWithIns
+                            prog
+                    let tx' =
+                            assembleTxWith
+                                extraIns
+                                pp
                                 st'
-                                evalResult'
-                                midBal
-                                lo
-                                mid
-                        else
-                            -- mid fails, try higher
+                                & bodyTxL . feeTxBodyL
+                                    .~ mid
+                    -- Balance to get change output
+                    case balanceTx
+                        pp
+                        inputUtxos
+                        changeAddr
+                        tx' of
+                        Left _ ->
+                            -- Can't balance at mid
                             bisect
                                 st
                                 evalResult
                                 templateTx
                                 mid
                                 hi
+                        Right balanced ->
+                            case bumpFee balanced mid of
+                                Left msg ->
+                                    pure $
+                                        Left $
+                                            BumpFeeFailed
+                                                msg
+                                Right midBal -> do
+                                    evalResult' <-
+                                        evaluateTx
+                                            midBal
+                                    let failures' =
+                                            [ e
+                                            | ( _
+                                                , Left e
+                                                ) <-
+                                                Map.toList
+                                                    evalResult'
+                                            ]
+                                    if null failures'
+                                        then
+                                            bisect
+                                                st'
+                                                evalResult'
+                                                midBal
+                                                lo
+                                                mid
+                                        else
+                                            bisect
+                                                st
+                                                evalResult
+                                                templateTx
+                                                mid
+                                                hi
 
     -- \| Finalize with a specific fee.
     --
@@ -1238,18 +1257,26 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                 let balFee =
                         balanced
                             ^. bodyTxL . feeTxBodyL
-                    final =
+                    eFinal =
                         if balFee == fee
-                            then balanced
+                            then Right balanced
                             else bumpFee balanced fee
-                case failedChecks
-                    (tsChecks st')
-                    final of
-                    [] -> pure $ Right final
-                    errs ->
+                case eFinal of
+                    Left msg ->
                         pure $
                             Left $
-                                ChecksFailed errs
+                                BumpFeeFailed msg
+                    Right final ->
+                        case failedChecks
+                            (tsChecks st')
+                            final of
+                            [] ->
+                                pure $ Right final
+                            errs ->
+                                pure $
+                                    Left $
+                                        ChecksFailed
+                                            errs
 
     -- \| Patch ExUnits from eval result.
     patchExUnits tx evalResult =
@@ -1301,7 +1328,10 @@ Pre-condition: outputs must be non-empty (the
 last one is the change output added by
 balanceTx).
 -}
-bumpFee :: Tx ConwayEra -> Coin -> Tx ConwayEra
+bumpFee ::
+    Tx ConwayEra ->
+    Coin ->
+    Either String (Tx ConwayEra)
 bumpFee tx targetFee =
     let currentFee = tx ^. bodyTxL . feeTxBodyL
         diff = unCoin targetFee - unCoin currentFee
@@ -1312,9 +1342,7 @@ bumpFee tx targetFee =
                 (tx ^. bodyTxL . outputsTxBodyL)
      in case reverse outs of
             [] ->
-                error
-                    "bumpFee: no outputs to \
-                    \adjust"
+                Left "bumpFee: no outputs"
             (changeOut : rest) ->
                 let Coin changeVal =
                         changeOut ^. coinTxOutL
@@ -1326,11 +1354,12 @@ bumpFee tx targetFee =
                     newOuts =
                         StrictSeq.fromList
                             (reverse (adjusted : rest))
-                 in tx
-                        & bodyTxL . feeTxBodyL
-                            .~ targetFee
-                        & bodyTxL . outputsTxBodyL
-                            .~ newOuts
+                 in Right $
+                        tx
+                            & bodyTxL . feeTxBodyL
+                                .~ targetFee
+                            & bodyTxL . outputsTxBodyL
+                                .~ newOuts
 
 -- ----------------------------------------------------
 -- Internal helpers
