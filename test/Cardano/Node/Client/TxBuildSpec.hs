@@ -1051,6 +1051,54 @@ buildSpec =
                     last history
                         `shouldBe` (tx ^. bodyTxL . feeTxBodyL)
 
+        it "surfaces terminal eval failure instead of retrying" $ do
+            let pp =
+                    emptyPParams
+                        & ppMinFeeAL .~ Coin 44
+                        & ppMinFeeBL .~ Coin 155381
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                spendUtxo =
+                    ( mkTxIn 2
+                    , mkBasicTxOut
+                        (mkAddr 3)
+                        (inject (Coin 5_000_000))
+                    )
+                prog :: TxBuild TestQ TestErr ()
+                prog = do
+                    _ <- spend (mkTxIn 2)
+                    pure ()
+                interpret = InterpretIO (const (pure undefined))
+                -- Evaluator always fails regardless
+                -- of fee — a genuine script bug.
+                mockEval _tx =
+                    pure $
+                        Map.singleton
+                            (ConwaySpending (AsIx 0))
+                            (Left "script logic error")
+            result <-
+                build
+                    pp
+                    interpret
+                    mockEval
+                    [feeUtxo, spendUtxo]
+                    (mkAddr 1)
+                    prog
+            case result of
+                Left (EvalFailure _purpose msg) ->
+                    msg `shouldBe` "script logic error"
+                Left other ->
+                    expectationFailure $
+                        "expected EvalFailure, got: "
+                            <> show other
+                Right _ ->
+                    expectationFailure
+                        "expected EvalFailure, got Right"
+
         it "re-interprets outputs after a fee oscillation" $ do
             feeHistoryRef <- newIORef []
             let pp =
