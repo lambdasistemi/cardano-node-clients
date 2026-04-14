@@ -915,7 +915,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
     step seenFees maxFee evalRetries prevTx = do
         -- 1. Interpret
         let prevWithIns = addExtras prevTx
-        (st, _, _) <-
+        (st, _, peekConverged) <-
             interpretWithM
                 (runInterpretIO interpret)
                 prevWithIns
@@ -1099,20 +1099,31 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                                     0
                                                     bumped
                                     else
-                                        -- Truly
-                                        -- converged.
-                                        case failedChecks
-                                            (tsChecks st)
-                                            balanced of
-                                            [] ->
-                                                pure $
-                                                    Right
-                                                        balanced
-                                            errs ->
-                                                pure $
-                                                    Left $
-                                                        ChecksFailed
-                                                            errs
+                                        if not peekConverged
+                                            then
+                                                -- Fee converged
+                                                -- but Peek has
+                                                -- not. Re-iterate.
+                                                step
+                                                    seenFees
+                                                    newMax
+                                                    0
+                                                    balanced
+                                            else
+                                                -- Truly
+                                                -- converged.
+                                                case failedChecks
+                                                    (tsChecks st)
+                                                    balanced of
+                                                    [] ->
+                                                        pure $
+                                                            Right
+                                                                balanced
+                                                    errs ->
+                                                        pure $
+                                                            Left $
+                                                                ChecksFailed
+                                                                    errs
                             else
                                 if Set.member
                                     finalFee
