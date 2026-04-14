@@ -195,6 +195,7 @@ import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Balance (
     BalanceError,
     balanceTx,
+    evalBudgetExUnits,
  )
 import Cardano.Slotting.Slot (SlotNo)
 import Lens.Micro ((&), (.~), (^.))
@@ -924,7 +925,40 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
         -- 2. Eval (no change output; scripts that
         --    check conservation use tx.fee which
         --    matches Peek-computed outputs).
-        evalResult <- evaluateTx txForEval
+        --    Inflate redeemer ExUnits to max budget
+        --    so the evaluator gives scripts enough
+        --    room to execute. The real ExUnits come
+        --    back in evalResult.
+        let Redeemers evalRdmrs =
+                txForEval ^. witsTxL . rdmrsTxWitsL
+            inflated =
+                Redeemers $
+                    fmap
+                        ( \(d, _) ->
+                            (d, evalBudgetExUnits)
+                        )
+                        evalRdmrs
+            budgetIntegrity =
+                if Map.null evalRdmrs
+                    then SNothing
+                    else
+                        hashScriptIntegrity
+                            ( Set.singleton
+                                ( getLanguageView
+                                    pp
+                                    PlutusV3
+                                )
+                            )
+                            inflated
+                            (TxDats mempty)
+            txForEvalBudget =
+                txForEval
+                    & witsTxL . rdmrsTxWitsL
+                        .~ inflated
+                    & bodyTxL
+                        . scriptIntegrityHashTxBodyL
+                        .~ budgetIntegrity
+        evalResult <- evaluateTx txForEvalBudget
         let failures =
                 [ (p, e)
                 | (p, Left e) <-
@@ -933,6 +967,8 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
         case failures of
             ((_, _) : _) -> do
                 -- Eval failed. Retry with estimate.
+                -- Use max of estimate and previous
+                -- fee to converge from above.
                 let estFee =
                         estimateMinFeeTx
                             pp
@@ -940,11 +976,81 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             1
                             0
                             0
-                    retryTx =
-                        tx
-                            & bodyTxL . feeTxBodyL
-                                .~ estFee
-                step seenFees maxFee retryTx
+                if estFee >= prevFee
+                    then do
+                        -- Fee grew; retry with the
+                        -- higher estimate.
+                        let retryTx =
+                                tx
+                                    & bodyTxL
+                                        . feeTxBodyL
+                                        .~ estFee
+                        step seenFees maxFee retryTx
+                    else
+                        if prevFee > Coin 0
+                            then do
+                                -- Not the first iteration
+                                -- and fee can't improve.
+                                -- Reuse ExUnits from the
+                                -- previous successful tx
+                                -- to avoid a retry loop.
+                                let prevEUs =
+                                        Map.map Right $
+                                            fmap snd $
+                                                let Redeemers r =
+                                                        prevTx
+                                                            ^. witsTxL
+                                                                . rdmrsTxWitsL
+                                                 in r
+                                    patchedTx =
+                                        patchExUnits
+                                            tx
+                                            prevEUs
+                                case balanceTx
+                                    pp
+                                    inputUtxos
+                                    changeAddr
+                                    patchedTx of
+                                    Left err ->
+                                        pure $
+                                            Left $
+                                                BalanceFailed
+                                                    err
+                                    Right balanced -> do
+                                        let finalFee =
+                                                balanced
+                                                    ^. bodyTxL
+                                                        . feeTxBodyL
+                                        if finalFee
+                                            == prevFee
+                                            then
+                                                pure $
+                                                    Right
+                                                        balanced
+                                            else
+                                                step
+                                                    ( Set.insert
+                                                        finalFee
+                                                        seenFees
+                                                    )
+                                                    ( max
+                                                        maxFee
+                                                        finalFee
+                                                    )
+                                                    balanced
+                            else do
+                                -- First iteration
+                                -- (prevFee=0). Retry
+                                -- with estimated fee.
+                                let retryTx =
+                                        tx
+                                            & bodyTxL
+                                                . feeTxBodyL
+                                                .~ estFee
+                                step
+                                    seenFees
+                                    maxFee
+                                    retryTx
             [] -> do
                 -- 3. Patch ExUnits THEN balance.
                 --    This way balanceTx sees the
