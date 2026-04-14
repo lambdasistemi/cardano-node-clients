@@ -1002,12 +1002,64 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                         <> show
                             (map snd failures)
                         <> "\n"
-                let retryFee = max estFee prevFee
-                    retryTx =
-                        tx
-                            & bodyTxL . feeTxBodyL
-                                .~ retryFee
-                step seenFees maxFee retryTx
+                if prevFee > Coin 0
+                    then do
+                        -- Not the first iteration.
+                        -- Reuse ExUnits from prevTx
+                        -- (which had a successful
+                        -- eval) to avoid retry loop.
+                        let prevEUs =
+                                Map.map Right $
+                                    fmap snd $
+                                        let Redeemers r =
+                                                prevTx
+                                                    ^. witsTxL
+                                                        . rdmrsTxWitsL
+                                         in r
+                            patchedTx =
+                                patchExUnits
+                                    tx
+                                    prevEUs
+                        case balanceTx
+                            pp
+                            inputUtxos
+                            changeAddr
+                            patchedTx of
+                            Left err ->
+                                pure $
+                                    Left $
+                                        BalanceFailed
+                                            err
+                            Right balanced -> do
+                                let finalFee =
+                                        balanced
+                                            ^. bodyTxL
+                                                . feeTxBodyL
+                                if finalFee == prevFee
+                                    then
+                                        pure $
+                                            Right
+                                                balanced
+                                    else
+                                        step
+                                            ( Set.insert
+                                                finalFee
+                                                seenFees
+                                            )
+                                            ( max
+                                                maxFee
+                                                finalFee
+                                            )
+                                            balanced
+                    else do
+                        -- First iteration (prevFee=0).
+                        -- Retry with estimated fee.
+                        let retryTx =
+                                tx
+                                    & bodyTxL
+                                        . feeTxBodyL
+                                        .~ estFee
+                        step seenFees maxFee retryTx
             [] -> do
                 -- 3. Patch ExUnits THEN balance.
                 --    This way balanceTx sees the
