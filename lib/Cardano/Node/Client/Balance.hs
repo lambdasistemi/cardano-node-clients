@@ -20,6 +20,7 @@ and this module adds the fee delta.
 module Cardano.Node.Client.Balance (
     -- * Balancing
     balanceTx,
+    BalanceResult (..),
     balanceFeeLoop,
 
     -- * Script helpers
@@ -78,6 +79,15 @@ import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
 
+{- | Result of 'balanceTx'. Carries the balanced
+transaction and the index of the change output
+(always the last output appended by 'balanceTx').
+-}
+data BalanceResult = BalanceResult
+    { balancedTx :: !(Tx ConwayEra)
+    , changeIndex :: !Int
+    }
+
 -- | Errors from 'balanceTx'.
 data BalanceError
     = -- | @InsufficientFee required available@
@@ -108,7 +118,7 @@ balanceTx ::
     Addr ->
     -- | Unbalanced transaction
     Tx ConwayEra ->
-    Either BalanceError (Tx ConwayEra)
+    Either BalanceError BalanceResult
 balanceTx pp inputUtxos changeAddr tx =
     let body = tx ^. bodyTxL
         inputCoin =
@@ -191,7 +201,15 @@ balanceTx pp inputUtxos changeAddr tx =
                                     fee
                                     inputCoin
                                 )
-                        else Right (buildTx fee)
+                        else
+                            let result = buildTx fee
+                                chIdx =
+                                    length origOutputs
+                             in Right
+                                    ( BalanceResult
+                                        result
+                                        chIdx
+                                    )
 
 {- | Output function rejected the fee, or the
 iteration did not converge.

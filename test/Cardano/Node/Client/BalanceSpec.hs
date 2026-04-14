@@ -64,6 +64,7 @@ import PlutusCore.Data qualified as PLC
 
 import Cardano.Node.Client.Balance (
     BalanceError (..),
+    BalanceResult (..),
     balanceTx,
     computeScriptIntegrity,
     placeholderExUnits,
@@ -280,7 +281,7 @@ balanceTxSpec =
                 template of
                 Left err ->
                     expectationFailure (show err)
-                Right tx -> do
+                Right BalanceResult{balancedTx = tx} -> do
                     let fee = tx ^. bodyTxL . feeTxBodyL
                         Coin exactFee =
                             getMinFeeTx pp tx 0

@@ -50,6 +50,7 @@ import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
 
 import Cardano.Node.Client.Balance (
+    BalanceResult (..),
     balanceTx,
     computeScriptIntegrity,
  )
@@ -158,4 +159,4 @@ evaluateAndBalance lang prov pp inputUtxos changeAddr tx =
                 error $
                     "evaluateAndBalance: "
                         <> show err
-            Right balanced -> pure balanced
+            Right br -> pure (balancedTx br)

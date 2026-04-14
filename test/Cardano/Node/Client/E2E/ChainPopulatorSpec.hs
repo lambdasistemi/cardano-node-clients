@@ -14,7 +14,7 @@ import Cardano.Ledger.Api.Tx.Out (TxOut)
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams, extractHash)
 import Cardano.Ledger.TxIn (TxId (..), TxIn, mkTxInPartial)
-import Cardano.Node.Client.Balance (balanceTx)
+import Cardano.Node.Client.Balance (BalanceResult (..), balanceTx)
 import Cardano.Node.Client.E2E.ChainPopulator (
     ChainPopulator (..),
     PopulatorNext (..),
@@ -87,7 +87,7 @@ buildTxChain pp utxo n =
         (mkBasicTx mkBasicTxBody) of
         Left err ->
             error $ "buildTxChain: " <> show err
-        Right tx ->
+        Right BalanceResult{balancedTx = tx} ->
             let (rest, finalUtxo) =
                     buildTxChain pp (changeOutput tx) (n - 1)
              in (tx : rest, finalUtxo)

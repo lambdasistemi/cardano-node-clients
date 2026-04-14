@@ -92,7 +92,7 @@ import Control.Monad.Operational (
     view,
  )
 import Data.ByteString qualified as BS
-import Data.Foldable (foldl')
+import Data.Foldable (foldl', toList)
 import Data.Functor.Identity (
     runIdentity,
  )
@@ -194,6 +194,7 @@ import Cardano.Ledger.Plutus.Language (
 import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Balance (
     BalanceError,
+    BalanceResult (..),
     balanceTx,
     evalBudgetExUnits,
  )
@@ -376,8 +377,6 @@ payTo addr val = do
          in case elemIndex target (toList outs) of
                 Just i -> Ok (fromIntegral i)
                 Nothing -> Iterate 0
-  where
-    toList = foldr (:) []
 
 -- | Add a raw output. Returns the output index.
 output ::
@@ -389,8 +388,6 @@ output txOut = do
          in case elemIndex txOut (toList outs) of
                 Just i -> Ok (fromIntegral i)
                 Nothing -> Iterate 0
-  where
-    toList = foldr (:) []
 
 {- | Pay value with a typed inline datum.
 Returns the output index.
@@ -417,8 +414,6 @@ payTo' addr val datum = do
          in case elemIndex target (toList outs) of
                 Just i -> Ok (fromIntegral i)
                 Nothing -> Iterate 0
-  where
-    toList = foldr (:) []
 
 {- | Mint or burn tokens. Positive = mint,
 negative = burn. Zero-amount entries are skipped.
@@ -1015,7 +1010,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                             Left $
                                                 BalanceFailed
                                                     err
-                                    Right balanced -> do
+                                    Right BalanceResult{balancedTx = balanced} -> do
                                         let finalFee =
                                                 balanced
                                                     ^. bodyTxL
@@ -1067,7 +1062,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                         pure $
                             Left $
                                 BalanceFailed err
-                    Right balanced -> do
+                    Right BalanceResult{balancedTx = balanced, changeIndex = chIx} -> do
                         let finalFee =
                                 balanced
                                     ^. bodyTxL
@@ -1085,6 +1080,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                         -- so Peek sees
                                         -- the right fee.
                                         case bumpFee
+                                            chIx
                                             balanced
                                             newMax of
                                             Left msg ->
@@ -1141,6 +1137,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                         bisect
                                             st
                                             evalResult
+                                            chIx
                                             balanced
                                             lo
                                             hi
@@ -1156,11 +1153,11 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
 
     -- \| Binary search for the smallest fee where
     -- eval passes. lo fails eval, hi passes.
-    bisect st evalResult templateTx lo hi
+    bisect st evalResult chIx templateTx lo hi
         | unCoin hi <= unCoin lo + 1 =
             -- hi is the smallest valid fee.
             -- Build final tx with hi.
-            finalize st evalResult templateTx hi
+            finalize st evalResult chIx templateTx hi
         | otherwise = do
             let mid =
                     Coin $
@@ -1168,7 +1165,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             + (unCoin hi - unCoin lo)
                                 `div` 2
             -- Re-interpret with mid fee
-            case bumpFee templateTx mid of
+            case bumpFee chIx templateTx mid of
                 Left msg ->
                     pure $ Left $ BumpFeeFailed msg
                 Right midTx -> do
@@ -1196,11 +1193,12 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             bisect
                                 st
                                 evalResult
+                                chIx
                                 templateTx
                                 mid
                                 hi
-                        Right balanced ->
-                            case bumpFee balanced mid of
+                        Right BalanceResult{balancedTx = balanced, changeIndex = chIx'} ->
+                            case bumpFee chIx' balanced mid of
                                 Left msg ->
                                     pure $
                                         Left $
@@ -1223,6 +1221,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                             bisect
                                                 st'
                                                 evalResult'
+                                                chIx'
                                                 midBal
                                                 lo
                                                 mid
@@ -1230,6 +1229,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                             bisect
                                                 st
                                                 evalResult
+                                                chIx
                                                 templateTx
                                                 mid
                                                 hi
@@ -1241,7 +1241,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
     -- If balanceTx lowered the fee (it computes
     -- min_fee), bump it back and shrink the change
     -- output to compensate.
-    finalize _st evalResult _templateTx fee = do
+    finalize _st evalResult _chIx _templateTx fee = do
         -- Re-interpret with the chosen fee
         let feeTx =
                 mkBasicTx mkBasicTxBody
@@ -1264,14 +1264,14 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
             patched of
             Left err ->
                 pure $ Left $ BalanceFailed err
-            Right balanced -> do
+            Right BalanceResult{balancedTx = balanced, changeIndex = chIx} -> do
                 let balFee =
                         balanced
                             ^. bodyTxL . feeTxBodyL
                     eFinal =
                         if balFee == fee
                             then Right balanced
-                            else bumpFee balanced fee
+                            else bumpFee chIx balanced fee
                 case eFinal of
                     Left msg ->
                         pure $
@@ -1326,8 +1326,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                     .~ integrity
 
 {- | Bump fee from what balanceTx set to a higher
-target, reducing the last output (change) to
-compensate.
+target, reducing the change output to compensate.
 
 When bisection finds a fee > min_fee,
 balanceTx sets fee = min_fee and puts the
@@ -1335,42 +1334,52 @@ excess into the change output. This function
 moves the difference back: increase fee,
 decrease change.
 
-Pre-condition: outputs must be non-empty (the
-last one is the change output added by
-balanceTx).
+The change output is identified by index
+(from 'BalanceResult'), not by position.
 -}
 bumpFee ::
+    -- | Change output index
+    Int ->
     Tx ConwayEra ->
     Coin ->
     Either String (Tx ConwayEra)
-bumpFee tx targetFee =
+bumpFee chIdx tx targetFee =
     let currentFee = tx ^. bodyTxL . feeTxBodyL
         diff = unCoin targetFee - unCoin currentFee
         outs =
-            foldr
-                (:)
-                []
+            toList
                 (tx ^. bodyTxL . outputsTxBodyL)
-     in case reverse outs of
-            [] ->
-                Left "bumpFee: no outputs"
-            (changeOut : rest) ->
-                let Coin changeVal =
-                        changeOut ^. coinTxOutL
-                    adjusted =
-                        changeOut
-                            & coinTxOutL
-                                .~ Coin
-                                    (changeVal - diff)
-                    newOuts =
-                        StrictSeq.fromList
-                            (reverse (adjusted : rest))
-                 in Right $
-                        tx
-                            & bodyTxL . feeTxBodyL
-                                .~ targetFee
-                            & bodyTxL . outputsTxBodyL
-                                .~ newOuts
+     in if chIdx < 0 || chIdx >= length outs
+            then
+                Left
+                    "bumpFee: change index \
+                    \out of range"
+            else case splitAt chIdx outs of
+                (_, []) ->
+                    Left
+                        "bumpFee: change index \
+                        \out of range"
+                (before, changeOut : after) ->
+                    let Coin changeVal =
+                            changeOut ^. coinTxOutL
+                        adjusted =
+                            changeOut
+                                & coinTxOutL
+                                    .~ Coin
+                                        (changeVal - diff)
+                        newOuts =
+                            StrictSeq.fromList
+                                ( before
+                                    ++ [adjusted]
+                                    ++ after
+                                )
+                     in Right $
+                            tx
+                                & bodyTxL . feeTxBodyL
+                                    .~ targetFee
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ newOuts
 
 -- ----------------------------------------------------
 -- Internal helpers
