@@ -239,10 +239,10 @@ computeScriptIntegritySpec =
 placeholderExUnitsSpec :: Spec
 placeholderExUnitsSpec =
     describe "placeholderExUnits" $
-        it "has max-budget mem and steps" $ do
+        it "has zero mem and steps" $ do
             let ExUnits mem steps = placeholderExUnits
-            mem `shouldBe` 14_000_000
-            steps `shouldBe` 10_000_000_000
+            mem `shouldBe` 0
+            steps `shouldBe` 0
 
 -- -----------------------------------------------------------
 -- balanceTx

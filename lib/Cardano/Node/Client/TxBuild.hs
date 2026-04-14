@@ -195,6 +195,7 @@ import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Balance (
     BalanceError,
     balanceTx,
+    evalBudgetExUnits,
     placeholderExUnits,
  )
 import Cardano.Slotting.Slot (SlotNo)
@@ -925,7 +926,38 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
         -- 2. Eval (no change output; scripts that
         --    check conservation use tx.fee which
         --    matches Peek-computed outputs).
-        evalResult <- evaluateTx txForEval
+        --    Inflate redeemer ExUnits to max budget
+        --    so the evaluator gives scripts enough
+        --    room to execute. The real ExUnits come
+        --    back in evalResult.
+        let Redeemers evalRdmrs =
+                txForEval ^. witsTxL . rdmrsTxWitsL
+            inflated =
+                Redeemers $
+                    fmap
+                        (\(d, _) -> (d, evalBudgetExUnits))
+                        evalRdmrs
+            budgetIntegrity =
+                if Map.null evalRdmrs
+                    then SNothing
+                    else
+                        hashScriptIntegrity
+                            ( Set.singleton
+                                ( getLanguageView
+                                    pp
+                                    PlutusV3
+                                )
+                            )
+                            inflated
+                            (TxDats mempty)
+            txForEvalBudget =
+                txForEval
+                    & witsTxL . rdmrsTxWitsL
+                        .~ inflated
+                    & bodyTxL
+                        . scriptIntegrityHashTxBodyL
+                        .~ budgetIntegrity
+        evalResult <- evaluateTx txForEvalBudget
         let failures =
                 [ (p, e)
                 | (p, Left e) <-
