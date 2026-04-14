@@ -1099,6 +1099,55 @@ buildSpec =
                     expectationFailure
                         "expected EvalFailure, got Right"
 
+        it "re-iterates when Peek has not converged" $ do
+            -- Peek returns Iterate on the first pass,
+            -- Ok on the second. The build loop must
+            -- not stop after the first fee convergence.
+            passRef <- newIORef (0 :: Int)
+            let pp =
+                    emptyPParams
+                        & ppMinFeeAL .~ Coin 44
+                        & ppMinFeeBL .~ Coin 155381
+                feeUtxo =
+                    ( mkTxIn 1
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                prog :: TxBuild TestQ TestErr ()
+                prog = do
+                    _ <- peek $ \tx -> do
+                        let Coin f =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                        if f > 0
+                            then Ok (Coin f)
+                            else Iterate (Coin 0)
+                    pure ()
+                interpret =
+                    InterpretIO $ \case
+                        RecordFee _ -> do
+                            modifyIORef' passRef (+ 1)
+                            pure ()
+                mockEval _tx = pure Map.empty
+            result <-
+                build
+                    pp
+                    interpret
+                    mockEval
+                    [feeUtxo]
+                    (mkAddr 1)
+                    prog
+            case result of
+                Left err ->
+                    expectationFailure $ show err
+                Right tx -> do
+                    let Coin fee =
+                            tx
+                                ^. bodyTxL . feeTxBodyL
+                    fee `shouldSatisfy` (> 0)
+
         it "re-interprets outputs after a fee oscillation" $ do
             feeHistoryRef <- newIORef []
             let pp =
