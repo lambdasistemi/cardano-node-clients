@@ -383,9 +383,11 @@ instance ToData RawPlutusData where
 
 goldenBuildPParams :: PParams ConwayEra
 goldenBuildPParams =
-    emptyPParams
+    emptyPParams @ConwayEra
         & ppMaxTxSizeL .~ 16_384
-        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+        & ppTxFeePerByteL
+            .~ CoinPerByte
+                (compactCoinOrError (Coin 44))
         & ppTxFeeFixedL .~ Coin 155_381
         & ppCoinsPerUTxOByteL
             .~ CoinPerByte

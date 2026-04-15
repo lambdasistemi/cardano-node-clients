@@ -22,10 +22,10 @@ import Data.Set qualified as Set
 import Test.Hspec
 
 import Cardano.Ledger.Address (
-    AccountAddress,
+    AccountId (..),
+    AccountAddress (..),
     Addr (..),
     Withdrawals (..),
-    pattern RewardAccount,
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
@@ -39,7 +39,6 @@ import Cardano.Ledger.Api.PParams (
     ppTxFeePerByteL,
  )
 import Cardano.Ledger.Api.Tx (
-    Tx,
     auxDataTxL,
     witsTxL,
  )
@@ -104,7 +103,10 @@ import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
  )
-import Cardano.Node.Client.Balance (balanceTx)
+import Cardano.Node.Client.Balance (
+    BalanceResult (..),
+    balanceTx,
+ )
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxBuild
 import Cardano.Slotting.Slot (SlotNo (..))
@@ -172,15 +174,15 @@ mkWitnessKeyHash n =
 
 mkRewardAccount :: Word8 -> AccountAddress
 mkRewardAccount n =
-    RewardAccount
+    AccountAddress
         Testnet
-        (KeyHashObj (KeyHash (mkHash28 n)))
+        (AccountId (KeyHashObj (KeyHash (mkHash28 n))))
 
 mkScriptRewardAccount :: Word8 -> AccountAddress
 mkScriptRewardAccount n =
-    RewardAccount
+    AccountAddress
         Testnet
-        (ScriptHashObj (ScriptHash (mkHash28 n)))
+        (AccountId (ScriptHashObj (ScriptHash (mkHash28 n))))
 
 -- --------------------------------------------------
 -- Spec
@@ -573,10 +575,10 @@ validSpec =
         it "fails checkMinUtxo when an output is below the threshold" $
             do
                 let pp =
-                        emptyPParams
+                        emptyPParams @ConwayEra
                             & ppCoinsPerUTxOByteL
                                 .~ CoinPerByte
-                                    (Coin 1)
+                                    (compactCoinOrError (Coin 1))
                     prog :: TxBuild TestQ TestErr ()
                     prog = do
                         _ <- spend (mkTxIn 1)
@@ -863,13 +865,15 @@ buildSpec =
                 -- Refund = inputVal - tip - fee.
                 -- Tip is fixed, fee is what Peek reads.
                 let pp =
-                        emptyPParams
+                        emptyPParams @ConwayEra
                             & ppMaxTxSizeL .~ 16384
-                            & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                            & ppTxFeePerByteL
+                                .~ CoinPerByte
+                                    (compactCoinOrError (Coin 44))
                             & ppTxFeeFixedL .~ Coin 155381
                             & ppCoinsPerUTxOByteL
                                 .~ CoinPerByte
-                                    (Coin 4310)
+                                    (compactCoinOrError (Coin 4310))
                     tip = 1_000_000
                     inputVal = 5_000_000
                     scriptUtxo =
@@ -1001,8 +1005,10 @@ buildSpec =
         it "retries with an estimated fee after eval failure" $ do
             feeHistoryRef <- newIORef []
             let pp =
-                    emptyPParams
-                        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
                         & ppTxFeeFixedL .~ Coin 155381
                 feeUtxo =
                     ( mkTxIn 1
@@ -1059,8 +1065,10 @@ buildSpec =
 
         it "surfaces terminal eval failure instead of retrying" $ do
             let pp =
-                    emptyPParams
-                        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
                         & ppTxFeeFixedL .~ Coin 155381
                 feeUtxo =
                     ( mkTxIn 1
@@ -1111,8 +1119,10 @@ buildSpec =
             -- not stop after the first fee convergence.
             passRef <- newIORef (0 :: Int)
             let pp =
-                    emptyPParams
-                        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
                         & ppTxFeeFixedL .~ Coin 155381
                 feeUtxo =
                     ( mkTxIn 1
@@ -1136,6 +1146,8 @@ buildSpec =
                         RecordFee _ -> do
                             modifyIORef' passRef (+ 1)
                             pure ()
+                        GetValue ->
+                            pure 0
                 mockEval _tx = pure Map.empty
             result <-
                 build
@@ -1157,8 +1169,10 @@ buildSpec =
         it "re-interprets outputs after a fee oscillation" $ do
             feeHistoryRef <- newIORef []
             let pp =
-                    emptyPParams
-                        & ppTxFeePerByteL .~ CoinPerByte (Coin 10)
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 10))
                         & ppTxFeeFixedL .~ Coin 0
                         & ppMaxTxSizeL .~ 100_000
                 feeUtxo =
@@ -1195,7 +1209,7 @@ buildSpec =
                         Left err ->
                             expectationFailure (show err)
                                 >> pure (Coin 0)
-                        Right tx ->
+                        Right BalanceResult{balancedTx = tx} ->
                             pure $
                                 tx
                                     ^. bodyTxL
@@ -1286,19 +1300,28 @@ buildSpec =
                         pure ()
                 bumped =
                     bumpFee
+                        1
                         (tx & bodyTxL . feeTxBodyL .~ Coin 200)
                         (Coin 500)
                 outs =
-                    toList $
-                        bumped
-                            ^. bodyTxL
-                                . outputsTxBodyL
-            bumped ^. bodyTxL . feeTxBodyL
-                `shouldBe` Coin 500
-            map (^. coinTxOutL) outs
-                `shouldBe` [ Coin 3_000_000
-                           , Coin 6_999_700
-                           ]
+                    case bumped of
+                        Left err ->
+                            error err
+                        Right tx' ->
+                            toList $
+                                tx'
+                                    ^. bodyTxL
+                                        . outputsTxBodyL
+            case bumped of
+                Left err ->
+                    expectationFailure err
+                Right tx' -> do
+                    tx' ^. bodyTxL . feeTxBodyL
+                        `shouldBe` Coin 500
+                    map (^. coinTxOutL) outs
+                        `shouldBe` [ Coin 3_000_000
+                                   , Coin 6_999_700
+                                   ]
 
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
@@ -1322,13 +1345,13 @@ runDraftWith ::
     TxBuild q e a ->
     (ConwayTx, a)
 runDraftWith interpret prog =
-    let initialTx = draft emptyPParams (pure ())
+    let initialTx = draft (emptyPParams @ConwayEra) (pure ())
         (st1, _, _) =
             interpretWith interpret initialTx prog
-        tx1 = assembleTx emptyPParams st1
+        tx1 = assembleTx (emptyPParams @ConwayEra) st1
         (st2, a, _) =
             interpretWith interpret tx1 prog
-     in (assembleTx emptyPParams st2, a)
+     in (assembleTx (emptyPParams @ConwayEra) st2, a)
 
 noCtxInterpret :: Interpret q
 noCtxInterpret =

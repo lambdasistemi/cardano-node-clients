@@ -40,7 +40,9 @@ import Cardano.Ledger.BaseTypes (
 import Cardano.Ledger.Coin (
     Coin (..),
     CoinPerByte (..),
+    compactCoinOrError,
  )
+import Cardano.Ledger.Compactible (fromCompact)
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
@@ -258,7 +260,9 @@ balanceTxSpec =
         it "uses getMinFeeTx plus VKey padding" $ do
             let pp =
                     emptyPParams @ConwayEra
-                        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
                         & ppTxFeeFixedL .~ Coin 155381
                 inputUtxos =
                     [
@@ -288,7 +292,9 @@ balanceTxSpec =
                     let fee = tx ^. bodyTxL . feeTxBodyL
                         Coin exactFee =
                             getMinFeeTx pp tx 0
-                        CoinPerByte (Coin feePerByte) =
+                        Coin feePerByte =
+                            fromCompact $
+                                unCoinPerByte $
                             pp ^. ppTxFeePerByteL
                         expectedFee =
                             Coin (exactFee + 106 * feePerByte)
@@ -305,7 +311,9 @@ balanceTxSpec =
         it "returns InsufficientFee when exact fee exceeds available input" $ do
             let pp =
                     emptyPParams @ConwayEra
-                        & ppTxFeePerByteL .~ CoinPerByte (Coin 200)
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 200))
                         & ppTxFeeFixedL .~ Coin 200_000
                 inputUtxos =
                     [
