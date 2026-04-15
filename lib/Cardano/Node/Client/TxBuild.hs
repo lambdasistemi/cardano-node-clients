@@ -1096,6 +1096,8 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                                     bumped
                                     else
                                         if not peekConverged
+                                            && finalFee
+                                                > Coin 0
                                             then
                                                 -- Fee converged
                                                 -- but Peek has
