@@ -26,7 +26,6 @@ import Cardano.Crypto.DSIGN (
     SignKeyDSIGN,
  )
 import Cardano.Ledger.Address (Addr)
-import Cardano.Ledger.Api.Tx (Tx)
 import Cardano.Ledger.Api.Tx.Out (TxOut)
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
@@ -34,6 +33,7 @@ import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.E2E.Setup (
     addKeyWitness,
  )
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.N2C.ChainSync (
     Fetched (..),
     HeaderPoint,
@@ -95,13 +95,13 @@ data PopulatorNext
     = {- | Submit these transactions and continue
       with the next populator state.
       -}
-      Continue [Tx ConwayEra] ChainPopulator
+      Continue [ConwayTx] ChainPopulator
     | {- | Submit these final transactions, then
       deliver the accumulated blocks (or error)
       to the callback.
       -}
       Close
-        [Tx ConwayEra]
+        [ConwayTx]
         (Either SomeException [Block] -> IO ())
 
 {- | Run a chain populator against a devnet node.
@@ -240,7 +240,7 @@ populateChain socketPath magic addr signKey mkPopulator = do
 signAndSubmit ::
     Submitter IO ->
     SignKeyDSIGN Ed25519DSIGN ->
-    Tx ConwayEra ->
+    ConwayTx ->
     IO ()
 signAndSubmit submitter signKey tx = do
     let signed = addKeyWitness signKey tx

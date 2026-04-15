@@ -87,6 +87,9 @@ withCardanoNode srcGenesis action = do
         $ \_ -> do
             let sock = tmpDir </> "node.sock"
             waitForSocket sock 300
+            -- cardano-node 10.7.0 can create the socket
+            -- before the local server is ready to accept.
+            threadDelay 1_000_000
             action sock startMs
                 `onException` dumpNodeLog
                     (tmpDir </> "node.log")
@@ -114,6 +117,7 @@ prepareTmpDir srcGenesis startTime = do
                 (tmpDir </> name)
     cp "alonzo-genesis.json"
     cp "conway-genesis.json"
+    cp "dijkstra-genesis.json"
     cp "node-config.json"
     cp "topology.json"
     -- Patch genesis start times
