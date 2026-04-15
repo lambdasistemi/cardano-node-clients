@@ -22,9 +22,10 @@ import Data.Set qualified as Set
 import Test.Hspec
 
 import Cardano.Ledger.Address (
+    AccountAddress,
     Addr (..),
-    RewardAccount (..),
     Withdrawals (..),
+    pattern RewardAccount,
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
@@ -34,8 +35,8 @@ import Cardano.Ledger.Api.PParams (
     emptyPParams,
     ppCoinsPerUTxOByteL,
     ppMaxTxSizeL,
-    ppMinFeeAL,
-    ppMinFeeBL,
+    ppTxFeeFixedL,
+    ppTxFeePerByteL,
  )
 import Cardano.Ledger.Api.Tx (
     Tx,
@@ -66,7 +67,10 @@ import Cardano.Ledger.BaseTypes (
     StrictMaybe (SJust),
     TxIx (..),
  )
-import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Coin (
+    Coin (..),
+    compactCoinOrError,
+ )
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
@@ -87,7 +91,7 @@ import Cardano.Ledger.Hashes (
  )
 import Cardano.Ledger.Keys (
     KeyHash (..),
-    KeyRole (Witness),
+    KeyRole (Guard),
  )
 import Cardano.Ledger.Mary.Value (
     AssetName (..),
@@ -101,6 +105,7 @@ import Cardano.Ledger.TxIn (
     TxIn (..),
  )
 import Cardano.Node.Client.Balance (balanceTx)
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxBuild
 import Cardano.Slotting.Slot (SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
@@ -161,17 +166,17 @@ mkPolicyId n =
         Cardano.Ledger.Hashes.ScriptHash $
             mkHash28 n
 
-mkWitnessKeyHash :: Word8 -> KeyHash 'Witness
+mkWitnessKeyHash :: Word8 -> KeyHash Guard
 mkWitnessKeyHash n =
     KeyHash (mkHash28 n)
 
-mkRewardAccount :: Word8 -> RewardAccount
+mkRewardAccount :: Word8 -> AccountAddress
 mkRewardAccount n =
     RewardAccount
         Testnet
         (KeyHashObj (KeyHash (mkHash28 n)))
 
-mkScriptRewardAccount :: Word8 -> RewardAccount
+mkScriptRewardAccount :: Word8 -> AccountAddress
 mkScriptRewardAccount n =
     RewardAccount
         Testnet
@@ -658,7 +663,8 @@ validSpec =
             let pp =
                     emptyPParams
                         & ppCoinsPerUTxOByteL
-                            .~ CoinPerByte (Coin 1)
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 1))
                 prog :: TxBuild TestQ TestErr ()
                 prog = do
                     _ <- spend (mkTxIn 1)
@@ -859,8 +865,8 @@ buildSpec =
                 let pp =
                         emptyPParams
                             & ppMaxTxSizeL .~ 16384
-                            & ppMinFeeAL .~ Coin 44
-                            & ppMinFeeBL .~ Coin 155381
+                            & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                            & ppTxFeeFixedL .~ Coin 155381
                             & ppCoinsPerUTxOByteL
                                 .~ CoinPerByte
                                     (Coin 4310)
@@ -996,8 +1002,8 @@ buildSpec =
             feeHistoryRef <- newIORef []
             let pp =
                     emptyPParams
-                        & ppMinFeeAL .~ Coin 44
-                        & ppMinFeeBL .~ Coin 155381
+                        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                        & ppTxFeeFixedL .~ Coin 155381
                 feeUtxo =
                     ( mkTxIn 1
                     , mkBasicTxOut
@@ -1054,8 +1060,8 @@ buildSpec =
         it "surfaces terminal eval failure instead of retrying" $ do
             let pp =
                     emptyPParams
-                        & ppMinFeeAL .~ Coin 44
-                        & ppMinFeeBL .~ Coin 155381
+                        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                        & ppTxFeeFixedL .~ Coin 155381
                 feeUtxo =
                     ( mkTxIn 1
                     , mkBasicTxOut
@@ -1106,8 +1112,8 @@ buildSpec =
             passRef <- newIORef (0 :: Int)
             let pp =
                     emptyPParams
-                        & ppMinFeeAL .~ Coin 44
-                        & ppMinFeeBL .~ Coin 155381
+                        & ppTxFeePerByteL .~ CoinPerByte (Coin 44)
+                        & ppTxFeeFixedL .~ Coin 155381
                 feeUtxo =
                     ( mkTxIn 1
                     , mkBasicTxOut
@@ -1152,8 +1158,8 @@ buildSpec =
             feeHistoryRef <- newIORef []
             let pp =
                     emptyPParams
-                        & ppMinFeeAL .~ Coin 10
-                        & ppMinFeeBL .~ Coin 0
+                        & ppTxFeePerByteL .~ CoinPerByte (Coin 10)
+                        & ppTxFeeFixedL .~ Coin 0
                         & ppMaxTxSizeL .~ 100_000
                 feeUtxo =
                     ( mkTxIn 1
@@ -1308,13 +1314,13 @@ isMint _ = False
 program's result.
 -}
 runDraft ::
-    TxBuild q e a -> (Tx ConwayEra, a)
+    TxBuild q e a -> (ConwayTx, a)
 runDraft = runDraftWith noCtxInterpret
 
 runDraftWith ::
     Interpret q ->
     TxBuild q e a ->
-    (Tx ConwayEra, a)
+    (ConwayTx, a)
 runDraftWith interpret prog =
     let initialTx = draft emptyPParams (pure ())
         (st1, _, _) =

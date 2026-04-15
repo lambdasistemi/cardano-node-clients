@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
@@ -92,7 +93,7 @@ import Control.Monad.Operational (
     view,
  )
 import Data.ByteString qualified as BS
-import Data.Foldable (foldl', toList)
+import Data.Foldable (toList)
 import Data.Functor.Identity (
     runIdentity,
  )
@@ -106,20 +107,17 @@ import Data.Word (Word32, Word64)
 import Numeric.Natural (Natural)
 
 import Cardano.Ledger.Address (
+    AccountAddress,
     Addr,
-    RewardAccount,
     Withdrawals (..),
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
-import Cardano.Ledger.Alonzo.PParams (getLanguageView)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
-import Cardano.Ledger.Alonzo.Tx (hashScriptIntegrity)
 import Cardano.Ledger.Alonzo.TxBody (
     scriptIntegrityHashTxBodyL,
  )
 import Cardano.Ledger.Alonzo.TxWits (
     Redeemers (..),
-    TxDats (..),
  )
 import Cardano.Ledger.Api.PParams (ppMaxTxSizeL)
 import Cardano.Ledger.Api.Scripts.Data (
@@ -128,7 +126,6 @@ import Cardano.Ledger.Api.Scripts.Data (
     dataToBinaryData,
  )
 import Cardano.Ledger.Api.Tx (
-    Tx,
     auxDataTxL,
     bodyTxL,
     estimateMinFeeTx,
@@ -196,8 +193,10 @@ import Cardano.Node.Client.Balance (
     BalanceError,
     BalanceResult (..),
     balanceTx,
+    computeScriptIntegrity,
     evalBudgetExUnits,
  )
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo)
 import Lens.Micro ((&), (.~), (^.))
 import PlutusCore.Data qualified as PLC
@@ -292,7 +291,7 @@ data TxInstr q e a where
         TxInstr q e ()
     -- | Withdraw stake rewards.
     Withdraw ::
-        RewardAccount ->
+        AccountAddress ->
         Coin ->
         WithdrawWitness ->
         TxInstr q e ()
@@ -303,7 +302,7 @@ data TxInstr q e a where
         TxInstr q e ()
     -- | Require a key signature.
     ReqSignature ::
-        KeyHash 'Witness -> TxInstr q e ()
+        KeyHash Guard -> TxInstr q e ()
     -- | Attach a Plutus script.
     AttachScript ::
         Script ConwayEra -> TxInstr q e ()
@@ -313,11 +312,11 @@ data TxInstr q e a where
     SetValidTo :: SlotNo -> TxInstr q e ()
     -- | Peek at the final Tx (fixpoint).
     Peek ::
-        (Tx ConwayEra -> Convergence a) ->
+        (ConwayTx -> Convergence a) ->
         TxInstr q e a
     -- | Validate the final Tx after convergence.
     Valid ::
-        (Tx ConwayEra -> Check e) ->
+        (ConwayTx -> Check e) ->
         TxInstr q e ()
     -- | Query external context.
     Ctx :: q a -> TxInstr q e a
@@ -436,14 +435,14 @@ mint pid assets r =
         ]
 
 -- | Withdraw stake rewards from a pub-key account.
-withdraw :: RewardAccount -> Coin -> TxBuild q e ()
+withdraw :: AccountAddress -> Coin -> TxBuild q e ()
 withdraw rewardAccount amount =
     singleton $ Withdraw rewardAccount amount PubKeyWithdraw
 
 -- | Withdraw stake rewards from a script-backed account.
 withdrawScript ::
     (ToData r) =>
-    RewardAccount ->
+    AccountAddress ->
     Coin ->
     r ->
     TxBuild q e ()
@@ -468,7 +467,7 @@ validTo = singleton . SetValidTo
 
 -- | Require a key signature.
 requireSignature ::
-    KeyHash 'Witness -> TxBuild q e ()
+    KeyHash Guard -> TxBuild q e ()
 requireSignature = singleton . ReqSignature
 
 -- | Attach a Plutus script to the transaction.
@@ -477,13 +476,13 @@ attachScript = singleton . AttachScript
 
 -- | Peek at the final assembled Tx.
 peek ::
-    (Tx ConwayEra -> Convergence a) ->
+    (ConwayTx -> Convergence a) ->
     TxBuild q e a
 peek = singleton . Peek
 
 -- | Validate the final converged transaction.
 valid ::
-    (Tx ConwayEra -> Check e) ->
+    (ConwayTx -> Check e) ->
     TxBuild q e ()
 valid = singleton . Valid
 
@@ -547,14 +546,14 @@ data TxState e = TxState
           )
         ]
     , tsWithdrawals ::
-        [(RewardAccount, Coin, WithdrawWitness)]
+        [(AccountAddress, Coin, WithdrawWitness)]
     , tsMetadata :: Map Word64 Metadatum
-    , tsSigners :: Set (KeyHash 'Witness)
+    , tsSigners :: Set (KeyHash Guard)
     , tsScripts ::
         Map ScriptHash (Script ConwayEra)
     , tsValidFrom :: StrictMaybe SlotNo
     , tsValidTo :: StrictMaybe SlotNo
-    , tsChecks :: [Tx ConwayEra -> Check e]
+    , tsChecks :: [ConwayTx -> Check e]
     }
 
 emptyState :: TxState e
@@ -579,7 +578,7 @@ The 'Tx' argument resolves 'Peek' nodes.
 -}
 interpretWith ::
     Interpret q ->
-    Tx ConwayEra ->
+    ConwayTx ->
     TxBuild q e a ->
     -- | (state, result, all converged?)
     (TxState e, a, Bool)
@@ -593,7 +592,7 @@ interpretWith interpret currentTx prog =
 interpretWithM ::
     (Monad m) =>
     (forall x. q x -> m x) ->
-    Tx ConwayEra ->
+    ConwayTx ->
     TxBuild q e a ->
     m (TxState e, a, Bool)
 interpretWithM runCtx currentTx = go emptyState True
@@ -712,7 +711,7 @@ interpretWithM runCtx currentTx = go emptyState True
             go st conv (k a)
 
 -- | Assemble a 'Tx' from interpreter state.
-assembleTx :: PParams ConwayEra -> TxState e -> Tx ConwayEra
+assembleTx :: PParams ConwayEra -> TxState e -> ConwayTx
 assembleTx = assembleTxWith Set.empty
 
 {- | Assemble with extra input TxIns (e.g. fee UTxO).
@@ -720,7 +719,7 @@ These are included in the input set for correct
 spending index computation but don't get redeemers.
 -}
 assembleTxWith ::
-    Set.Set TxIn -> PParams ConwayEra -> TxState e -> Tx ConwayEra
+    Set.Set TxIn -> PParams ConwayEra -> TxState e -> ConwayTx
 assembleTxWith extraIns pp st =
     let
         allSpendIns =
@@ -765,12 +764,10 @@ assembleTxWith extraIns pp st =
             if null rdmrList
                 then SNothing
                 else
-                    hashScriptIntegrity
-                        ( Set.singleton
-                            (getLanguageView pp PlutusV3)
-                        )
+                    computeScriptIntegrity
+                        PlutusV3
+                        pp
                         allRdmrs
-                        (TxDats mempty)
         body =
             mkBasicTxBody
                 & inputsTxBodyL .~ allSpendIns
@@ -813,7 +810,7 @@ nodes see the draft Tx on a second internal pass.
 draft ::
     PParams ConwayEra ->
     TxBuild q e a ->
-    Tx ConwayEra
+    ConwayTx
 draft pp = draftWith pp noCtxInterpret
 
 noCtxInterpret :: Interpret q
@@ -827,7 +824,7 @@ draftWith ::
     PParams ConwayEra ->
     Interpret q ->
     TxBuild q e a ->
-    Tx ConwayEra
+    ConwayTx
 draftWith pp interpret prog =
     let
         -- Pass 1: collect steps with bogus Tx
@@ -873,7 +870,7 @@ build ::
     PParams ConwayEra ->
     InterpretIO q ->
     -- | Script evaluator
-    ( Tx ConwayEra ->
+    ( ConwayTx ->
       IO
         ( Map
             ( ConwayPlutusPurpose
@@ -888,7 +885,7 @@ build ::
     -- | Change address
     Addr ->
     TxBuild q e a ->
-    IO (Either (BuildError e) (Tx ConwayEra))
+    IO (Either (BuildError e) ConwayTx)
 build pp interpret evaluateTx inputUtxos changeAddr prog =
     step Set.empty (Coin 0) 0 (mkBasicTx mkBasicTxBody)
   where
@@ -939,15 +936,10 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                 if Map.null evalRdmrs
                     then SNothing
                     else
-                        hashScriptIntegrity
-                            ( Set.singleton
-                                ( getLanguageView
-                                    pp
-                                    PlutusV3
-                                )
-                            )
+                        computeScriptIntegrity
+                            PlutusV3
+                            pp
                             inflated
-                            (TxDats mempty)
             txForEvalBudget =
                 txForEval
                     & witsTxL . rdmrsTxWitsL
@@ -1311,15 +1303,10 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                 if Map.null patched
                     then SNothing
                     else
-                        hashScriptIntegrity
-                            ( Set.singleton
-                                ( getLanguageView
-                                    pp
-                                    PlutusV3
-                                )
-                            )
+                        computeScriptIntegrity
+                            PlutusV3
+                            pp
                             newRdmrs
-                            (TxDats mempty)
          in tx
                 & witsTxL . rdmrsTxWitsL
                     .~ newRdmrs
@@ -1342,9 +1329,9 @@ The change output is identified by index
 bumpFee ::
     -- | Change output index
     Int ->
-    Tx ConwayEra ->
+    ConwayTx ->
     Coin ->
-    Either String (Tx ConwayEra)
+    Either String ConwayTx
 bumpFee chIdx tx targetFee =
     let currentFee = tx ^. bodyTxL . feeTxBodyL
         diff = unCoin targetFee - unCoin currentFee
@@ -1401,7 +1388,7 @@ spendingIndex needle inputs =
         | otherwise = go (n + 1) xs
 
 withdrawalIndex ::
-    RewardAccount ->
+    AccountAddress ->
     Withdrawals ->
     Word32
 withdrawalIndex needle (Withdrawals withdrawals) =
@@ -1463,8 +1450,8 @@ collectMintRedeemers mints =
         ]
 
 collectWithdrawalEntries ::
-    [(RewardAccount, Coin, WithdrawWitness)] ->
-    Map RewardAccount (Coin, Maybe (Data ConwayEra))
+    [(AccountAddress, Coin, WithdrawWitness)] ->
+    Map AccountAddress (Coin, Maybe (Data ConwayEra))
 collectWithdrawalEntries =
     Map.fromList . fmap toEntry
   where
@@ -1475,7 +1462,7 @@ collectWithdrawalEntries =
 
 collectWithdrawalRedeemers ::
     Withdrawals ->
-    Map RewardAccount (Coin, Maybe (Data ConwayEra)) ->
+    Map AccountAddress (Coin, Maybe (Data ConwayEra)) ->
     [ ( ConwayPlutusPurpose AsIx ConwayEra
       , (Data ConwayEra, ExUnits)
       )
@@ -1528,8 +1515,8 @@ mkInlineDatum d =
             (Data d :: Data ConwayEra)
 
 failedChecks ::
-    [Tx ConwayEra -> Check e] ->
-    Tx ConwayEra ->
+    [ConwayTx -> Check e] ->
+    ConwayTx ->
     [Check e]
 failedChecks checks tx =
     [ result

@@ -19,6 +19,10 @@ module Cardano.Node.Client.N2C.Connection (
     newLTxSChannel,
 ) where
 
+import Cardano.Network.Protocol.LocalStateQuery.Codec (
+    Some (..),
+    codecLocalStateQuery,
+ )
 import Cardano.Node.Client.N2C.Codecs (
     ccfg,
     n2cVersion,
@@ -34,6 +38,13 @@ import Cardano.Node.Client.N2C.Types (
     LTxSChannel (..),
  )
 import Cardano.Node.Client.Types (Block)
+import Cardano.Network.NodeToClient (
+    NodeToClientVersion (..),
+    NodeToClientVersionData (..),
+    connectTo,
+    localSnocket,
+    nullNetworkConnectTracers,
+ )
 import Control.Concurrent.STM (newTBQueueIO)
 import Control.Exception (SomeException)
 import Control.Tracer (nullTracer)
@@ -84,23 +95,10 @@ import Ouroboros.Network.Mux (
     ),
     mkMiniProtocolCbFromPeer,
  )
-import Ouroboros.Network.NodeToClient (
-    connectTo,
-    localSnocket,
-    nullNetworkConnectTracers,
- )
-import Ouroboros.Network.NodeToClient.Version (
-    NodeToClientVersion (..),
-    NodeToClientVersionData (..),
- )
 import Ouroboros.Network.Protocol.Handshake.Version (
     simpleSingletonVersions,
  )
 import Ouroboros.Network.Protocol.LocalStateQuery.Client qualified as LSQ
-import Ouroboros.Network.Protocol.LocalStateQuery.Codec (
-    Some (..),
-    codecLocalStateQuery,
- )
 import Ouroboros.Network.Protocol.LocalStateQuery.Type (
     State (..),
  )
