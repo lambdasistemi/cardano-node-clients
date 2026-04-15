@@ -22,8 +22,8 @@ import Data.Set qualified as Set
 import Test.Hspec
 
 import Cardano.Ledger.Address (
-    AccountId (..),
     AccountAddress (..),
+    AccountId (..),
     Addr (..),
     Withdrawals (..),
  )

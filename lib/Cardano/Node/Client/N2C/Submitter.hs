@@ -35,13 +35,13 @@ import Ouroboros.Consensus.Shelley.Ledger.Mempool (
  )
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.N2C.LocalTxSubmission (
     submitTxN2C,
  )
 import Cardano.Node.Client.N2C.Types (
     LTxSChannel,
  )
-import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Submitter (
     SubmitResult (..),
     Submitter (..),

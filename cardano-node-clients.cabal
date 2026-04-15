@@ -18,8 +18,8 @@ extra-doc-files: CHANGELOG.md
 
 common warnings
   ghc-options:
-    -Wall -Werror -Wunused-imports
-    -Wmissing-export-lists -Wname-shadowing -Wredundant-constraints
+    -Wall -Werror -Wunused-imports -Wmissing-export-lists
+    -Wname-shadowing -Wredundant-constraints
 
   default-extensions:
     DataKinds
@@ -58,13 +58,14 @@ library
     Cardano.Node.Client.TxBuild
     Cardano.Node.Client.Types
     Data.List.SampleFibonacci
+
   build-depends:
-    , base
     , aeson
+    , base
     , bytestring
+    , cardano-binary
     , cardano-diffusion
     , cardano-diffusion:protocols
-    , cardano-binary
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
@@ -194,9 +195,9 @@ test-suite e2e-tests
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-read
     , cardano-node-clients
     , cardano-node-clients:devnet
-    , cardano-ledger-read
     , cardano-slotting
     , cardano-strict-containers
     , chain-follower

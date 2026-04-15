@@ -19,6 +19,13 @@ module Cardano.Node.Client.N2C.Connection (
     newLTxSChannel,
 ) where
 
+import Cardano.Network.NodeToClient (
+    NodeToClientVersion (..),
+    NodeToClientVersionData (..),
+    connectTo,
+    localSnocket,
+    nullNetworkConnectTracers,
+ )
 import Cardano.Network.Protocol.LocalStateQuery.Codec (
     Some (..),
     codecLocalStateQuery,
@@ -38,13 +45,6 @@ import Cardano.Node.Client.N2C.Types (
     LTxSChannel (..),
  )
 import Cardano.Node.Client.Types (Block)
-import Cardano.Network.NodeToClient (
-    NodeToClientVersion (..),
-    NodeToClientVersionData (..),
-    connectTo,
-    localSnocket,
-    nullNetworkConnectTracers,
- )
 import Control.Concurrent.STM (newTBQueueIO)
 import Control.Exception (SomeException)
 import Control.Tracer (nullTracer)

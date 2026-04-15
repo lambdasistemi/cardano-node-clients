@@ -92,14 +92,12 @@ newtype ChainPopulator = ChainPopulator
 
 -- | Result of a populator step.
 data PopulatorNext
-    = {- | Submit these transactions and continue
-      with the next populator state.
-      -}
+    = -- | Submit these transactions and continue
+      --       with the next populator state.
       Continue [ConwayTx] ChainPopulator
-    | {- | Submit these final transactions, then
-      deliver the accumulated blocks (or error)
-      to the callback.
-      -}
+    | -- | Submit these final transactions, then
+      --       deliver the accumulated blocks (or error)
+      --       to the callback.
       Close
         [ConwayTx]
         (Either SomeException [Block] -> IO ())

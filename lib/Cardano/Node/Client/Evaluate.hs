@@ -81,10 +81,9 @@ evaluateAndBalance ::
     Language ->
     Provider IO ->
     PParams ConwayEra ->
-    {- | All input UTxOs (fee-paying and script).
-    Their 'TxIn's are unioned with the body's
-    inputs.
-    -}
+    -- | All input UTxOs (fee-paying and script).
+    --     Their 'TxIn's are unioned with the body's
+    --     inputs.
     [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->

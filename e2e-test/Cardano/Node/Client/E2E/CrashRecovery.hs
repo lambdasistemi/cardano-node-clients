@@ -58,10 +58,9 @@ killDuring ::
     (Eq phase, Show phase) =>
     -- | Target phase to kill at
     phase ->
-    {- | Bracket: receives tracer and a callback that
-    receives the kill action. The bracket keeps
-    resources alive until the callback returns.
-    -}
+    -- | Bracket: receives tracer and a callback that
+    --     receives the kill action. The bracket keeps
+    --     resources alive until the callback returns.
     (Tracer IO phase -> (IO () -> IO ()) -> IO ()) ->
     -- | Kill result
     IO (KillResult phase)

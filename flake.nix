@@ -80,6 +80,9 @@
                 cabal = indexTool;
               };
               buildInputs = [
+                pkgs.haskellPackages.cabal-fmt
+                pkgs.haskellPackages.fourmolu
+                pkgs.haskellPackages.hlint
                 pkgs.just
                 pkgs.mkdocs
                 pkgs.curl

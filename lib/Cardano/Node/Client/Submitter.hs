@@ -35,6 +35,7 @@ blockchain.
 -}
 newtype Submitter m = Submitter
     { submitTx ::
-        ConwayTx -> m SubmitResult
+        ConwayTx ->
+        m SubmitResult
     -- ^ Submit a signed transaction
     }

@@ -211,9 +211,8 @@ import PlutusTx.IsData.Class (ToData (..))
 
 -- | Fixpoint convergence signal.
 data Convergence a
-    = {- | Not converged yet; use this value and
-      keep iterating.
-      -}
+    = -- | Not converged yet; use this value and
+      --       keep iterating.
       Iterate a
     | -- | Converged; use this value and stop.
       Ok a

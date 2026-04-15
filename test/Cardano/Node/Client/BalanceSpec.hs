@@ -295,7 +295,7 @@ balanceTxSpec =
                         Coin feePerByte =
                             fromCompact $
                                 unCoinPerByte $
-                            pp ^. ppTxFeePerByteL
+                                    pp ^. ppTxFeePerByteL
                         expectedFee =
                             Coin (exactFee + 106 * feePerByte)
                         outs =

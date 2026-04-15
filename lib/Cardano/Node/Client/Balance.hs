@@ -109,10 +109,9 @@ with dummy VKey witnesses for correct size.
 -}
 balanceTx ::
     PParams ConwayEra ->
-    {- | All input UTxOs to add (fee-paying and any
-    script inputs not yet in the body). Their
-    'TxIn's are unioned with the body's inputs.
-    -}
+    -- | All input UTxOs to add (fee-paying and any
+    --     script inputs not yet in the body). Their
+    --     'TxIn's are unioned with the body's inputs.
     [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->
@@ -217,9 +216,8 @@ iteration did not converge.
 data FeeLoopError
     = -- | Fee did not converge in 10 iterations.
       FeeDidNotConverge
-    | {- | The output function returned an error
-      (e.g., insufficient funds for the fee).
-      -}
+    | -- | The output function returned an error
+      --       (e.g., insufficient funds for the fee).
       OutputError !String
     deriving (Eq, Show)
 
@@ -267,14 +265,12 @@ goes to the Cardano treasury.
 -}
 balanceFeeLoop ::
     PParams ConwayEra ->
-    {- | Compute outputs for a given fee. Return
-    'Left' to abort (e.g., fee exceeds
-    available funds).
-    -}
+    -- | Compute outputs for a given fee. Return
+    --     'Left' to abort (e.g., fee exceeds
+    --     available funds).
     (Coin -> Either String (StrictSeq (TxOut ConwayEra))) ->
-    {- | Number of key witnesses to assume for
-    fee estimation.
-    -}
+    -- | Number of key witnesses to assume for
+    --     fee estimation.
     Int ->
     -- | Template transaction.
     ConwayTx ->
