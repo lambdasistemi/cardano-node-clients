@@ -101,10 +101,18 @@
               "https://chap.intersectmbo.org/" = CHaP;
             };
           };
+          components = project.hsPkgs.cardano-node-clients.components;
+          checks = import ./nix/checks.nix {
+            inherit pkgs components;
+            cardanoNode = cardano-node.packages.${system}.cardano-node;
+            src = ./.;
+          };
         in {
           packages.devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
             cp -r ${./e2e-test/genesis} $out
           '';
+          inherit checks;
+          apps = import ./nix/apps.nix { inherit pkgs checks; };
           devShells.default = project.shell;
         };
     };

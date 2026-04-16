@@ -20,7 +20,9 @@ jobs:
       - name: Build all derivations
         run: >-
           nix build --quiet
-          .#devShells.x86_64-linux.default.inputDerivation
+          .#checks.x86_64-linux.build
+          .#checks.x86_64-linux.e2e
+          .#checks.x86_64-linux.lint
   build:
     needs: build-gate
     runs-on: nixos
@@ -31,7 +33,7 @@ jobs:
           name: paolino
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build
-        run: nix develop --quiet -c just build
+        run: nix run --quiet .#build
   e2e:
     needs: build-gate
     runs-on: nixos
@@ -42,7 +44,7 @@ jobs:
           name: paolino
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: E2E tests
-        run: nix develop --quiet -c just e2e
+        run: nix run --quiet .#e2e
   lint:
     needs: build-gate
     runs-on: nixos
@@ -52,15 +54,8 @@ jobs:
         with:
           name: paolino
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Format check
-        run: >-
-          nix develop --quiet -c bash -c
-          "cabal-fmt -c cardano-node-clients.cabal &&
-          find . -type f -name '*.hs' -not -path '*/dist-newstyle/*' -exec fourmolu -m check {} +"
-      - name: HLint
-        run: >-
-          nix develop --quiet -c bash -c
-          "find . -type f -name '*.hs' -not -path '*/dist-newstyle/*' -exec hlint {} +"
+      - name: Lint
+        run: nix run --quiet .#lint
   docs:
     runs-on: nixos
     if: github.ref == 'refs/heads/main'
