@@ -17,9 +17,8 @@ module Cardano.Node.Client.Submitter (
 
 import Data.ByteString (ByteString)
 
-import Cardano.Ledger.Api.Tx (Tx)
-import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.TxIn (TxId)
+import Cardano.Node.Client.Ledger (ConwayTx)
 
 -- | Result of submitting a transaction.
 data SubmitResult
@@ -36,6 +35,7 @@ blockchain.
 -}
 newtype Submitter m = Submitter
     { submitTx ::
-        Tx ConwayEra -> m SubmitResult
+        ConwayTx ->
+        m SubmitResult
     -- ^ Submit a signed transaction
     }

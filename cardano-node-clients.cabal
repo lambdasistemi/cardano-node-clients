@@ -18,8 +18,8 @@ extra-doc-files: CHANGELOG.md
 
 common warnings
   ghc-options:
-    -Wall -Werror -Wunused-imports -Wunused-packages
-    -Wmissing-export-lists -Wname-shadowing -Wredundant-constraints
+    -Wall -Werror -Wunused-imports -Wmissing-export-lists
+    -Wname-shadowing -Wredundant-constraints
 
   default-extensions:
     DataKinds
@@ -43,6 +43,7 @@ library
   exposed-modules:
     Cardano.Node.Client.Balance
     Cardano.Node.Client.Evaluate
+    Cardano.Node.Client.Ledger
     Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
@@ -59,9 +60,12 @@ library
     Data.List.SampleFibonacci
 
   build-depends:
+    , aeson
     , base
     , bytestring
     , cardano-binary
+    , cardano-diffusion
+    , cardano-diffusion:protocols
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
@@ -69,23 +73,29 @@ library
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
+    , cardano-prelude
     , cardano-slotting
     , cardano-strict-containers
     , chain-follower
     , containers
     , contra-tracer
+    , directory
+    , dns
+    , iproute
     , microlens
+    , network
     , network-mux
     , operational
     , ouroboros-consensus
-    , ouroboros-consensus-cardano
-    , ouroboros-consensus-protocol
+    , ouroboros-consensus:cardano
+    , ouroboros-consensus:protocol
     , ouroboros-network
-    , ouroboros-network-api
-    , ouroboros-network-framework
-    , ouroboros-network-protocols
+    , ouroboros-network:api
+    , ouroboros-network:framework
+    , ouroboros-network:protocols
     , plutus-core
     , plutus-tx
+    , random
     , serialise
     , stm
     , text
@@ -109,6 +119,7 @@ library devnet
     , base
     , bytestring
     , cardano-crypto-class
+    , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
@@ -120,7 +131,8 @@ library devnet
     , directory
     , filepath
     , microlens
-    , ouroboros-network-api
+    , ouroboros-network
+    , ouroboros-network:api
     , process
     , stm
     , time
@@ -183,9 +195,9 @@ test-suite e2e-tests
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-read
     , cardano-node-clients
     , cardano-node-clients:devnet
-    , cardano-read-ledger
     , cardano-slotting
     , cardano-strict-containers
     , chain-follower
@@ -194,6 +206,6 @@ test-suite e2e-tests
     , hspec
     , lens
     , microlens
-    , ouroboros-network-api
+    , ouroboros-network:api
     , rocksdb-kv-transactions:kv-transactions
     , stm

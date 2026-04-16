@@ -35,7 +35,6 @@ import Cardano.Ledger.Alonzo.TxBody (
  )
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.Tx (
-    Tx,
     bodyTxL,
     witsTxL,
  )
@@ -54,6 +53,7 @@ import Cardano.Node.Client.Balance (
     balanceTx,
     computeScriptIntegrity,
  )
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Provider (Provider (..))
 
 {- | Evaluate Plutus scripts, patch execution units,
@@ -81,16 +81,15 @@ evaluateAndBalance ::
     Language ->
     Provider IO ->
     PParams ConwayEra ->
-    {- | All input UTxOs (fee-paying and script).
-    Their 'TxIn's are unioned with the body's
-    inputs.
-    -}
+    -- | All input UTxOs (fee-paying and script).
+    --     Their 'TxIn's are unioned with the body's
+    --     inputs.
     [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->
     -- | Unbalanced tx with 'placeholderExUnits'
-    Tx ConwayEra ->
-    IO (Tx ConwayEra)
+    ConwayTx ->
+    IO ConwayTx
 evaluateAndBalance lang prov pp inputUtxos changeAddr tx =
     do
         -- Pre-add all inputs so the evaluator sees

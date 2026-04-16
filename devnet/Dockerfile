@@ -1,4 +1,4 @@
-ARG NODE_VERSION=10.5.4
+ARG NODE_VERSION=10.7.0
 FROM ghcr.io/intersectmbo/cardano-node:${NODE_VERSION}
 
 COPY genesis/ /genesis/

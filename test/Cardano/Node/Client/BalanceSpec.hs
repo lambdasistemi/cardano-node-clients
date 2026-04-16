@@ -14,8 +14,8 @@ import Cardano.Ledger.Address (Addr (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.PParams (
-    ppMinFeeAL,
-    ppMinFeeBL,
+    ppTxFeeFixedL,
+    ppTxFeePerByteL,
  )
 import Cardano.Ledger.Api.Scripts.Data (Data (..))
 import Cardano.Ledger.Api.Tx (
@@ -37,7 +37,12 @@ import Cardano.Ledger.BaseTypes (
     StrictMaybe (..),
     TxIx (..),
  )
-import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Coin (
+    Coin (..),
+    CoinPerByte (..),
+    compactCoinOrError,
+ )
+import Cardano.Ledger.Compactible (fromCompact)
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
@@ -113,7 +118,7 @@ mkAddr n =
         h = fromJust (hashFromStringAsHex hexStr)
      in Addr
             Testnet
-            (KeyHashObj (KeyHash h :: KeyHash 'Payment))
+            (KeyHashObj (KeyHash h :: KeyHash Payment))
             StakeRefNull
   where
     hexByte b =
@@ -255,8 +260,10 @@ balanceTxSpec =
         it "uses getMinFeeTx plus VKey padding" $ do
             let pp =
                     emptyPParams @ConwayEra
-                        & ppMinFeeAL .~ Coin 44
-                        & ppMinFeeBL .~ Coin 155381
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
                 inputUtxos =
                     [
                         ( mkTxIn 1
@@ -286,7 +293,9 @@ balanceTxSpec =
                         Coin exactFee =
                             getMinFeeTx pp tx 0
                         Coin feePerByte =
-                            pp ^. ppMinFeeAL
+                            fromCompact $
+                                unCoinPerByte $
+                                    pp ^. ppTxFeePerByteL
                         expectedFee =
                             Coin (exactFee + 106 * feePerByte)
                         outs =
@@ -302,8 +311,10 @@ balanceTxSpec =
         it "returns InsufficientFee when exact fee exceeds available input" $ do
             let pp =
                     emptyPParams @ConwayEra
-                        & ppMinFeeAL .~ Coin 200
-                        & ppMinFeeBL .~ Coin 200_000
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 200))
+                        & ppTxFeeFixedL .~ Coin 200_000
                 inputUtxos =
                     [
                         ( mkTxIn 1
@@ -321,6 +332,9 @@ balanceTxSpec =
                 Left (InsufficientFee required available) -> do
                     required `shouldSatisfy` (> available)
                     available `shouldBe` Coin 1
+                Left FeeNotConverged ->
+                    expectationFailure
+                        "expected InsufficientFee"
                 Right _ ->
                     expectationFailure
                         "expected InsufficientFee"

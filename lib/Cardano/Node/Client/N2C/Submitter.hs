@@ -21,7 +21,7 @@ module Cardano.Node.Client.N2C.Submitter (
 
 import Data.ByteString.Char8 qualified as B8
 
-import Cardano.Ledger.Api.Tx (Tx, txIdTx)
+import Cardano.Ledger.Api.Tx (txIdTx)
 
 import Ouroboros.Consensus.Cardano.Block (
     pattern GenTxConway,
@@ -35,7 +35,7 @@ import Ouroboros.Consensus.Shelley.Ledger.Mempool (
  )
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 
-import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.N2C.LocalTxSubmission (
     submitTxN2C,
  )
@@ -73,5 +73,5 @@ mkN2CSubmitter ch =
 {- | Convert a ledger 'Tx ConwayEra' to a consensus
 'GenTx Block'.
 -}
-toGenTx :: Tx ConwayEra -> GenTx Block
+toGenTx :: ConwayTx -> GenTx Block
 toGenTx tx = GenTxConway (mkShelleyTx tx)

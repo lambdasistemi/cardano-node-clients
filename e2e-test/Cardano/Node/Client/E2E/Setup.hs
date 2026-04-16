@@ -44,14 +44,12 @@ import Cardano.Crypto.DSIGN (
 import Cardano.Crypto.Seed (mkSeedFromBytes)
 import Cardano.Ledger.Address (Addr (..))
 import Cardano.Ledger.Api.Tx (
-    Tx,
     addrTxWitsL,
     txIdTx,
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.In (TxId (..))
 import Cardano.Ledger.BaseTypes (Network (..))
-import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (extractHash)
 import Cardano.Ledger.Credential (
     Credential (..),
@@ -72,6 +70,7 @@ import Ouroboros.Network.Magic (NetworkMagic (..))
 import Cardano.Node.Client.E2E.Devnet (
     withCardanoNode,
  )
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.N2C.Connection (
     newLSQChannel,
     newLTxSChannel,
@@ -127,14 +126,14 @@ key via 'VKey' + 'hashKey'.
 -}
 keyHashFromSignKey ::
     SignKeyDSIGN Ed25519DSIGN ->
-    KeyHash 'Payment
+    KeyHash Payment
 keyHashFromSignKey sk =
     hashKey (VKey (deriveVerKeyDSIGN sk))
 
 {- | Enterprise testnet address from a payment
 key hash.
 -}
-enterpriseAddr :: KeyHash 'Payment -> Addr
+enterpriseAddr :: KeyHash Payment -> Addr
 enterpriseAddr kh =
     Addr Testnet (KeyHashObj kh) StakeRefNull
 
@@ -144,8 +143,8 @@ then union into @witsTxL . addrTxWitsL@.
 -}
 addKeyWitness ::
     SignKeyDSIGN Ed25519DSIGN ->
-    Tx ConwayEra ->
-    Tx ConwayEra
+    ConwayTx ->
+    ConwayTx
 addKeyWitness sk tx =
     tx & witsTxL . addrTxWitsL %~ Set.union wits
   where
@@ -158,7 +157,7 @@ key.
 mkWitVKey ::
     TxId ->
     SignKeyDSIGN Ed25519DSIGN ->
-    WitVKey 'Witness
+    WitVKey Witness
 mkWitVKey (TxId hash) sk =
     WitVKey
         (asWitness vk)

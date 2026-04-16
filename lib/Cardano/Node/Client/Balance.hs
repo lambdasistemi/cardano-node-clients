@@ -34,7 +34,6 @@ module Cardano.Node.Client.Balance (
     FeeLoopError (..),
 ) where
 
-import Data.Foldable (foldl')
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
 import Data.Word (Word32)
@@ -46,15 +45,15 @@ import Cardano.Ledger.Alonzo.PParams (
     getLanguageView,
  )
 import Cardano.Ledger.Alonzo.Tx (
+    ScriptIntegrity (..),
     ScriptIntegrityHash,
     hashScriptIntegrity,
  )
 import Cardano.Ledger.Alonzo.TxWits (
-    Redeemers,
+    Redeemers (..),
     TxDats (..),
  )
 import Cardano.Ledger.Api.Tx (
-    Tx,
     bodyTxL,
     estimateMinFeeTx,
  )
@@ -70,7 +69,7 @@ import Cardano.Ledger.Api.Tx.Out (
  )
 import Cardano.Ledger.BaseTypes (
     Inject (..),
-    StrictMaybe,
+    StrictMaybe (SJust, SNothing),
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
@@ -78,13 +77,14 @@ import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Ledger (ConwayTx)
 
 {- | Result of 'balanceTx'. Carries the balanced
 transaction and the index of the change output
 (always the last output appended by 'balanceTx').
 -}
 data BalanceResult = BalanceResult
-    { balancedTx :: !(Tx ConwayEra)
+    { balancedTx :: !ConwayTx
     , changeIndex :: !Int
     }
 
@@ -109,15 +109,14 @@ with dummy VKey witnesses for correct size.
 -}
 balanceTx ::
     PParams ConwayEra ->
-    {- | All input UTxOs to add (fee-paying and any
-    script inputs not yet in the body). Their
-    'TxIn's are unioned with the body's inputs.
-    -}
+    -- | All input UTxOs to add (fee-paying and any
+    --     script inputs not yet in the body). Their
+    --     'TxIn's are unioned with the body's inputs.
     [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->
     -- | Unbalanced transaction
-    Tx ConwayEra ->
+    ConwayTx ->
     Either BalanceError BalanceResult
 balanceTx pp inputUtxos changeAddr tx =
     let body = tx ^. bodyTxL
@@ -217,9 +216,8 @@ iteration did not converge.
 data FeeLoopError
     = -- | Fee did not converge in 10 iterations.
       FeeDidNotConverge
-    | {- | The output function returned an error
-      (e.g., insufficient funds for the fee).
-      -}
+    | -- | The output function returned an error
+      --       (e.g., insufficient funds for the fee).
       OutputError !String
     deriving (Eq, Show)
 
@@ -267,18 +265,16 @@ goes to the Cardano treasury.
 -}
 balanceFeeLoop ::
     PParams ConwayEra ->
-    {- | Compute outputs for a given fee. Return
-    'Left' to abort (e.g., fee exceeds
-    available funds).
-    -}
+    -- | Compute outputs for a given fee. Return
+    --     'Left' to abort (e.g., fee exceeds
+    --     available funds).
     (Coin -> Either String (StrictSeq (TxOut ConwayEra))) ->
-    {- | Number of key witnesses to assume for
-    fee estimation.
-    -}
+    -- | Number of key witnesses to assume for
+    --     fee estimation.
     Int ->
     -- | Template transaction.
-    Tx ConwayEra ->
-    Either FeeLoopError (Tx ConwayEra)
+    ConwayTx ->
+    Either FeeLoopError ConwayTx
 balanceFeeLoop pp mkOutputs numWitnesses tx =
     go 0 (Coin 0)
   where
@@ -332,8 +328,15 @@ computeScriptIntegrity lang pp rdmrs =
         langViews =
             Set.singleton
                 (getLanguageView pp lang)
+        emptyDats :: TxDats ConwayEra
         emptyDats = TxDats mempty
-     in hashScriptIntegrity langViews rdmrs emptyDats
+        Redeemers redeemerMap = rdmrs
+     in if null redeemerMap && null langViews
+            then SNothing
+            else
+                SJust $
+                    hashScriptIntegrity $
+                        ScriptIntegrity rdmrs emptyDats langViews
 
 {- | Compute the spending index of a 'TxIn' within
 the sorted input set.

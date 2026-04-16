@@ -64,11 +64,13 @@ import Ouroboros.Network.Protocol.ChainSync.Codec qualified as ChainSync
 import Ouroboros.Network.Protocol.ChainSync.Type qualified as ChainSyncT
 
 -- | Codec config with 'EpochSlots' 42 (devnet default).
-ccfg :: Consensus.CardanoCodecConfig c
+ccfg :: Consensus.CardanoCodecConfig Consensus.StandardCrypto
 ccfg = mkCcfg (EpochSlots 42)
 
 -- | Build codec config with custom 'EpochSlots'.
-mkCcfg :: EpochSlots -> Consensus.CardanoCodecConfig c
+mkCcfg ::
+    EpochSlots ->
+    Consensus.CardanoCodecConfig Consensus.StandardCrypto
 mkCcfg es =
     CardanoCodecConfig
         (ByronCodecConfig es)
@@ -78,12 +80,14 @@ mkCcfg es =
         ShelleyCodecConfig -- Alonzo
         ShelleyCodecConfig -- Babbage
         ShelleyCodecConfig -- Conway
+        ShelleyCodecConfig -- Dijkstra
 
 -- | N2C version for codec selection.
 n2cVersion ::
     HardForkNodeToClientVersion
         ( ByronBlock
-            : Consensus.CardanoShelleyEras c
+            : Consensus.CardanoShelleyEras
+                Consensus.StandardCrypto
         )
 n2cVersion = CardanoNodeToClientVersion16
 

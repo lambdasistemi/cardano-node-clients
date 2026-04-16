@@ -18,7 +18,7 @@ KEYS_DIR="${WORK_DIR}/delegate-keys"
 mkdir -p "${WORK_DIR}" "${KEYS_DIR}" "${DATA_DIR}/db"
 
 # Copy genesis files to writable location
-for f in alonzo-genesis.json conway-genesis.json node-config.json topology.json; do
+for f in alonzo-genesis.json conway-genesis.json dijkstra-genesis.json node-config.json topology.json; do
     cp "${GENESIS_DIR}/${f}" "${WORK_DIR}/${f}"
 done
 

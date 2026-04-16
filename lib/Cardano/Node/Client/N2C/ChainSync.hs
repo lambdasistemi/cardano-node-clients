@@ -25,6 +25,13 @@ module Cardano.Node.Client.N2C.ChainSync (
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots)
+import Cardano.Network.NodeToClient (
+    NodeToClientVersion (..),
+    NodeToClientVersionData (..),
+    connectTo,
+    localSnocket,
+    nullNetworkConnectTracers,
+ )
 import Cardano.Node.Client.N2C.Codecs (
     codecChainSyncN2C,
  )
@@ -65,15 +72,6 @@ import Ouroboros.Network.Mux (
         StartOnDemand
     ),
     mkMiniProtocolCbFromPeer,
- )
-import Ouroboros.Network.NodeToClient (
-    connectTo,
-    localSnocket,
-    nullNetworkConnectTracers,
- )
-import Ouroboros.Network.NodeToClient.Version (
-    NodeToClientVersion (..),
-    NodeToClientVersionData (..),
  )
 import Ouroboros.Network.Point (
     WithOrigin (At, Origin),

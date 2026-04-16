@@ -20,8 +20,8 @@ import Test.Hspec
 
 import Cardano.Crypto.Hash (hashFromStringAsHex)
 import Cardano.Ledger.Address (
+    AccountAddress,
     Addr,
-    RewardAccount,
     Withdrawals (..),
  )
 import Cardano.Ledger.Allegra.Scripts (
@@ -34,15 +34,14 @@ import Cardano.Ledger.Api.PParams (
     emptyPParams,
     ppCoinsPerUTxOByteL,
     ppMaxTxSizeL,
-    ppMinFeeAL,
-    ppMinFeeBL,
+    ppTxFeeFixedL,
+    ppTxFeePerByteL,
  )
 import Cardano.Ledger.Api.Scripts.Data (
     Data,
     Datum (NoDatum),
  )
 import Cardano.Ledger.Api.Tx (
-    Tx,
     auxDataTxL,
     bodyTxL,
     getPlutusData,
@@ -80,7 +79,10 @@ import Cardano.Ledger.Binary (
     decodeFullAnnotatorFromHexText,
     natVersion,
  )
-import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Coin (
+    Coin (..),
+    compactCoinOrError,
+ )
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
 import Cardano.Ledger.Core (
@@ -98,6 +100,7 @@ import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
  )
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxBuild (
     InterpretIO (..),
     TxBuild,
@@ -161,14 +164,14 @@ goldenCases =
     , GoldenCase "Recent batch" "b28a2813677f60223ef195b2d7f3344b2f98f627b7e0e7957d484fdeb3fed409"
     ]
 
-loadGoldenTx :: GoldenCase -> IO (Tx ConwayEra)
+loadGoldenTx :: GoldenCase -> IO ConwayTx
 loadGoldenTx golden = do
     hex <-
         T.strip . T.pack <$> readFile (fixturePath (goldenHash golden))
     case decodeFullAnnotatorFromHexText
         (natVersion @11)
         "mainnet golden tx"
-        (decCBOR :: forall s. Decoder s (Annotator (Tx ConwayEra)))
+        (decCBOR :: forall s. Decoder s (Annotator ConwayTx))
         hex of
         Left err ->
             expectationFailure
@@ -185,7 +188,7 @@ inputFixturePath :: String -> FilePath
 inputFixturePath hash =
     "test/fixtures/mainnet-txbuild/inputs/" <> hash <> ".inputs"
 
-txBuildFromTx :: Tx ConwayEra -> TxBuild q e ()
+txBuildFromTx :: ConwayTx -> TxBuild q e ()
 txBuildFromTx tx = do
     mapM_ addSpend indexedInputs
     mapM_ collateral (Set.toAscList collateralInputs)
@@ -240,7 +243,7 @@ txBuildFromTx tx = do
                     amount
                     (RawPlutusData (getPlutusData redeemer))
 
-assertStructurallyEquivalent :: Tx ConwayEra -> Tx ConwayEra -> Expectation
+assertStructurallyEquivalent :: ConwayTx -> ConwayTx -> Expectation
 assertStructurallyEquivalent expected actual = do
     actual ^. bodyTxL . inputsTxBodyL
         `shouldBe` (expected ^. bodyTxL . inputsTxBodyL)
@@ -264,7 +267,7 @@ assertStructurallyEquivalent expected actual = do
     normalizedRedeemers actual `shouldBe` normalizedRedeemers expected
 
 assertBalancedStructurallyEquivalent ::
-    Tx ConwayEra -> Tx ConwayEra -> Expectation
+    ConwayTx -> ConwayTx -> Expectation
 assertBalancedStructurallyEquivalent expected actual = do
     let expectedOutputs = toList (expected ^. bodyTxL . outputsTxBodyL)
         actualOutputs = toList (actual ^. bodyTxL . outputsTxBodyL)
@@ -299,14 +302,14 @@ assertBalancedStructurallyEquivalent expected actual = do
     normalizedRedeemersWithExUnits actual
         `shouldBe` normalizedRedeemersWithExUnits expected
 
-txMetadata :: Tx ConwayEra -> Map.Map Word64 Metadatum
+txMetadata :: ConwayTx -> Map.Map Word64 Metadatum
 txMetadata tx =
     case tx ^. auxDataTxL of
         SJust aux -> aux ^. metadataTxAuxDataL
         SNothing -> Map.empty
 
 normalizedRedeemers ::
-    Tx ConwayEra ->
+    ConwayTx ->
     Map.Map (ConwayPlutusPurpose AsIx ConwayEra) PLC.Data
 normalizedRedeemers tx =
     Map.map (getPlutusData . fst) redeemers
@@ -314,7 +317,7 @@ normalizedRedeemers tx =
     Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
 
 normalizedRedeemersWithExUnits ::
-    Tx ConwayEra ->
+    ConwayTx ->
     Map.Map
         (ConwayPlutusPurpose AsIx ConwayEra)
         (PLC.Data, ExUnits)
@@ -323,7 +326,7 @@ normalizedRedeemersWithExUnits tx =
   where
     Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
 
-indexedSpendingRedeemers :: Tx ConwayEra -> Map.Map Word32 (Data ConwayEra)
+indexedSpendingRedeemers :: ConwayTx -> Map.Map Word32 (Data ConwayEra)
 indexedSpendingRedeemers tx =
     Map.fromList
         [ (ix, redeemer)
@@ -332,7 +335,7 @@ indexedSpendingRedeemers tx =
   where
     Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
 
-indexedMintRedeemers :: Tx ConwayEra -> Map.Map Word32 (Data ConwayEra)
+indexedMintRedeemers :: ConwayTx -> Map.Map Word32 (Data ConwayEra)
 indexedMintRedeemers tx =
     Map.fromList
         [ (ix, redeemer)
@@ -342,8 +345,8 @@ indexedMintRedeemers tx =
     Redeemers redeemers = tx ^. witsTxL . rdmrsTxWitsL
 
 indexedWithdrawalRedeemers ::
-    Tx ConwayEra ->
-    Map.Map RewardAccount (Data ConwayEra)
+    ConwayTx ->
+    Map.Map AccountAddress (Data ConwayEra)
 indexedWithdrawalRedeemers tx =
     Map.fromList
         [ (rewardAccount, redeemer)
@@ -360,13 +363,13 @@ indexedWithdrawalRedeemers tx =
     Withdrawals withdrawals = tx ^. bodyTxL . withdrawalsTxBodyL
     withdrawalIndices = zip (Map.keys withdrawals) [0 :: Word32 ..]
 
-invalidBeforeSlot :: Tx ConwayEra -> Maybe SlotNo
+invalidBeforeSlot :: ConwayTx -> Maybe SlotNo
 invalidBeforeSlot tx =
     case invalidBefore (tx ^. bodyTxL . vldtTxBodyL) of
         SJust slot -> Just slot
         SNothing -> Nothing
 
-invalidHereafterSlot :: Tx ConwayEra -> Maybe SlotNo
+invalidHereafterSlot :: ConwayTx -> Maybe SlotNo
 invalidHereafterSlot tx =
     case invalidHereafter (tx ^. bodyTxL . vldtTxBodyL) of
         SJust slot -> Just slot
@@ -380,11 +383,15 @@ instance ToData RawPlutusData where
 
 goldenBuildPParams :: PParams ConwayEra
 goldenBuildPParams =
-    emptyPParams
+    emptyPParams @ConwayEra
         & ppMaxTxSizeL .~ 16_384
-        & ppMinFeeAL .~ Coin 44
-        & ppMinFeeBL .~ Coin 155_381
-        & ppCoinsPerUTxOByteL .~ CoinPerByte (Coin 4_310)
+        & ppTxFeePerByteL
+            .~ CoinPerByte
+                (compactCoinOrError (Coin 44))
+        & ppTxFeeFixedL .~ Coin 155_381
+        & ppCoinsPerUTxOByteL
+            .~ CoinPerByte
+                (compactCoinOrError (Coin 4_310))
 
 loadGoldenInputCoins :: GoldenCase -> IO [(TxIn, Coin)]
 loadGoldenInputCoins golden = do
@@ -420,7 +427,7 @@ mkTxInFromText txHashText indexText = do
             (TxId (unsafeMakeSafeHash h))
             (TxIx ix)
 
-buildGoldenTx :: Tx ConwayEra -> [(TxIn, Coin)] -> IO (Tx ConwayEra)
+buildGoldenTx :: ConwayTx -> [(TxIn, Coin)] -> IO ConwayTx
 buildGoldenTx expected inputCoins =
     build
         goldenBuildPParams
@@ -455,7 +462,7 @@ selectChangeAddr outputs =
                 [] -> error "expected at least one output in golden tx"
 
 expectedExUnits ::
-    Tx ConwayEra ->
+    ConwayTx ->
     Map.Map
         (ConwayPlutusPurpose AsIx ConwayEra)
         (Either String ExUnits)

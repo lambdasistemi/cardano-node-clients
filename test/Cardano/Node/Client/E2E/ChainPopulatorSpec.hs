@@ -8,7 +8,7 @@ License     : Apache-2.0
 module Cardano.Node.Client.E2E.ChainPopulatorSpec (spec) where
 
 import Cardano.Crypto.Hash (hashToBytes)
-import Cardano.Ledger.Api.Tx (Tx, bodyTxL, mkBasicTx, txIdTx)
+import Cardano.Ledger.Api.Tx (bodyTxL, mkBasicTx, txIdTx)
 import Cardano.Ledger.Api.Tx.Body (mkBasicTxBody, outputsTxBodyL)
 import Cardano.Ledger.Api.Tx.Out (TxOut)
 import Cardano.Ledger.Conway (ConwayEra)
@@ -27,6 +27,7 @@ import Cardano.Node.Client.E2E.Setup (
     genesisDir,
     genesisSignKey,
  )
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Types (Block)
 import Cardano.Read.Ledger.Block.Block (fromConsensusBlock)
 import Cardano.Read.Ledger.Block.Txs (getEraTransactions)
@@ -59,7 +60,7 @@ txIdBytes (TxId safeHash) =
 
 -- | Get change output (last output) as (TxIn, TxOut).
 changeOutput ::
-    Tx ConwayEra -> (TxIn, TxOut ConwayEra)
+    ConwayTx -> (TxIn, TxOut ConwayEra)
 changeOutput tx =
     let outs = toList (tx ^. bodyTxL . outputsTxBodyL)
         lastIdx = length outs - 1
@@ -75,7 +76,7 @@ buildTxChain ::
     PParams ConwayEra ->
     (TxIn, TxOut ConwayEra) ->
     Int ->
-    ( [Tx ConwayEra]
+    ( [ConwayTx]
     , (TxIn, TxOut ConwayEra)
     )
 buildTxChain _ utxo 0 = ([], utxo)

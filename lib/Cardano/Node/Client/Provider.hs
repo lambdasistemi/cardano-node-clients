@@ -28,12 +28,12 @@ import Cardano.Ledger.Alonzo.Scripts (
     AsIx,
     PlutusPurpose,
  )
-import Cardano.Ledger.Api.Tx (Tx)
 import Cardano.Ledger.Api.Tx.Out (TxOut)
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Plutus (ExUnits)
 import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
 
 -- | Per-script evaluation result.
@@ -57,21 +57,19 @@ data Provider m = Provider
         m (PParams ConwayEra)
     -- ^ Fetch current protocol parameters
     , evaluateTx ::
-        Tx ConwayEra ->
+        ConwayTx ->
         m (EvaluateTxResult ConwayEra)
     -- ^ Evaluate script execution units
     , posixMsToSlot ::
         Integer ->
         m SlotNo
-    {- ^ Convert POSIX time (milliseconds) to 'SlotNo'
-    using the node's hard-fork interpreter (floor).
-    Use for upper validity bounds (@entirely_before@).
-    -}
+    -- ^ Convert POSIX time (milliseconds) to 'SlotNo'
+    --     using the node's hard-fork interpreter (floor).
+    --     Use for upper validity bounds (@entirely_before@).
     , posixMsCeilSlot ::
         Integer ->
         m SlotNo
-    {- ^ Convert POSIX time (milliseconds) to 'SlotNo',
-    rounding up (ceiling).
-    Use for lower validity bounds (@entirely_after@).
-    -}
+    -- ^ Convert POSIX time (milliseconds) to 'SlotNo',
+    --     rounding up (ceiling).
+    --     Use for lower validity bounds (@entirely_after@).
     }

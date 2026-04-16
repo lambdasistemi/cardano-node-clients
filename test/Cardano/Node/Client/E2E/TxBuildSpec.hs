@@ -41,9 +41,8 @@ import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Keys (
     KeyHash,
-    KeyRole (Witness),
+    KeyRole (Guard),
     VKey (..),
-    asWitness,
     hashKey,
  )
 import Cardano.Ledger.TxIn (TxIn)
@@ -259,9 +258,8 @@ waitForUtxos provider addr attempts
 
 witnessKeyHashFromSignKey ::
     SignKeyDSIGN Ed25519DSIGN ->
-    KeyHash 'Witness
+    KeyHash Guard
 witnessKeyHashFromSignKey =
     hashKey
-        . asWitness
         . VKey
         . deriveVerKeyDSIGN
