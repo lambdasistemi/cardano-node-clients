@@ -24,6 +24,25 @@ module Cardano.Node.Client.E2E.Setup (
     -- * Signing
     addKeyWitness,
 
+    -- * Ed25519 primitives (re-exports for downstream test harnesses)
+
+    --
+    -- Downstream projects exercising customer-supplied Ed25519 signatures
+    -- (for example, a ZK-proof validator that consumes a customer signature
+    -- as part of its redeemer) need to verify those bytes with an Ed25519
+    -- library that is byte-compatible with the Plutus @VerifyEd25519Signature@
+    -- builtin. Exposing the underlying @cardano-crypto-class@ primitives here
+    -- keeps the public surface consistent and prevents downstream projects
+    -- from depending on @cardano-crypto-class@ directly.
+    Ed25519DSIGN,
+    SignKeyDSIGN,
+    VerKeyDSIGN,
+    SigDSIGN,
+    verifyDSIGN,
+    deriveVerKeyDSIGN,
+    rawDeserialiseVerKeyDSIGN,
+    rawDeserialiseSigDSIGN,
+
     -- * Devnet bracket
     withDevnet,
 ) where
@@ -37,9 +56,14 @@ import System.Environment (lookupEnv)
 
 import Cardano.Crypto.DSIGN (
     Ed25519DSIGN,
+    SigDSIGN,
     SignKeyDSIGN,
+    VerKeyDSIGN,
     deriveVerKeyDSIGN,
     genKeyDSIGN,
+    rawDeserialiseSigDSIGN,
+    rawDeserialiseVerKeyDSIGN,
+    verifyDSIGN,
  )
 import Cardano.Crypto.Seed (mkSeedFromBytes)
 import Cardano.Ledger.Address (Addr (..))
