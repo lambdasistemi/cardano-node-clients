@@ -44,6 +44,9 @@ module Cardano.Node.Client.E2E.Setup (
     rawDeserialiseVerKeyDSIGN,
     rawDeserialiseSignKeyDSIGN,
     rawDeserialiseSigDSIGN,
+    rawSerialiseVerKeyDSIGN,
+    rawSerialiseSignKeyDSIGN,
+    rawSerialiseSigDSIGN,
 
     -- * Devnet bracket
     withDevnet,
@@ -66,6 +69,9 @@ import Cardano.Crypto.DSIGN (
     rawDeserialiseSigDSIGN,
     rawDeserialiseSignKeyDSIGN,
     rawDeserialiseVerKeyDSIGN,
+    rawSerialiseSigDSIGN,
+    rawSerialiseSignKeyDSIGN,
+    rawSerialiseVerKeyDSIGN,
     signDSIGN,
     verifyDSIGN,
  )
