@@ -118,15 +118,17 @@
           # depending on cardano-ledger-binary via lib.wasm.mkCardanoLedgerWasm.
           # Slice A smoke target — pattern ported from /code/haskell-mts/nix/wasm.nix.
           # Two-phase FOD: dep download (hashed) → offline wasm32-wasi-cabal build.
-          # dependenciesHash: recompute on first run (nix build emits the actual
-          # hash if this is wrong — replace lib.fakeHash at that point).
+          # dependenciesHash locked at the cborg-only smoke closure (no ledger
+          # yet — ledger needs wasm32-built libsodium/secp256k1/blst + pkg-config,
+          # tracked as follow-up).
           wasm-smoke = self.lib.wasm.mkCardanoLedgerWasm {
             inherit pkgs;
             ghcWasmMeta = ghc-wasm-meta.packages.${system}.all_9_12;
             chap = CHaP;
             src = ./nix/wasm/smoke;
             packages = [ "wasm-smoke" ];
-            dependenciesHash = pkgs.lib.fakeHash;
+            srpForks = [ "cborg" ];  # pre-fetch cborg fork for offline build
+            dependenciesHash = "sha256-nSVMFUbwa2s7A1HDrCTm8RTnK6802ZTDvHkWpi1oFRo=";
           };
         in {
           packages.devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''

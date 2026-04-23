@@ -18,10 +18,11 @@ in
   mkCardanoLedgerWasm =
     { pkgs
     , ghcWasmMeta
-    , chap ? null
+    , chap
     , src
     , packages
     , dependenciesHash
+    , srpForks ? []
     , projectFile ? "cabal-wasm.project"
     , extraCabalProject ? ""
     , indexState ? null
@@ -30,7 +31,7 @@ in
     (import ./mkCardanoLedgerWasm.nix {
       inherit pkgs lib ghcWasmMeta chap;
     }) {
-      inherit src packages dependenciesHash projectFile
+      inherit src packages dependenciesHash srpForks projectFile
               extraCabalProject indexState ghcVersion;
     };
 
