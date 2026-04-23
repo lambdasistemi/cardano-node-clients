@@ -130,11 +130,29 @@
             srpForks = [ "cborg" ];  # pre-fetch cborg fork for offline build
             dependenciesHash = "sha256-nSVMFUbwa2s7A1HDrCTm8RTnK6802ZTDvHkWpi1oFRo=";
           };
+
+          # Ledger smoke target: exercises the full override set + wasm32-built
+          # C libraries (libsodium, secp256k1, blst) via the cardano-ledger-binary
+          # closure.
+          wasm-ledger-smoke = self.lib.wasm.mkCardanoLedgerWasm {
+            inherit pkgs;
+            ghcWasmMeta = ghc-wasm-meta.packages.${system}.all_9_12;
+            wasiSdk     = ghc-wasm-meta.packages.${system}.wasi-sdk;
+            chap        = CHaP;
+            src         = ./nix/wasm/ledger-smoke;
+            packages    = [ "wasm-ledger-smoke" ];
+            srpForks    = [ "cborg" "plutus" "hs-memory" "foundation"
+                            "network" "double-conversion"
+                            "criterion-measurement" "haskell-lmdb-mock" ];
+            withCLibs   = true;
+            dependenciesHash = "sha256-7dU3eySn+38cWtWHY5L5SNKXjiHNSn5ll1Sjrxr8zbY=";
+          };
         in {
           packages.devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
             cp -r ${./e2e-test/genesis} $out
           '';
           packages.wasm-smoke = wasm-smoke;
+          packages.wasm-ledger-smoke = wasm-ledger-smoke;
           inherit checks;
           apps = import ./nix/apps.nix { inherit pkgs checks; };
           devShells.default = project.shell;

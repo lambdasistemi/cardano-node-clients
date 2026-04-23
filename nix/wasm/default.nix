@@ -18,21 +18,23 @@ in
   mkCardanoLedgerWasm =
     { pkgs
     , ghcWasmMeta
+    , wasiSdk ? null
     , chap
     , src
     , packages
     , dependenciesHash
     , srpForks ? []
+    , withCLibs ? false
     , projectFile ? "cabal-wasm.project"
     , extraCabalProject ? ""
     , indexState ? null
     , ghcVersion ? "9.12"
     }:
     (import ./mkCardanoLedgerWasm.nix {
-      inherit pkgs lib ghcWasmMeta chap;
+      inherit pkgs lib ghcWasmMeta wasiSdk chap;
     }) {
-      inherit src packages dependenciesHash srpForks projectFile
-              extraCabalProject indexState ghcVersion;
+      inherit src packages dependenciesHash srpForks withCLibs
+              projectFile extraCabalProject indexState ghcVersion;
     };
 
   forks = fragment.forks;

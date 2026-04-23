@@ -11,6 +11,7 @@
 { pkgs
 , lib
 , ghcWasmMeta
+, wasiSdk ? null        # ghc-wasm-meta.packages.<sys>.wasi-sdk; only required when cLibs != null
 , chap                  # Source tree of cardano-haskell-packages (flake input, flake = false)
 }:
 
@@ -18,6 +19,7 @@
 , packages              # [ "<exe-target>" ... ] — build targets for wasm32-wasi-cabal build
 , dependenciesHash      # sha256 of the FOD dep-download phase; compute on first run
 , srpForks ? []         # Subset of forks.pins names to pre-fetch and splice as `packages:` paths
+, withCLibs ? false     # Build and wire wasm32-wasi-built libsodium + secp256k1 + blst
 , projectFile ? "cabal-wasm.project"
 , extraCabalProject ? ""
 , indexState ? null
@@ -66,10 +68,10 @@ let
   '';
 
   # --- CHaP ----------------------------------------------------------------
-  # The CHaP flake input is a source tree containing 01-index.tar.gz at its root.
-  # We use it as-is (no truncation); the cabal-wasm.project's index-state
-  # clamp pins the effective resolution point.
-  chapIndex = "${chap}/01-index.tar.gz";
+  # The CHaP flake input is a complete hackage-repository tree (01-index.tar.gz
+  # plus root.json / snapshot.json / timestamp.json / mirrors.json), so we
+  # point cabal at it directly — no mkLocalHackageRepo (which re-signs with
+  # fake keys that clash with the real root keys the index references).
 
   bootstrappedChap = pkgs.runCommand "cabal-bootstrap-cardano-haskell-packages" {
     nativeBuildInputs = [ haskell-nix.nix-tools.exes.cabal ]
@@ -79,15 +81,16 @@ let
     mkdir -p $HOME/.cabal/packages/cardano-haskell-packages
     cat <<EOF > $HOME/.cabal/config
     repository cardano-haskell-packages
-      url: file:${
-        haskell-nix.mkLocalHackageRepo {
-          name = "cardano-haskell-packages";
-          index = chapIndex;
-        }
-      }
+      url: file:${chap}
       secure: True
-      root-keys: aaa
-      key-threshold: 0
+      root-keys:
+        3e0cce471cf09815f930210f7827266fd09045445d65923e6d0238a6cd15126f
+        443abb7fb497a134c343faf52f0b659bd7999bc06b7f63fa76dc99d631f9bea1
+        a86a1f6ce86c449c46666bda44268677abf29b5b2d2eb5ec7af903ec2f117a82
+        bcec67e8e99cabfa7764d75ad9b158d72bfacf70ca1d0ec8bc6b4406d1bf8413
+        c00aae8461a256275598500ea0e187588c35a5d5d7454fb57eac18d9edb86a56
+        d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
+      key-threshold: 3
     EOF
     cabal v2-update cardano-haskell-packages
     cp -r $HOME/.cabal/packages/cardano-haskell-packages $out
@@ -111,6 +114,14 @@ let
     repository cardano-haskell-packages
       url: https://chap.intersectmbo.org/
       secure: True
+      root-keys:
+        3e0cce471cf09815f930210f7827266fd09045445d65923e6d0238a6cd15126f
+        443abb7fb497a134c343faf52f0b659bd7999bc06b7f63fa76dc99d631f9bea1
+        a86a1f6ce86c449c46666bda44268677abf29b5b2d2eb5ec7af903ec2f117a82
+        bcec67e8e99cabfa7764d75ad9b158d72bfacf70ca1d0ec8bc6b4406d1bf8413
+        c00aae8461a256275598500ea0e187588c35a5d5d7454fb57eac18d9edb86a56
+        d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
+      key-threshold: 3
 
     executable-stripping: False
     shared: True
@@ -155,18 +166,57 @@ let
     if forkPackageLines == [] then ""
     else "packages:\n" + lib.concatStringsSep "\n" forkPackageLines + "\n";
 
+  cLibs =
+    if withCLibs
+    then
+      assert lib.assertMsg (wasiSdk != null) ''
+        mkCardanoLedgerWasm: withCLibs = true requires wasiSdk (use
+        ghc-wasm-meta.packages.<sys>.wasi-sdk).
+      '';
+      import ./c-libs {
+        inherit pkgs;
+        wasi-sdk = wasiSdk;
+      }
+    else null;
+
+  cLibsInputs = if cLibs == null then [] else cLibs.all ++ [ pkgs.pkg-config ];
+  cLibsPkgConfigPath = if cLibs == null then "" else cLibs.pkgConfigPath;
+
+  # cabal's --extra-lib-dirs / --extra-include-dirs so cardano-crypto-class's
+  # configure step finds blst/secp256k1/libsodium via the linker and headers.
+  cLibsExtraLibDirs =
+    if cLibs == null then []
+    else [
+      "${cLibs.libsodium}/lib"
+      "${cLibs.secp256k1}/lib"
+      "${cLibs.blst}/lib"
+    ];
+  cLibsExtraIncludeDirs =
+    if cLibs == null then []
+    else [
+      "${cLibs.libsodium}/include"
+      "${cLibs.secp256k1.dev}/include"
+      "${cLibs.blst}/include"
+    ];
+  cabalExtraDirsArgs = lib.concatStringsSep " " (
+    (map (d: "--extra-lib-dirs=${d}") cLibsExtraLibDirs) ++
+    (map (d: "--extra-include-dirs=${d}") cLibsExtraIncludeDirs)
+  );
+
   deps = pkgs.stdenv.mkDerivation {
     pname = "cardano-ledger-wasm-deps";
     version = "0.1.0";
     src = srcMetadata;
 
-    nativeBuildInputs = [ ghcWasmMeta pkgs.cacert pkgs.git pkgs.curl ];
+    nativeBuildInputs = [ ghcWasmMeta pkgs.cacert pkgs.git pkgs.curl ]
+      ++ cLibsInputs;
 
     buildPhase = ''
       export HOME=$NIX_BUILD_TOP/home
       mkdir -p $HOME
       export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
       export CURL_CA_BUNDLE=$SSL_CERT_FILE
+      ${lib.optionalString (cLibs != null) "export PKG_CONFIG_PATH=${cLibsPkgConfigPath}"}
 
       export CABAL_DIR=$NIX_BUILD_TOP/cabal
       mkdir -p $CABAL_DIR
@@ -175,6 +225,7 @@ let
 
       wasm32-wasi-cabal --project-file=${projectFile} build \
         --only-download \
+        ${cabalExtraDirsArgs} \
           ${buildTargetsArg}
     '';
 
@@ -194,11 +245,12 @@ let
     version = "0.1.0";
     inherit src;
 
-    nativeBuildInputs = [ ghcWasmMeta pkgs.git ];
+    nativeBuildInputs = [ ghcWasmMeta pkgs.git ] ++ cLibsInputs;
 
     configurePhase = ''
       export HOME=$NIX_BUILD_TOP/home
       mkdir -p $HOME
+      ${lib.optionalString (cLibs != null) "export PKG_CONFIG_PATH=${cLibsPkgConfigPath}"}
 
       export CABAL_DIR=$NIX_BUILD_TOP/cabal
       mkdir -p $CABAL_DIR
@@ -216,7 +268,9 @@ let
 
     buildPhase = ''
       export CABAL_DIR=$NIX_BUILD_TOP/cabal
+      ${lib.optionalString (cLibs != null) "export PKG_CONFIG_PATH=${cLibsPkgConfigPath}"}
       wasm32-wasi-cabal --project-file=${projectFile} build \
+        ${cabalExtraDirsArgs} \
         ${buildTargetsArg}
     '';
 
