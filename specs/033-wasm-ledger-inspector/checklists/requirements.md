@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — **FR-020 is flagged** (where to host the app + docs vs. carving a separate repo); impacts where code lives, not what exists
+- [x] No [NEEDS CLARIFICATION] markers remain — *FR-020 resolved 2026-04-23: inspector + docs live in this repo as `wasm-apps/tx-inspector/` + `docs/`, constitution to be amended accordingly*
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable — *SC-001..SC-007 all observable*
 - [x] Success criteria are technology-agnostic — *reviewed: no mention of specific frameworks; where terms like "browser" or "WASI runtime" appear, they name the runtime class, not a tool*
@@ -31,5 +31,5 @@
 
 ## Notes
 
-- **FR-020 clarification is open**: the spec has exactly one `[NEEDS CLARIFICATION]` marker, flagged intentionally because it affects the repo layout decision (subtree-in-this-repo vs. separate consumer repo) and interacts with the project constitution's Principle III. Resolving it is a gate before `/speckit.plan`.
+- **FR-020 resolved** (2026-04-23): inspector app + MkDocs demo live inside this repo as `wasm-apps/tx-inspector/` + `docs/`, carved out as demo infrastructure. Constitution amendment required before `/speckit.plan` — see `/speckit.constitution` step.
 - Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`.

@@ -100,7 +100,7 @@ Anyone who reads this project's documentation — a new contributor, a downstrea
 - **FR-017**: The project CI MUST run fixture-based tests of the inspector under a server-side WASI runtime on every push, using Conway tx hex fixtures captured from the MPFS end-to-end test suite (boot, request-insert, update at minimum).
 - **FR-018**: Every source-repository-package fork referenced by the module MUST have a pinned revision and a content hash recorded alongside it, so the build is reproducible offline.
 - **FR-019**: The flake MUST not add a runtime dependency on the IntersectMBO `cardano-api` repository; the override set is informed by cardano-api's precedent but must be self-contained.
-- **FR-020**: [NEEDS CLARIFICATION: Should the tx inspector app and the MkDocs live demo live inside this repository as `wasm-apps/` and `docs/` subtrees (treated as reference/demo infrastructure for the WASM Nix module), or should they live in a separate consumer repository? The current constitution's Principle III (Minimal Dependencies — no application-specific types) can be read to discourage adding an app here. Resolution affects where code sits but not what gets built.]
+- **FR-020**: The tx inspector app and the MkDocs live demo MUST live inside this repository as `wasm-apps/tx-inspector/` and `docs/` subtrees, understood as reference/demo infrastructure whose sole purpose is to exercise and showcase the WASM Nix module shipped by this repository. They are not application functionality of the N2C client library and MUST NOT be treated as such in the project's constitution or in downstream consumers' expectations. A constitution amendment formalizing this carve-out is a prerequisite for `/speckit.plan`.
 
 ### Key Entities *(data involved)*
 
