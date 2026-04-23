@@ -6,10 +6,13 @@
 
 ---
 
-## Decision 1 — WASM toolchain
+## Decision 1 — WASM toolchain and build model
 
-- **Decision**: GHC 9.10 via `ghc-wasm-meta` targeting `wasm32-wasi`, invoked through `ghc-wasm-meta.packages.${system}.all_9_10`.
-- **Rationale**: IntersectMBO's `cardano-api` master `wasmShell` uses `all_9_10` in its `flake.nix`, and that toolchain is what green CI on 2026-04-22 actually exercises. GHC 9.12 is cleaner in principle (Template Haskell on the WASM backend landed there — see [Tweag 2024-11 blog post](https://www.tweag.io/blog/2024-11-21-ghc-wasm-th-ghci/)), but the vendored `Jimbo4350/foundation` fork's `basement` module defines `word64ToWord#` locally, and GHC 9.12 added the same symbol to `GHC.Prim`, triggering an ambiguous-occurrence compile error. Until the basement/foundation forks are updated for 9.12, matching IntersectMBO's 9.10 choice is the only known-green path.
+- **Decision**: GHC 9.12 via `ghc-wasm-meta.packages.${system}.all_9_12`, invoked via `wasm32-wasi-cabal` directly in a regular Nix derivation. Do **not** use `haskell.nix cabalProject'` for the WASM compile — that is a native-GHC build path, not a cross-compile.
+- **Rationale**: The in-tree `haskell-mts/nix/wasm.nix` is the working reference implementation for this project family. It uses a two-phase FOD pattern (truncate Hackage index at a pinned state → bootstrap cabal cache → `wasm32-wasi-cabal --only-download` → offline `wasm32-wasi-cabal build`) with `ghc-wasm-meta.packages.${system}.all_9_12`, and compiles pure-Haskell closures to `wasm32-wasi` successfully. IntersectMBO's `cardano-api` WASM CI uses the same `wasm32-wasi-cabal build` pattern in their `cardano-wasm` package. Template Haskell on the WASM backend landed in GHC 9.12.1 ([Tweag 2024-11 blog post](https://www.tweag.io/blog/2024-11-21-ghc-wasm-th-ghci/)), which is important for the ledger/Plutus closure.
+- **Alternatives considered**:
+  - `pkgs.haskell-nix.cabalProject' { compiler-nix-name = "ghc9122"; }`. Rejected (after iteration): this is haskell.nix's native-GHC path and does not cross-compile to `wasm32-wasi`. Attempted during earlier Slice A iterations and produced native builds that hit basement's `word64ToWord#` clash because GHC 9.10/9.12's native `GHC.Prim` exposes that symbol. The clash is not about WASM — the compile was simply native.
+  - GHC-JS backend. Future follow-up; not covered by this feature.
 - **Alternatives considered**:
   - GHC-JS backend. Produces JavaScript, not WASM. Fine for browser-only consumers but eliminates server-side WASI runtimes (`wasmtime`, embedded wallets). Kept as a future follow-up; not required for this feature.
   - `asterius`. Superseded by the upstream GHC WASM backend; no longer actively developed.

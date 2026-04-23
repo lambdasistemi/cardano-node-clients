@@ -54,16 +54,19 @@ Existing flake outputs (the N2C client library, devnet helpers, chain-follower, 
 - **Signature**:
   ```nix
   mkCardanoLedgerWasm :: {
-    pkgs        : <nixpkgs with haskell-nix overlay>;
-    ghcWasmMeta : <path>;                # derivation or source of ghc-wasm-meta (wasm32-wasi GHC 9.12)
-    chap        : <path>;                # source tree of cardano-haskell-packages (flake input, flake = false)
-    src         : <path>;                # source tree of the caller's Haskell project
-    packages    : [ <string> ];          # ledger packages to include, e.g. [ "cardano-ledger-api" "cardano-ledger-conway" ]
-    extraCabalProject ? ""   : <string>; # optional extra cabal.project text appended
-    ghcVersion ? "9.12"      : <string>; # currently only "9.12" is supported
-    indexState ? <default>   : <string>; # Hackage index-state; defaults to the feature's pinned value
+    pkgs             : <nixpkgs with haskell-nix overlay>;
+    ghcWasmMeta      : <derivation>;          # ghc-wasm-meta.packages.<sys>.all_9_12 (wasm32-wasi GHC + toolchain)
+    chap ? null      : <path>;                # optional source tree of CHaP; reserved for future use
+    src              : <path>;                # source tree containing cabal-wasm.project + caller's cabal package
+    packages         : [ <string> ];          # build targets (exe names) passed to `wasm32-wasi-cabal build`
+    dependenciesHash : <string>;              # sha256 of the FOD dep-download phase (cabal cache after --only-download)
+    projectFile ? "cabal-wasm.project" : <string>;
+    extraCabalProject ? ""   : <string>;      # reserved; additional cabal.project fragment
+    indexState ? <default>   : <string>;      # Hackage index-state override; defaults to forks.json value
+    ghcVersion ? "9.12"      : <string>;      # currently only "9.12" is supported
   } -> <derivation>
   ```
+  The returned derivation produces `.wasm` files in `$out`, one per target in `packages`. The FOD deps derivation is available via `drv.deps`.
 - **Output**: a derivation whose `$out` contains a `.wasm` file (and, where relevant, an accompanying `index.html` and a `bin/` symlink). The exact output layout is considered stable within a feature version.
 - **Intended use**: one-call turnkey WASM build for a chosen ledger subset. The caller does not need to know about fork pins, cabal flags, or the two-phase FOD mechanics; the builder wires them all.
 
