@@ -11,6 +11,9 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 - **Balance** -- exact-fee transaction balancing plus fee-dependent output convergence
 - **TxBuild** -- Conway-era transaction builder DSL with `Peek`, `Ctx`, and `Valid`
 - **N2C** -- LocalStateQuery + LocalTxSubmission over Unix socket
+- **WASM ledger toolkit** -- reusable Nix module for cross-compiling a
+  `cardano-ledger-*` subset to `wasm32-wasi`, plus a Conway tx inspector
+  demo. See [specs/033-wasm-ledger-inspector/quickstart.md](specs/033-wasm-ledger-inspector/quickstart.md).
 
 ## Testing
 

@@ -20,9 +20,9 @@ description: "Task list for 033-wasm-ledger-inspector"
 
 **Purpose**: Create the directory scaffolding and branch hygiene before any real work begins.
 
-- [ ] T001 Create top-level directories `nix/wasm/`, `wasm-apps/tx-inspector/`, `test/fixtures/conway/`, `docs/`, `.github/workflows/` in the worktree `/code/cardano-node-clients-wasm-inspector` per the Project Structure in `specs/033-wasm-ledger-inspector/plan.md`
-- [ ] T002 [P] Add `.gitignore` entries for `result`, `result-*`, `docs/site/`, `docs/inspector/assets/inspector.wasm` at repo root
-- [ ] T003 [P] Add a top-level `README.md` section linking to `specs/033-wasm-ledger-inspector/quickstart.md` so downstream consumers have a starting point
+- [X] T001 Create top-level directories `nix/wasm/`, `wasm-apps/tx-inspector/`, `test/fixtures/conway/`, `docs/`, `.github/workflows/` in the worktree `/code/cardano-node-clients-wasm-inspector` per the Project Structure in `specs/033-wasm-ledger-inspector/plan.md`
+- [X] T002 [P] Add `.gitignore` entries for `result`, `result-*`, `docs/site/`, `docs/inspector/assets/inspector.wasm` at repo root
+- [X] T003 [P] Add a top-level `README.md` section linking to `specs/033-wasm-ledger-inspector/quickstart.md` so downstream consumers have a starting point
 
 **Checkpoint**: Empty scaffolding committed; branch ready for feature work.
 
