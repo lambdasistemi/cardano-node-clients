@@ -32,12 +32,19 @@
     cardano-node = {
       url = "github:IntersectMBO/cardano-node/10.7.0";
     };
+    ghc-wasm-meta = {
+      url = "gitlab:haskell-wasm/ghc-wasm-meta?host=gitlab.haskell.org";
+      flake = false;
+    };
   };
 
   outputs = inputs@{ self, nixpkgs, flake-parts, haskellNix, hackageNix
-    , iohkNix, CHaP, mkdocs, cardano-node, ... }:
+    , iohkNix, CHaP, mkdocs, cardano-node, ghc-wasm-meta, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-darwin" ];
+      flake = {
+        lib.wasm = import ./nix/wasm { lib = nixpkgs.lib; };
+      };
       perSystem = { system, ... }:
         let
           pkgs = import nixpkgs {

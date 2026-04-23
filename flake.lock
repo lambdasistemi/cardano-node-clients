@@ -426,6 +426,24 @@
         "type": "github"
       }
     },
+    "ghc-wasm-meta": {
+      "flake": false,
+      "locked": {
+        "host": "gitlab.haskell.org",
+        "lastModified": 1775305067,
+        "narHash": "sha256-KFWRYVYPgsXu51stX/7/416qc31HFltfQiHPc6nEmH0=",
+        "owner": "haskell-wasm",
+        "repo": "ghc-wasm-meta",
+        "rev": "60098a5076557e327b326a1a3ba3b5fb4fec1e49",
+        "type": "gitlab"
+      },
+      "original": {
+        "host": "gitlab.haskell.org",
+        "owner": "haskell-wasm",
+        "repo": "ghc-wasm-meta",
+        "type": "gitlab"
+      }
+    },
     "hackage-for-stackage": {
       "flake": false,
       "locked": {
@@ -1538,6 +1556,7 @@
         "CHaP": "CHaP",
         "cardano-node": "cardano-node",
         "flake-parts": "flake-parts",
+        "ghc-wasm-meta": "ghc-wasm-meta",
         "hackageNix": "hackageNix_3",
         "haskellNix": "haskellNix_2",
         "iohkNix": "iohkNix_2",

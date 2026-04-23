@@ -34,16 +34,16 @@ description: "Task list for 033-wasm-ledger-inspector"
 
 **⚠️ CRITICAL**: No user story work begins until Phase 2 completes.
 
-- [ ] T004 Create `nix/wasm/forks.json` listing every vendored source-repository-package pin (owner, repo, rev, sha256, subdir?) — use the list of fork origins enumerated in `specs/033-wasm-ledger-inspector/research.md` Decision 3 as the source of truth; compute nix32 hashes per the `/nix` skill
-- [ ] T005 Create `nix/wasm/cabal-project-fragment.nix` emitting the `if arch(wasm32)` cabal.project text — mirror the package flags and allow-newer list in `specs/033-wasm-ledger-inspector/research.md` Decision 3
-- [ ] T006 Create `nix/wasm/overrides.nix` implementing the `haskellWasmOverlay` (haskell.nix overlay) sourcing fork pins from `nix/wasm/forks.json`
-- [ ] T007 Create `nix/wasm/truncated-index.nix` implementing the deterministic Hackage index truncation FOD per `specs/033-wasm-ledger-inspector/research.md` Decision 4 and the `haskell-wasm` skill's "Two-phase FOD" section
-- [ ] T008 Create `nix/wasm/bootstrap-cabal.nix` building the bootstrapped cabal store from the truncated index (FOD phase 1)
-- [ ] T009 Create `nix/wasm/project.nix` wrapping `haskell.nix cabalProject'` with the overlay + the cabal-project fragment + the bootstrapped cabal store, producing a `wasm32-wasi` project
-- [ ] T010 Create `nix/wasm/mkCardanoLedgerWasm.nix` implementing the public `mkCardanoLedgerWasm` builder matching the signature in `specs/033-wasm-ledger-inspector/contracts/nix-api.md`
-- [ ] T011 Create `nix/wasm/default.nix` re-exporting `cabalWasmProjectFragment`, `haskellWasmOverlay`, `mkCardanoLedgerWasm`, `forks` — the exact surface pinned in `specs/033-wasm-ledger-inspector/contracts/nix-api.md`
-- [ ] T012 Wire `outputs.lib.wasm = import ./nix/wasm { inherit pkgs; }` into `flake.nix` without touching existing N2C flake outputs (FR-016)
-- [ ] T013 Add `ghc-wasm-meta` as a flake input pinned to `gitlab:haskell-wasm/ghc-wasm-meta?host=gitlab.haskell.org#all_9_12` per `specs/033-wasm-ledger-inspector/research.md` Decision 1
+- [X] T004 Create `nix/wasm/forks.json` listing every vendored source-repository-package pin (owner, repo, rev, sha256, subdir?) — use the list of fork origins enumerated in `specs/033-wasm-ledger-inspector/research.md` Decision 3 as the source of truth; compute nix32 hashes per the `/nix` skill
+- [X] T005 Create `nix/wasm/cabal-project-fragment.nix` emitting the `if arch(wasm32)` cabal.project text — mirror the package flags and allow-newer list in `specs/033-wasm-ledger-inspector/research.md` Decision 3
+- [X] T006 Create `nix/wasm/overrides.nix` implementing the `haskellWasmOverlay` (haskell.nix overlay) sourcing fork pins from `nix/wasm/forks.json`
+- [X] T007 Create `nix/wasm/truncated-index.nix` implementing the deterministic Hackage index truncation FOD per `specs/033-wasm-ledger-inspector/research.md` Decision 4 and the `haskell-wasm` skill's "Two-phase FOD" section
+- [X] T008 Create `nix/wasm/bootstrap-cabal.nix` building the bootstrapped cabal store from the truncated index (FOD phase 1)
+- [X] T009 Create `nix/wasm/project.nix` wrapping `haskell.nix cabalProject'` with the overlay + the cabal-project fragment + the bootstrapped cabal store, producing a `wasm32-wasi` project
+- [X] T010 Create `nix/wasm/mkCardanoLedgerWasm.nix` implementing the public `mkCardanoLedgerWasm` builder matching the signature in `specs/033-wasm-ledger-inspector/contracts/nix-api.md`
+- [X] T011 Create `nix/wasm/default.nix` re-exporting `cabalWasmProjectFragment`, `haskellWasmOverlay`, `mkCardanoLedgerWasm`, `forks` — the exact surface pinned in `specs/033-wasm-ledger-inspector/contracts/nix-api.md`
+- [X] T012 Wire `outputs.lib.wasm = import ./nix/wasm { inherit pkgs; }` into `flake.nix` without touching existing N2C flake outputs (FR-016)
+- [X] T013 Add `ghc-wasm-meta` as a flake input pinned to `gitlab:haskell-wasm/ghc-wasm-meta?host=gitlab.haskell.org#all_9_12` per `specs/033-wasm-ledger-inspector/research.md` Decision 1
 
 **Checkpoint**: `nix eval .#lib.wasm` succeeds and exposes the four documented attributes; existing flake outputs unchanged.
 
