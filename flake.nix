@@ -13,7 +13,7 @@
       inputs.hackage.follows = "hackageNix";
     };
     hackageNix = {
-      url = "github:input-output-hk/hackage.nix/55ba0ca4bcc9690f2ea45335cb2b9e95d8219a04";
+      url = "github:input-output-hk/hackage.nix/c3d44f9e5d929e86a45a48246667ea25cd1f11df";
       flake = false;
     };
     nixpkgs.follows = "haskellNix/nixpkgs-unstable";
@@ -25,7 +25,7 @@
     };
     CHaP = {
       url =
-        "github:intersectmbo/cardano-haskell-packages/887d73ce434831e3a67df48e070f4f979b3ac5a6";
+        "github:intersectmbo/cardano-haskell-packages/00c90c10812a98ef9680f4bfa269d42366d46d89";
       flake = false;
     };
     mkdocs.url = "github:paolino/dev-assets?dir=mkdocs";
