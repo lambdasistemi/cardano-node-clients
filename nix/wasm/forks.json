@@ -1,7 +1,7 @@
 {
   "comment": "Vendored source-repository-package pins mirroring IntersectMBO/cardano-api master cabal.project if arch(wasm32). Owned here under lambdasistemi; pin bumps are a single-file change. Hashes are nix32 per /nix skill (SRI format triggers fetchgit FODs that fail the store-path reference scan). First-iteration revs captured from cardano-api master on 2026-04-23.",
   "indexState": {
-    "hackage": "2026-04-17T09:20:55Z",
+    "hackage": "2026-04-15T00:00:00Z",
     "chap": "2026-04-15T11:20:53Z"
   },
   "pins": {

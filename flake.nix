@@ -116,15 +116,17 @@
 
           # Slice A smoke target: wasm32-wasi build of a trivial library
           # depending on cardano-ledger-binary via lib.wasm.mkCardanoLedgerWasm.
+          # Slice A smoke target — pattern ported from /code/haskell-mts/nix/wasm.nix.
+          # Two-phase FOD: dep download (hashed) → offline wasm32-wasi-cabal build.
+          # dependenciesHash: recompute on first run (nix build emits the actual
+          # hash if this is wrong — replace lib.fakeHash at that point).
           wasm-smoke = self.lib.wasm.mkCardanoLedgerWasm {
             inherit pkgs;
-            # GHC 9.10 matches IntersectMBO/cardano-api master's wasmShell;
-            # GHC 9.12 fails because `word64ToWord#` added to GHC.Prim clashes
-            # with the Jimbo4350/foundation basement local definition.
-            ghcWasmMeta = ghc-wasm-meta.packages.${system}.all_9_10;
+            ghcWasmMeta = ghc-wasm-meta.packages.${system}.all_9_12;
             chap = CHaP;
             src = ./nix/wasm/smoke;
             packages = [ "wasm-smoke" ];
+            dependenciesHash = pkgs.lib.fakeHash;
           };
         in {
           packages.devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''

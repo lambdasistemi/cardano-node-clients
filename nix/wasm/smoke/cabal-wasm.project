@@ -1,0 +1,24 @@
+-- WASM build configuration for the cardano-ledger-binary smoke target.
+-- Pattern ported from /code/haskell-mts/cabal-wasm.project.
+--
+-- Usage:
+--   wasm32-wasi-cabal --project-file=cabal-wasm.project build wasm-smoke
+
+allow-newer: *:template-haskell, *:base, *:deepseq, *:ghc-prim, *:time, *:text
+
+-- 1 day before the truncate-index boundary in mkCardanoLedgerWasm.nix.
+index-state:
+  , hackage.haskell.org 2026-04-14T00:00:00Z
+
+packages: wasm-smoke
+
+-- cborg 0.2.10.0 on Hackage is broken on GHC 9.12 WASM (undefined
+-- GHC.IntWord64 operations). Git HEAD has the MIN_VERSION_base guard.
+source-repository-package
+  type: git
+  location: https://github.com/well-typed/cborg.git
+  tag: 72a0e736e24c864b5a9b95d90adb37a9e8e6d761
+  subdir: cborg
+
+tests: False
+benchmarks: False
