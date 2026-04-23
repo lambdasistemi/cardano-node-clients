@@ -54,8 +54,11 @@ Existing flake outputs (the N2C client library, devnet helpers, chain-follower, 
 - **Signature**:
   ```nix
   mkCardanoLedgerWasm :: {
-    pkgs     : <nixpkgs with haskell-nix overlay>;
-    packages : [ <string> ];             # ledger packages to include, e.g. [ "cardano-ledger-api" "cardano-ledger-conway" ]
+    pkgs        : <nixpkgs with haskell-nix overlay>;
+    ghcWasmMeta : <path>;                # derivation or source of ghc-wasm-meta (wasm32-wasi GHC 9.12)
+    chap        : <path>;                # source tree of cardano-haskell-packages (flake input, flake = false)
+    src         : <path>;                # source tree of the caller's Haskell project
+    packages    : [ <string> ];          # ledger packages to include, e.g. [ "cardano-ledger-api" "cardano-ledger-conway" ]
     extraCabalProject ? ""   : <string>; # optional extra cabal.project text appended
     ghcVersion ? "9.12"      : <string>; # currently only "9.12" is supported
     indexState ? <default>   : <string>; # Hackage index-state; defaults to the feature's pinned value

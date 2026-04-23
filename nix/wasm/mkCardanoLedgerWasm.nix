@@ -8,6 +8,7 @@
 { pkgs
 , lib
 , ghcWasmMeta
+, chap
 }:
 
 { src
@@ -24,7 +25,7 @@ assert lib.assertMsg (ghcVersion == "9.12") ''
 
 let
   project = import ./project.nix {
-    inherit pkgs lib ghcWasmMeta src extraCabalProject;
+    inherit pkgs lib ghcWasmMeta chap src extraCabalProject;
   };
 
   # For each requested package, pick its library component.

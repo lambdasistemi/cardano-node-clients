@@ -18,6 +18,7 @@ in
   mkCardanoLedgerWasm =
     { pkgs
     , ghcWasmMeta
+    , chap
     , src
     , packages
     , extraCabalProject ? ""
@@ -25,7 +26,7 @@ in
     , ghcVersion ? "9.12"
     }:
     (import ./mkCardanoLedgerWasm.nix {
-      inherit pkgs lib ghcWasmMeta;
+      inherit pkgs lib ghcWasmMeta chap;
     }) {
       inherit src packages extraCabalProject indexState ghcVersion;
     };

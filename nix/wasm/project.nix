@@ -1,9 +1,16 @@
 # haskell.nix cabalProject' wrapping the WASM override set.
 #
-# This is the inner engine of mkCardanoLedgerWasm. It accepts a source tree
-# (the consumer's own Haskell package) and returns a configured project
-# targeting wasm32-wasi with all forks applied.
-{ pkgs, lib, ghcWasmMeta, src, extraCabalProject ? "" }:
+# This is the inner engine of mkCardanoLedgerWasm. The caller passes in the
+# CHaP source (typically the flake input already present in their flake.nix)
+# rather than having us re-fetch it, which keeps the builder hermetic and
+# avoids `lib.fakeHash` gymnastics.
+{ pkgs
+, lib
+, ghcWasmMeta
+, chap           # Source tree of cardano-haskell-packages (typically a flake input, flake = false)
+, src
+, extraCabalProject ? ""
+}:
 
 let
   fragment = import ./cabal-project-fragment.nix { inherit lib; };
@@ -19,18 +26,13 @@ pkgs.haskell-nix.cabalProject' {
 
   compiler-nix-name = "ghc9122";
 
-  # index-state lines are pulled from forks.json — the single source of truth.
-  index-state = [
-    "hackage.haskell.org ${forks.indexState.hackage}"
-    "cardano-haskell-packages ${forks.indexState.chap}"
-  ];
+  # haskell.nix takes a single Hackage index-state; CHaP's own index-state
+  # is carried by the cabal.project (see smoke/cabal.project or whatever the
+  # caller supplies). Values source from forks.json — single source of truth.
+  index-state = forks.indexState.hackage;
 
   inputMap = {
-    "https://chap.intersectmbo.org/" = pkgs.fetchgit {
-      url = "https://github.com/intersectmbo/cardano-haskell-packages";
-      rev = "master";
-      sha256 = lib.fakeHash; # NOTE: compute on first build via --sha256 comment pattern
-    };
+    "https://chap.intersectmbo.org/" = chap;
   };
 
   inherit cabalProjectLocal;
@@ -38,7 +40,6 @@ pkgs.haskell-nix.cabalProject' {
   modules = [
     overrides
     {
-      # Cross-compilation target: wasm32-wasi.
       reinstallableLibGhc = false;
     }
   ];
@@ -48,6 +49,6 @@ pkgs.haskell-nix.cabalProject' {
     tools = {
       cabal = "latest";
     };
-    buildInputs = [ ghcWasmMeta.wasm32-wasi-ghc-9_12 ];
+    buildInputs = [ ghcWasmMeta ];
   };
 }

@@ -34,7 +34,6 @@
     };
     ghc-wasm-meta = {
       url = "gitlab:haskell-wasm/ghc-wasm-meta?host=gitlab.haskell.org";
-      flake = false;
     };
   };
 
@@ -114,10 +113,21 @@
             cardanoNode = cardano-node.packages.${system}.cardano-node;
             src = ./.;
           };
+
+          # Slice A smoke target: wasm32-wasi build of a trivial library
+          # depending on cardano-ledger-binary via lib.wasm.mkCardanoLedgerWasm.
+          wasm-smoke = self.lib.wasm.mkCardanoLedgerWasm {
+            inherit pkgs;
+            ghcWasmMeta = ghc-wasm-meta.packages.${system}.all_9_12;
+            chap = CHaP;
+            src = ./nix/wasm/smoke;
+            packages = [ "wasm-smoke" ];
+          };
         in {
           packages.devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
             cp -r ${./e2e-test/genesis} $out
           '';
+          packages.wasm-smoke = wasm-smoke;
           inherit checks;
           apps = import ./nix/apps.nix { inherit pkgs checks; };
           devShells.default = project.shell;
