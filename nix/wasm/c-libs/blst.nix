@@ -39,19 +39,19 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     done
 
     mkdir -p $out/lib/pkgconfig
-    cat <<EOF > $out/lib/pkgconfig/libblst.pc
+    cat > $out/lib/pkgconfig/libblst.pc <<EOF
     prefix=$out
-    exec_prefix=''${prefix}
-    libdir=''${exec_prefix}/lib
-    includedir=''${prefix}/include
+    exec_prefix=\''${prefix}
+    libdir=\''${exec_prefix}/lib
+    includedir=\''${prefix}/include
 
     Name: libblst
     Description: blst (pronounced 'blast') is a BLS12-381 signature library focused on performance and security. It is written in C and assembly.
     URL: https://github.com/supranational/blst
     Version: ${version}
 
-    Cflags: -I''${includedir}
-    Libs: -L''${libdir} -lblst
+    Cflags: -I\''${includedir}
+    Libs: -L\''${libdir} -lblst
     Libs.private:
     EOF
 

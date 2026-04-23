@@ -2,6 +2,8 @@
 --
 --   Referencing a Version value is enough to force the linker through
 --   the full ledger-binary module graph.
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 module WasmLedgerSmoke
     ( smokeVersion
     ) where

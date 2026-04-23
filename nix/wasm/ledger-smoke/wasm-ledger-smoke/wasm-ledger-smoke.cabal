@@ -19,6 +19,7 @@ executable wasm-ledger-smoke
   main-is:          Main.hs
   hs-source-dirs:   app
   build-depends:    base               >=4.19 && <5
+                  , cardano-ledger-binary
                   , wasm-ledger-smoke
   default-language: Haskell2010
   ghc-options:      -Wall
