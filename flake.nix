@@ -85,12 +85,13 @@
             chap         = CHaP;
             smokeSrc        = ./nix/wasm/smoke;
             ledgerSmokeSrc  = ./nix/wasm/ledger-smoke;
+            txInspectorSrc  = ./nix/wasm/tx-inspector;
           };
 
           tx-inspector-ui = import ./nix/wasm-ui.nix {
             inherit system nixpkgs purescript-overlay mkSpagoDerivation;
-            wasmArtifact     = wasmTargets.wasm-ledger-smoke;
-            wasmArtifactName = "wasm-ledger-smoke";
+            wasmArtifact     = wasmTargets.wasm-tx-inspector;
+            wasmArtifactName = "wasm-tx-inspector";
             src              = ./docs/inspector;
           };
         in
@@ -99,13 +100,43 @@
             devnet-genesis = pkgs.runCommand "devnet-genesis" { } ''
               cp -r ${./e2e-test/genesis} $out
             '';
-            inherit (wasmTargets) wasm-smoke wasm-ledger-smoke;
+            inherit (wasmTargets) wasm-smoke wasm-ledger-smoke wasm-tx-inspector;
             inherit tx-inspector-ui;
           };
 
           inherit checks apps;
 
-          devShells.default = project.shell;
+          devShells = {
+            default = project.shell;
+
+            # Fast-iteration shell for the wasm-tx-inspector Haskell source.
+            # Mounts the locked FOD deps cache + the wasm32-wasi toolchain, so
+            # editing Inspector.hs + running `wasm32-wasi-cabal build` inside
+            # docs/wasm/tx-inspector rebuilds in seconds (dist-newstyle stays
+            # warm between invocations, no Nix sandbox re-entry).
+            #
+            # Usage:
+            #   nix develop .#wasm-dev
+            #   cd nix/wasm/tx-inspector
+            #   export CABAL_DIR=$WASM_CABAL_DIR
+            #   wasm32-wasi-cabal --project-file=cabal-wasm.project build wasm-tx-inspector
+            wasm-dev = pkgs.mkShell {
+              buildInputs = [
+                ghc-wasm-meta.packages.${system}.all_9_12
+                ghc-wasm-meta.packages.${system}.wasi-sdk
+                pkgs.just
+                pkgs.pkg-config
+                pkgs.wasmtime
+              ] ++ wasmTargets.wasm-tx-inspector.passthru.deps.nativeBuildInputs or [];
+
+              shellHook = ''
+                export WASM_CABAL_DIR="${wasmTargets.wasm-tx-inspector.passthru.deps}"
+                echo "wasm-tx-inspector dev shell ready."
+                echo "  WASM_CABAL_DIR=$WASM_CABAL_DIR   (locked FOD deps cache)"
+                echo "  tools: wasm32-wasi-ghc, wasm32-wasi-cabal, wasi-sdk, wasmtime"
+              '';
+            };
+          };
         };
     };
 }

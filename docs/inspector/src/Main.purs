@@ -43,10 +43,26 @@ inspectorComponent =
 
   render state =
     HH.div_
-      [ HH.h1_ [ HH.text "Conway tx inspector (WASM)" ]
+      [ HH.h1_ [ HH.text "Conway tx inspector" ]
       , HH.p_
           [ HH.text
-              "Paste a Conway-era transaction CBOR in hex. The Haskell decoder is embedded as a wasm32-wasi binary."
+              "This page decodes Cardano Conway-era transactions using the upstream Haskell ledger code "
+          , HH.strong_ [ HH.text "unchanged" ]
+          , HH.text
+              " — the same "
+          , HH.code_ [ HH.text "cardano-ledger-conway" ]
+          , HH.text " + "
+          , HH.code_ [ HH.text "cardano-ledger-binary" ]
+          , HH.text
+              " packages IntersectMBO ships for node and CLI, cross-compiled to "
+          , HH.code_ [ HH.text "wasm32-wasi" ]
+          , HH.text
+              " via GHC's WASM backend and loaded here through a browser WASI shim. No re-implementation, no CBOR re-encode: bytes go in, the ledger decoder runs, structural JSON comes out."
+          ]
+      , HH.p_
+          [ HH.text "Paste a Conway-era transaction CBOR hex below. You can fetch one via Blockfrost: "
+          , HH.code_ [ HH.text "GET /txs/{hash}/cbor" ]
+          , HH.text "."
           ]
       , HH.textarea
           [ HP.value state.input
