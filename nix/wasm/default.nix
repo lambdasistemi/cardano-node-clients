@@ -23,7 +23,7 @@ in
     , packages
     , extraCabalProject ? ""
     , indexState ? null
-    , ghcVersion ? "9.12"
+    , ghcVersion ? "9.10"
     }:
     (import ./mkCardanoLedgerWasm.nix {
       inherit pkgs lib ghcWasmMeta chap;

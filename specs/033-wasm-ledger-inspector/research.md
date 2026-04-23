@@ -8,8 +8,8 @@
 
 ## Decision 1 — WASM toolchain
 
-- **Decision**: GHC 9.12 via `ghc-wasm-meta` targeting `wasm32-wasi`, invoked from a `nix shell 'gitlab:haskell-wasm/ghc-wasm-meta?host=gitlab.haskell.org#all_9_12'` environment.
-- **Rationale**: GHC 9.12.1 is the first version where Template Haskell on the WASM backend works end-to-end ([Tweag 2024-11 blog post](https://www.tweag.io/blog/2024-11-21-ghc-wasm-th-ghci/)). TH is pervasive in the ledger / Plutus dependency closure; anything earlier would require dodging TH in packages we don't own. IntersectMBO's `cardano-wasm` sub-package uses this exact toolchain and compiles the ledger closure successfully, which validates the choice.
+- **Decision**: GHC 9.10 via `ghc-wasm-meta` targeting `wasm32-wasi`, invoked through `ghc-wasm-meta.packages.${system}.all_9_10`.
+- **Rationale**: IntersectMBO's `cardano-api` master `wasmShell` uses `all_9_10` in its `flake.nix`, and that toolchain is what green CI on 2026-04-22 actually exercises. GHC 9.12 is cleaner in principle (Template Haskell on the WASM backend landed there — see [Tweag 2024-11 blog post](https://www.tweag.io/blog/2024-11-21-ghc-wasm-th-ghci/)), but the vendored `Jimbo4350/foundation` fork's `basement` module defines `word64ToWord#` locally, and GHC 9.12 added the same symbol to `GHC.Prim`, triggering an ambiguous-occurrence compile error. Until the basement/foundation forks are updated for 9.12, matching IntersectMBO's 9.10 choice is the only known-green path.
 - **Alternatives considered**:
   - GHC-JS backend. Produces JavaScript, not WASM. Fine for browser-only consumers but eliminates server-side WASI runtimes (`wasmtime`, embedded wallets). Kept as a future follow-up; not required for this feature.
   - `asterius`. Superseded by the upstream GHC WASM backend; no longer actively developed.

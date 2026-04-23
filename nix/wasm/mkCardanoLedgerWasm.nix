@@ -15,12 +15,14 @@
 , packages
 , extraCabalProject ? ""
 , indexState ? null
-, ghcVersion ? "9.12"
+, ghcVersion ? "9.10"
 }:
 
-assert lib.assertMsg (ghcVersion == "9.12") ''
-  mkCardanoLedgerWasm currently supports only GHC 9.12.
-  Template Haskell on the WASM backend requires 9.12.1+ (see research.md Decision 1).
+assert lib.assertMsg (ghcVersion == "9.10") ''
+  mkCardanoLedgerWasm currently supports only GHC 9.10.
+  IntersectMBO/cardano-api master's wasmShell uses all_9_10; GHC 9.12 clashes
+  with the basement/foundation fork on word64ToWord#. This will relax once the
+  upstream forks catch up to 9.12.
 '';
 
 let

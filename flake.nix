@@ -118,7 +118,10 @@
           # depending on cardano-ledger-binary via lib.wasm.mkCardanoLedgerWasm.
           wasm-smoke = self.lib.wasm.mkCardanoLedgerWasm {
             inherit pkgs;
-            ghcWasmMeta = ghc-wasm-meta.packages.${system}.all_9_12;
+            # GHC 9.10 matches IntersectMBO/cardano-api master's wasmShell;
+            # GHC 9.12 fails because `word64ToWord#` added to GHC.Prim clashes
+            # with the Jimbo4350/foundation basement local definition.
+            ghcWasmMeta = ghc-wasm-meta.packages.${system}.all_9_10;
             chap = CHaP;
             src = ./nix/wasm/smoke;
             packages = [ "wasm-smoke" ];
