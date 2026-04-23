@@ -1,0 +1,24 @@
+package:
+  name: tx-inspector-ui
+  dependencies:
+    - prelude
+    - effect
+    - aff
+    - aff-promise
+    - console
+    - halogen
+    - maybe
+    - either
+    - strings
+    - web-html
+    - web-events
+    - foreign
+  bundle:
+    module: Main
+    outfile: dist/index.js
+    platform: browser
+    type: app
+
+workspace:
+  packageSet:
+    registry: 72.1.0
