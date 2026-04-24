@@ -110,32 +110,70 @@
             default = project.shell;
 
             # Fast-iteration shell for the wasm-tx-inspector Haskell source.
-            # Mounts the locked FOD deps cache + the wasm32-wasi toolchain, so
-            # editing Inspector.hs + running `wasm32-wasi-cabal build` inside
-            # docs/wasm/tx-inspector rebuilds in seconds (dist-newstyle stays
-            # warm between invocations, no Nix sandbox re-entry).
+            #
+            # Mounts prebuiltDeps (compiled full ledger closure, patched
+            # project file with SRP forks inlined, precompiled dist-newstyle)
+            # plus the wasm32-wasi toolchain. `wasm32-wasi-cabal build` uses
+            # the precompiled libs — only Inspector.hs recompiles.
+            #
+            # First run populates a host-writable workspace under
+            # $WASM_DEV_WORKSPACE; subsequent edits rebuild in seconds
+            # because dist-newstyle stays warm between shell sessions.
             #
             # Usage:
             #   nix develop .#wasm-dev
-            #   cd nix/wasm/tx-inspector
-            #   export CABAL_DIR=$WASM_CABAL_DIR
+            #   cd $WASM_DEV_WORKSPACE
             #   wasm32-wasi-cabal --project-file=cabal-wasm.project build wasm-tx-inspector
-            wasm-dev = pkgs.mkShell {
-              buildInputs = [
-                ghc-wasm-meta.packages.${system}.all_9_12
-                ghc-wasm-meta.packages.${system}.wasi-sdk
-                pkgs.just
-                pkgs.pkg-config
-                pkgs.wasmtime
-              ] ++ wasmTargets.wasm-tx-inspector.passthru.deps.nativeBuildInputs or [];
+            wasm-dev =
+              let
+                preBuilt = wasmTargets.wasm-tx-inspector.passthru.prebuiltDeps;
+                txInspectorSrc = ./nix/wasm/tx-inspector;
+                cLibsLib = [
+                  "${ghc-wasm-meta.packages.${system}.wasi-sdk}"
+                ];
+              in
+              pkgs.mkShell {
+                buildInputs = [
+                  ghc-wasm-meta.packages.${system}.all_9_12
+                  ghc-wasm-meta.packages.${system}.wasi-sdk
+                  pkgs.just
+                  pkgs.pkg-config
+                  pkgs.wasmtime
+                ];
 
-              shellHook = ''
-                export WASM_CABAL_DIR="${wasmTargets.wasm-tx-inspector.passthru.deps}"
-                echo "wasm-tx-inspector dev shell ready."
-                echo "  WASM_CABAL_DIR=$WASM_CABAL_DIR   (locked FOD deps cache)"
-                echo "  tools: wasm32-wasi-ghc, wasm32-wasi-cabal, wasi-sdk, wasmtime"
-              '';
-            };
+                shellHook = ''
+                  export WASM_PREBUILT_DEPS="${preBuilt}"
+                  export WASM_DEV_WORKSPACE="$PWD/.wasm-dev-workspace"
+
+                  if [ ! -d "$WASM_DEV_WORKSPACE" ]; then
+                    echo "wasm-dev: materializing workspace from prebuiltDeps (first run)..."
+                    mkdir -p "$WASM_DEV_WORKSPACE"
+                    cp -rL ${txInspectorSrc}/* "$WASM_DEV_WORKSPACE/"
+                    chmod -R u+w "$WASM_DEV_WORKSPACE"
+                    # Replace the SRP-laden project file with the pre-patched
+                    # one from prebuiltDeps (SRP stanzas already rewritten to
+                    # nix-store `packages:` paths).
+                    cp -L "$WASM_PREBUILT_DEPS/cabal-wasm.project" \
+                          "$WASM_DEV_WORKSPACE/cabal-wasm.project"
+                    # Seed dist-newstyle with the pre-compiled library graph.
+                    cp -rL "$WASM_PREBUILT_DEPS/dist-newstyle" \
+                           "$WASM_DEV_WORKSPACE/dist-newstyle"
+                    chmod -R u+w "$WASM_DEV_WORKSPACE"
+                    echo "wasm-dev: workspace ready at $WASM_DEV_WORKSPACE"
+                  fi
+
+                  export CABAL_DIR="$WASM_DEV_WORKSPACE/.cabal"
+                  if [ ! -d "$CABAL_DIR" ]; then
+                    cp -rL "$WASM_PREBUILT_DEPS/cabal" "$CABAL_DIR"
+                    chmod -R u+w "$CABAL_DIR"
+                  fi
+
+                  echo "wasm-tx-inspector dev shell ready."
+                  echo "  WASM_DEV_WORKSPACE=$WASM_DEV_WORKSPACE  (edit here; dist-newstyle stays warm)"
+                  echo "  CABAL_DIR=$CABAL_DIR                   (compiled deps cache)"
+                  echo "  cd \$WASM_DEV_WORKSPACE && wasm32-wasi-cabal --project-file=cabal-wasm.project build wasm-tx-inspector"
+                '';
+              };
           };
         };
     };
