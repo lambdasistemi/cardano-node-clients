@@ -3,20 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>Conway tx inspector — Haskell ledger, wasm32-wasi</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+    />
     <style>
-      body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-      textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.875rem; }
-      button { padding: 0.5rem 1rem; font-size: 1rem; margin-top: 0.5rem; }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #eee; padding: 0 0.25rem; border-radius: 3px; }
-      pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
-      h1 { margin-bottom: 0.25rem; }
-      h2 { margin-top: 1.5rem; }
-      p { margin: 0.75rem 0; }
+      pre { overflow-x: auto; }
+      textarea { font-family: var(--pico-font-family-monospace); font-size: 0.875rem; }
+      input[type="text"], input[type="password"] { font-family: var(--pico-font-family-monospace); }
+      .muted { color: var(--pico-muted-color); font-size: 0.875rem; }
+      .warning { color: var(--pico-color-amber-550); }
+      .error { color: var(--pico-color-red-550); }
     </style>
   </head>
   <body>
-    <div id="app"></div>
+    <main class="container">
+      <div id="app"></div>
+    </main>
     <script src="index.js"></script>
   </body>
 </html>

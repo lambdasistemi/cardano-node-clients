@@ -33,16 +33,30 @@ koiosKey = "koios_bearer_token"
 providerKey :: String
 providerKey = "provider"
 
+persistKeysStorageKey :: String
+persistKeysStorageKey = "persist_api_keys"
+
 main :: Effect Unit
 main = HA.runHalogenAff do
-  body <- HA.awaitBody
-  bf   <- liftEffect (Storage.getItem blockfrostKey)
-  kOS  <- liftEffect (Storage.getItem koiosKey)
+  body    <- HA.awaitBody
+  persist <- liftEffect (Storage.getItem persistKeysStorageKey)
+  let persistInitial = persist == "true"
+  bf   <- liftEffect
+    (if persistInitial then Storage.getItem blockfrostKey else pure "")
+  kOS  <- liftEffect
+    (if persistInitial then Storage.getItem koiosKey else pure "")
   prov <- liftEffect (Storage.getItem providerKey)
   let initialProv = case prov of
         "Koios"      -> Koios
         _            -> Blockfrost
-  runUI (inspectorComponent { bf, koios: kOS, prov: initialProv }) unit body
+  runUI
+    ( inspectorComponent
+        { bf
+        , koios: kOS
+        , prov: initialProv
+        , persistKeys: persistInitial
+        }
+    ) unit body
 
 data Mode = ByHash | ByHex
 
@@ -52,6 +66,7 @@ type State =
   { provider :: Provider
   , blockfrostKey :: String
   , koiosBearer :: String
+  , persistKeys :: Boolean
   , mode :: Mode
   , network :: Network
   , txHash :: String
@@ -66,12 +81,14 @@ type InitialKeys =
   { bf :: String
   , koios :: String
   , prov :: Provider
+  , persistKeys :: Boolean
   }
 
 data Action
   = SetBlockfrostKey String
   | SetKoiosBearer String
   | SelectProvider Provider
+  | TogglePersist Boolean
   | SelectMode Mode
   | SelectNetwork Network
   | SetTxHash String
@@ -90,6 +107,7 @@ inspectorComponent initial =
         { provider: initial.prov
         , blockfrostKey: initial.bf
         , koiosBearer: initial.koios
+        , persistKeys: initial.persistKeys
         , mode: ByHash
         , network: Mainnet
         , txHash: ""
@@ -126,81 +144,85 @@ inspectorComponent initial =
       ]
 
   renderProvider state =
-    HH.div_
-      [ HH.h2_ [ HH.text "Chain data provider" ]
-      , HH.div
-          [ HP.style "margin-bottom: 0.5rem;" ]
-          [ HH.text "Source: "
-          , providerRadio state Blockfrost "Blockfrost (API key required)"
-          , providerRadio state Koios      "Koios (bearer token required in browser; free tier at koios.rest)"
-          ]
+    HH.article_
+      [ HH.header_ [ HH.h2_ [ HH.text "Chain data provider" ] ]
       , HH.p_
-          [ HH.text "Used only for the "
+          [ HH.text "Pick a provider. Both offer a free tier that needs a quick signup — paste the resulting credential below. Used only in the "
           , HH.strong_ [ HH.text "by tx hash" ]
-          , HH.text " mode. Keys are kept in your browser's localStorage; the CBOR never leaves your machine once fetched."
+          , HH.text " mode."
+          ]
+      , HH.fieldset_
+          [ HH.legend_ [ HH.text "Source" ]
+          , providerRadio state Blockfrost "Blockfrost"
+          , providerRadio state Koios      "Koios"
           ]
       , case state.provider of
           Blockfrost ->
-            HH.div_
-              [ HH.input
-                  [ HP.type_ HP.InputText
-                  , HP.placeholder "Blockfrost project_id (mainnet.../preprod.../preview...)"
+            HH.label_
+              [ HH.text "Blockfrost project ID (free tier at "
+              , HH.a
+                  [ HP.href "https://blockfrost.io/auth/signup"
+                  , HP.target "_blank"
+                  , HP.rel "noopener noreferrer"
+                  ]
+                  [ HH.text "blockfrost.io signup" ]
+              , HH.text ")"
+              , HH.input
+                  [ HP.type_ HP.InputPassword
+                  , HP.placeholder "mainnet... / preprod... / preview..."
                   , HP.value state.blockfrostKey
                   , HE.onValueInput SetBlockfrostKey
-                  , HP.style "width: 100%; font-family: ui-monospace, monospace;"
-                  ]
-              , HH.p
-                  [ HP.style "margin-top: 0.25rem; font-size: 0.85rem; color: #555;" ]
-                  [ HH.text "Free tier at "
-                  , HH.a
-                      [ HP.href "https://blockfrost.io/"
-                      , HP.target "_blank"
-                      , HP.rel "noopener noreferrer"
-                      ]
-                      [ HH.text "blockfrost.io" ]
-                  , HH.text "."
                   ]
               ]
           Koios ->
-            HH.div_
-              [ HH.input
-                  [ HP.type_ HP.InputText
-                  , HP.placeholder "Koios bearer token (required for browser use)"
+            HH.label_
+              [ HH.text "Koios bearer token (free tier at "
+              , HH.a
+                  [ HP.href "https://koios.rest/auth/Auth.html"
+                  , HP.target "_blank"
+                  , HP.rel "noopener noreferrer"
+                  ]
+                  [ HH.text "koios.rest auth" ]
+              , HH.text ")"
+              , HH.input
+                  [ HP.type_ HP.InputPassword
+                  , HP.placeholder "eyJhbGciOi..."
                   , HP.value state.koiosBearer
                   , HE.onValueInput SetKoiosBearer
-                  , HP.style "width: 100%; font-family: ui-monospace, monospace;"
-                  ]
-              , HH.p
-                  [ HP.style "margin-top: 0.25rem; font-size: 0.85rem; color: #555;" ]
-                  [ HH.text "Koios intentionally strips CORS on unauthenticated requests (see "
-                  , HH.a
-                      [ HP.href "https://github.com/cardano-community/koios-artifacts/issues/397"
-                      , HP.target "_blank"
-                      , HP.rel "noopener noreferrer"
-                      ]
-                      [ HH.text "issue #397" ]
-                  , HH.text "). Free bearer tokens at "
-                  , HH.a
-                      [ HP.href "https://koios.rest/pricing/Pricing.html"
-                      , HP.target "_blank"
-                      , HP.rel "noopener noreferrer"
-                      ]
-                      [ HH.text "koios.rest/pricing" ]
-                  , HH.text " — the free tier covers 50k req/day. Without a token, use the CLI script and paste in 'By CBOR hex' mode."
                   ]
               ]
-      , HH.div
-          [ HP.style "margin-top: 0.5rem; font-size: 0.9rem;" ]
-          [ HH.text "Network: "
+      , HH.fieldset_
+          [ HH.legend_ [ HH.text "Network" ]
           , networkRadio state Mainnet "mainnet"
           , networkRadio state Preprod "preprod"
           , networkRadio state Preview "preview"
           ]
+      , renderPersistToggle state
+      ]
+
+  renderPersistToggle state =
+    HH.fieldset_
+      [ HH.label_
+          [ HH.input
+              [ HP.type_ HP.InputCheckbox
+              , HH.attr (HH.AttrName "role") "switch"
+              , HP.checked state.persistKeys
+              , HE.onChecked TogglePersist
+              ]
+          , HH.text " Persist API credentials across sessions"
+          ]
+      , HH.small
+          [ HP.class_ (HH.ClassName "warning") ]
+          [ HH.text
+              "⚠ When enabled, the credential is saved in your browser's localStorage "
+          , HH.strong_ [ HH.text "in cleartext" ]
+          , HH.text
+              ". Any JavaScript running on this origin (including future updates of this page) can read it. When disabled (default), the credential stays in memory only and is lost on reload."
+          ]
       ]
 
   providerRadio state prov label =
-    HH.label
-      [ HP.style "margin-right: 1rem; cursor: pointer;" ]
+    HH.label_
       [ HH.input
           [ HP.type_ HP.InputRadio
           , HP.name "provider"
@@ -211,8 +233,7 @@ inspectorComponent initial =
       ]
 
   networkRadio state net label =
-    HH.label
-      [ HP.style "margin-right: 1rem; cursor: pointer;" ]
+    HH.label_
       [ HH.input
           [ HP.type_ HP.InputRadio
           , HP.name "network"
@@ -223,25 +244,26 @@ inspectorComponent initial =
       ]
 
   renderModeTabs state =
-    HH.div
-      [ HP.style "margin-top: 1.5rem;" ]
-      [ HH.h2_ [ HH.text "Input" ]
-      , HH.div_
-          [ modeButton state ByHash "By tx hash"
-          , modeButton state ByHex  "By CBOR hex"
+    HH.article_
+      [ HH.header_ [ HH.h2_ [ HH.text "Input" ] ]
+      , HH.fieldset_
+          [ HH.legend_ [ HH.text "Mode" ]
+          , modeRadio state ByHash "By tx hash"
+          , modeRadio state ByHex  "By CBOR hex"
           ]
+      , renderBody state
       ]
 
-  modeButton state mode label =
-    HH.button
-      [ HE.onClick (\_ -> SelectMode mode)
-      , HP.style (
-          "margin-right: 0.5rem; padding: 0.35rem 0.75rem; font-size: 0.9rem; "
-            <> (if state.mode == mode
-                 then "border: 1px solid #333; background: #eee;"
-                 else "border: 1px solid #ccc; background: transparent;"))
+  modeRadio state mode label =
+    HH.label_
+      [ HH.input
+          [ HP.type_ HP.InputRadio
+          , HP.name "mode"
+          , HP.checked (state.mode == mode)
+          , HE.onChange (\_ -> SelectMode mode)
+          ]
+      , HH.text (" " <> label)
       ]
-      [ HH.text label ]
 
   renderBody state = case state.mode of
     ByHash ->
@@ -251,15 +273,12 @@ inspectorComponent initial =
             , HP.placeholder "64-char tx hash"
             , HP.value state.txHash
             , HE.onValueInput SetTxHash
-            , HP.style "width: 100%; font-family: ui-monospace, monospace;"
             ]
-        , HH.div_
-            [ HH.button
-                [ HP.disabled state.running
-                , HE.onClick (\_ -> Decode)
-                ]
-                [ HH.text (if state.running then "Fetching & decoding..." else "Fetch & decode") ]
+        , HH.button
+            [ HP.disabled state.running
+            , HE.onClick (\_ -> Decode)
             ]
+            [ HH.text (if state.running then "Fetching & decoding..." else "Fetch & decode") ]
         ]
     ByHex ->
       HH.div_
@@ -269,34 +288,32 @@ inspectorComponent initial =
             , HP.rows 8
             , HE.onValueInput SetTxHex
             ]
-        , HH.div_
-            [ HH.button
-                [ HP.disabled state.running
-                , HE.onClick (\_ -> Decode)
-                ]
-                [ HH.text (if state.running then "Decoding..." else "Decode") ]
+        , HH.button
+            [ HP.disabled state.running
+            , HE.onClick (\_ -> Decode)
             ]
+            [ HH.text (if state.running then "Decoding..." else "Decode") ]
         ]
 
   renderResult state =
     case state.fetchError of
       Just err ->
-        HH.div
-          [ HP.style "color: #b00; margin-top: 1rem;" ]
+        HH.article
+          [ HP.class_ (HH.ClassName "error") ]
           [ HH.strong_ [ HH.text "Fetch error: " ]
           , HH.text err
           ]
       Nothing -> case state.result of
         Nothing -> HH.text ""
         Just r ->
-          HH.div_
-            [ HH.div_
+          HH.article_
+            [ HH.header_
                 [ HH.h2_ [ HH.text (if r.exitOk then "Decoded JSON" else "Error") ]
                 , if r.exitOk
                     then
                       HH.button
                         [ HE.onClick (\_ -> Copy)
-                        , HP.style "margin-left: 1rem; font-size: 0.875rem;"
+                        , HP.class_ (HH.ClassName "secondary")
                         ]
                         [ HH.text (if state.copied then "Copied!" else "Copy JSON") ]
                     else HH.text ""
@@ -305,7 +322,7 @@ inspectorComponent initial =
             , if r.stderr == "" then HH.text ""
               else
                 HH.div_
-                  [ HH.h2_ [ HH.text "stderr" ]
+                  [ HH.h3_ [ HH.text "stderr" ]
                   , HH.pre_ [ HH.text r.stderr ]
                   ]
             ]
@@ -313,13 +330,27 @@ inspectorComponent initial =
   handleAction = case _ of
     SetBlockfrostKey s -> do
       H.modify_ _ { blockfrostKey = s }
-      liftEffect (Storage.setItem blockfrostKey s)
+      persist <- H.gets _.persistKeys
+      when persist (liftEffect (Storage.setItem blockfrostKey s))
     SetKoiosBearer s -> do
       H.modify_ _ { koiosBearer = s }
-      liftEffect (Storage.setItem koiosKey s)
+      persist <- H.gets _.persistKeys
+      when persist (liftEffect (Storage.setItem koiosKey s))
     SelectProvider p -> do
       H.modify_ _ { provider = p, fetchError = Nothing }
       liftEffect (Storage.setItem providerKey (Provider.providerName p))
+    TogglePersist on -> do
+      H.modify_ _ { persistKeys = on }
+      liftEffect (Storage.setItem persistKeysStorageKey (if on then "true" else "false"))
+      st <- H.get
+      liftEffect
+        if on
+          then do
+            Storage.setItem blockfrostKey st.blockfrostKey
+            Storage.setItem koiosKey st.koiosBearer
+          else do
+            Storage.setItem blockfrostKey ""
+            Storage.setItem koiosKey ""
     SelectMode m -> H.modify_ _ { mode = m, fetchError = Nothing }
     SelectNetwork n -> H.modify_ _ { network = n, fetchError = Nothing }
     SetTxHash s -> H.modify_ _ { txHash = s, copied = false, fetchError = Nothing }
@@ -347,7 +378,7 @@ inspectorComponent initial =
                           diag = case st.provider of
                             Koios | raw == "Failed to fetch" ->
                               if String.trim st.koiosBearer == ""
-                                then "Koios blocks anonymous browser requests by design (CORS stripped). Register at koios.rest/pricing for a free bearer token (50k req/day), paste it above, and retry. Or use scripts/fetch-tx-cbor.sh <hash> locally and paste the hex."
+                                then "Koios blocks anonymous browser requests by design. Sign up (free) at koios.rest/auth, paste the bearer token above, and retry."
                                 else "Koios rejected the request. Check the bearer token is valid and the network matches (mainnet/preprod/preview)."
                             _ -> raw
                       in pure (Left diag)
