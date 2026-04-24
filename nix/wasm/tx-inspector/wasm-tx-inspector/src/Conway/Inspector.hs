@@ -8,6 +8,11 @@
 --   validation. The hard work (CBOR → Conway `Tx`) is delegated to the
 --   upstream Haskell ledger packages; this module only projects the decoded
 --   value into a lossy human-oriented JSON.
+--
+--   Current schema is first-cut — richer output (addresses / values /
+--   datum / redeemers / mint breakdown) is blocked on
+--   lambdasistemi/cardano-node-clients#70 (DevX fix: per-edit rebuild is
+--   currently ~24 min, which makes API exploration prohibitively slow).
 module Conway.Inspector
     ( inspect
     , InspectError(..)
@@ -15,12 +20,12 @@ module Conway.Inspector
 
 import qualified Cardano.Crypto.Hash            as Crypto
 import qualified Cardano.Ledger.Api             as L
+import qualified Cardano.Ledger.BaseTypes       as BaseTypes
 import qualified Cardano.Ledger.Binary          as Binary
 import qualified Cardano.Ledger.Coin            as Coin
 import qualified Cardano.Ledger.Conway          as Conway
 import           Cardano.Ledger.Core            (TxLevel (..))
 import qualified Cardano.Ledger.Hashes          as Hashes
-import qualified Cardano.Ledger.BaseTypes       as BaseTypes
 import qualified Cardano.Ledger.TxIn            as TxIn
 import           Data.Aeson                     ((.=))
 import qualified Data.Aeson                     as Aeson
