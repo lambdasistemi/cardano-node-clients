@@ -132,7 +132,7 @@ inspectorComponent initial =
           [ HP.style "margin-bottom: 0.5rem;" ]
           [ HH.text "Source: "
           , providerRadio state Blockfrost "Blockfrost (API key required)"
-          , providerRadio state Koios      "Koios (keyless, rate-limited)"
+          , providerRadio state Koios      "Koios (keyless — CORS-blocked in browser; works from CLI)"
           ]
       , HH.p_
           [ HH.text "Used only for the "
@@ -335,7 +335,13 @@ inspectorComponent initial =
                 else do
                   e <- H.liftAff (attempt (Provider.fetchTxCbor st.provider st.network key trimmedHash))
                   case e of
-                    Left err -> pure (Left (message err))
+                    Left err ->
+                      let raw = message err
+                          diag = case st.provider of
+                            Koios | raw == "Failed to fetch" ->
+                              "Koios is blocked by browser CORS (server doesn't echo ACAO on POST responses). Use CLI: scripts/fetch-tx-cbor.sh <hash>, then paste the hex in 'By CBOR hex' mode. Or switch to Blockfrost."
+                            _ -> raw
+                      in pure (Left diag)
                     Right cbor -> pure (Right cbor)
       case hexE of
         Left err -> H.modify_ _ { running = false, fetchError = Just err }

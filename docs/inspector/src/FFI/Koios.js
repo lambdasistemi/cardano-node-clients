@@ -25,6 +25,11 @@ export const fetchTxCborImpl = (network) => (bearer) => (txHash) => async () => 
     const body = await resp.text().catch(() => "");
     throw new Error(`Koios ${resp.status}: ${body.slice(0, 200)}`);
   }
+  // Koios returns CORS headers on preflight but NOT on the actual POST
+  // response, which browsers reject. The fetch above typically rejects as
+  // TypeError("Failed to fetch") before we get here — the wrapping in
+  // Main.purs surfaces that to the user. This .ok check only runs if the
+  // browser accepted the response (e.g. running from a same-origin proxy).
   const arr = await resp.json();
   if (!Array.isArray(arr) || arr.length === 0) {
     throw new Error("Koios: tx hash not found");
