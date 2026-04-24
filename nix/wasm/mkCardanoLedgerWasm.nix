@@ -128,7 +128,21 @@ let
     EOF
   '';
 
+  # Metadata-only filter: .cabal files + the wasm project file.
+  # Deliberately excludes .hs sources so the derivation hash of anything
+  # consuming `srcMetadata` is stable across Haskell edits.
+  #
+  # CRITICAL: set `name` to match the underlying src's final path component
+  # so the extracted sandbox path (`/build/<name>`) is identical between
+  # prebuiltDeps and wasm. Cabal bakes absolute paths into dist-newstyle
+  # metadata and compiled artifacts; mismatched sandbox paths cause cabal
+  # to treat the cached compile as stale and rebuild the whole closure.
+  #
+  # `cleanSourceWith` defaults `name` to "source" when not set, regardless
+  # of the underlying src's directory name — that's what broke the cache in
+  # the first attempt.
   srcMetadata = lib.cleanSourceWith {
+    name = builtins.baseNameOf (toString src);
     inherit src;
     filter = name: type:
       let baseName = baseNameOf (toString name);
@@ -240,6 +254,73 @@ let
     outputHash = dependenciesHash;
   };
 
+  # prebuiltDeps: compile the full ledger-closure library graph once.
+  #
+  # Input: srcMetadata (cabal files + project file only — NO .hs files) + the
+  # FOD deps tarball cache. Output: $out = a full $CABAL_DIR plus dist-newstyle
+  # tree with every dependency library already compiled for wasm32-wasi, plus
+  # the patched project file with SRP stanzas rewritten to local `packages:`.
+  #
+  # Because src is metadata-only, this derivation's hash is stable across
+  # Haskell source edits — rebuilds only when cabal files / project file /
+  # forks.json / ghc-wasm-meta / c-libs change.
+  #
+  # This is a regular (non-FOD) derivation: the compile output is not
+  # reproducible byte-for-byte across machines (GHC WASM is non-deterministic),
+  # but Nix's regular content-addressing caches it per-machine and per-team
+  # Cachix — good enough for incremental iteration. Only the exe compile +
+  # link in the downstream `wasm` derivation re-runs on Haskell source edits.
+  prebuiltDeps = pkgs.stdenv.mkDerivation {
+    pname = "cardano-ledger-wasm-prebuilt-deps";
+    version = "0.1.0";
+    src = srcMetadata;
+
+    nativeBuildInputs = [ ghcWasmMeta pkgs.git ] ++ cLibsInputs;
+
+    configurePhase = ''
+      export HOME=$NIX_BUILD_TOP/home
+      mkdir -p $HOME
+      ${lib.optionalString (cLibs != null) "export PKG_CONFIG_PATH=${cLibsPkgConfigPath}"}
+
+      export CABAL_DIR=$NIX_BUILD_TOP/cabal
+      mkdir -p $CABAL_DIR
+      cp -rL ${deps}/* $CABAL_DIR/
+      chmod -R u+w $CABAL_DIR
+
+      # Rewrite source-repository-package stanzas to packages: <store-path>
+      # once, here, so both prebuiltDeps (this derivation) and the downstream
+      # wasm derivation share the same patched project file.
+      sed -i '/^source-repository-package/,/^$/d' ${projectFile}
+      cat >> ${projectFile} <<'EOF'
+      ${forkPackagesBlock}
+      EOF
+    '';
+
+    buildPhase = ''
+      export CABAL_DIR=$NIX_BUILD_TOP/cabal
+      ${lib.optionalString (cLibs != null) "export PKG_CONFIG_PATH=${cLibsPkgConfigPath}"}
+      wasm32-wasi-cabal --project-file=${projectFile} build \
+        --only-dependencies \
+        ${cabalExtraDirsArgs} \
+        ${buildTargetsArg}
+    '';
+
+    installPhase = ''
+      mkdir -p $out
+      cp -rL $CABAL_DIR $out/cabal
+      cp -rL dist-newstyle $out/dist-newstyle
+      # Preserve the patched project file so the wasm phase can reuse it.
+      cp ${projectFile} $out/${projectFile}
+      chmod -R u+w $out
+    '';
+  };
+
+  # wasm: compile the inspector exe against prebuiltDeps' compiled closure.
+  #
+  # Input: the FULL source tree (including .hs) + prebuiltDeps output.
+  # Haskell source edits rehash THIS derivation only; prebuiltDeps is reused
+  # from the cache, so the ledger closure does not recompile. Expected rebuild
+  # time on Inspector.hs edits: 1-3 minutes (inspector lib + exe + link).
   wasm = pkgs.stdenv.mkDerivation {
     pname = "cardano-ledger-wasm";
     version = "0.1.0";
@@ -254,16 +335,19 @@ let
 
       export CABAL_DIR=$NIX_BUILD_TOP/cabal
       mkdir -p $CABAL_DIR
-      cp -rL ${deps}/* $CABAL_DIR/
+      cp -rL ${prebuiltDeps}/cabal/* $CABAL_DIR/
       chmod -R u+w $CABAL_DIR
 
-      # Replace source-repository-package stanzas with direct package paths
-      # pointing at pre-fetched nix store clones, so the offline build phase
-      # does not need network to clone forks.
-      sed -i '/^source-repository-package/,/^$/d' ${projectFile}
-      cat >> ${projectFile} <<'EOF'
-      ${forkPackagesBlock}
-      EOF
+      # Reuse the compiled dist-newstyle from prebuiltDeps; cabal sees the
+      # library deps as already up-to-date and skips their rebuild.
+      cp -rL ${prebuiltDeps}/dist-newstyle dist-newstyle
+      chmod -R u+w dist-newstyle
+
+      # Drop the consumer's source project file; use the patched one from
+      # prebuiltDeps so SRP stanzas are already rewritten to packages: paths.
+      rm -f ${projectFile}
+      cp ${prebuiltDeps}/${projectFile} ${projectFile}
+      chmod u+w ${projectFile}
     '';
 
     buildPhase = ''
@@ -283,7 +367,7 @@ let
     '';
 
     passthru = {
-      inherit deps;
+      inherit deps prebuiltDeps;
       forks = forks;
     };
   };
