@@ -13,6 +13,7 @@ package:
     - web-html
     - web-events
     - foreign
+    - exceptions
   bundle:
     module: Main
     outfile: dist/index.js
