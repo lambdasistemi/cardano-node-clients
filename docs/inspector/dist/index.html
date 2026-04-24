@@ -418,6 +418,152 @@
         align-items: center;
       }
 
+      .inspection-summary {
+        display: grid;
+        gap: 16px;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric-card {
+        display: grid;
+        gap: 0.25rem;
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-soft);
+        padding: 0.7rem 0.78rem;
+      }
+
+      .metric-label,
+      .section-heading span,
+      .hash-group > span,
+      .output-meta,
+      .mint-row span {
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      .metric-card strong {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font-size: 0.98rem;
+      }
+
+      .inspection-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: start;
+        gap: 14px;
+      }
+
+      .inspection-section {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .wide-section {
+        grid-column: 1 / -1;
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      .section-heading h3 {
+        font-size: 0.96rem;
+      }
+
+      .output-list,
+      .mint-list,
+      .hash-group {
+        display: grid;
+        gap: 8px;
+        align-content: start;
+        min-width: 0;
+      }
+
+      .output-row {
+        display: grid;
+        grid-template-columns: 3rem minmax(0, 1fr) minmax(11rem, 0.55fr);
+        gap: 0.75rem;
+        align-items: center;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 0.58rem 0.7rem;
+      }
+
+      .row-index {
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .output-main,
+      .output-meta,
+      .mint-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        min-width: 0;
+      }
+
+      .output-main {
+        justify-content: space-between;
+      }
+
+      .output-main code,
+      .mint-row code,
+      .hash-list code {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .output-meta {
+        justify-content: end;
+      }
+
+      .mint-row {
+        justify-content: space-between;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 0.58rem 0.7rem;
+      }
+
+      .hash-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .raw-json-block {
+        display: grid;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .raw-json-block summary {
+        cursor: pointer;
+        color: var(--accent-strong);
+        font-weight: 700;
+      }
+
       pre {
         max-height: min(62vh, 620px);
         overflow: auto;
@@ -475,6 +621,10 @@
           grid-template-columns: 1fr;
         }
 
+        .metric-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
         .provider-panel {
           position: static;
         }
@@ -522,6 +672,22 @@
         .mode-options,
         .hash-form {
           grid-template-columns: 1fr;
+        }
+
+        .metric-grid,
+        .inspection-grid,
+        .output-row {
+          grid-template-columns: 1fr;
+        }
+
+        .section-heading,
+        .output-main,
+        .output-meta,
+        .mint-row {
+          align-items: start;
+          flex-direction: column;
+          justify-content: start;
+          gap: 0.35rem;
         }
 
         .primary-action,
@@ -574,6 +740,6 @@
         >.
       </div>
     </footer>
-    <script src="index.js"></script>
+    <script src="index.js?v=inspection-panel-2"></script>
   </body>
 </html>
