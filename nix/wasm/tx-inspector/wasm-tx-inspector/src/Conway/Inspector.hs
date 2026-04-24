@@ -8,11 +8,6 @@
 --   validation. The hard work (CBOR → Conway `Tx`) is delegated to the
 --   upstream Haskell ledger packages; this module only projects the decoded
 --   value into a lossy human-oriented JSON.
---
---   Current schema is first-cut — richer output (addresses / values /
---   datum / redeemers / mint breakdown) is blocked on
---   lambdasistemi/cardano-node-clients#70 (DevX fix: per-edit rebuild is
---   currently ~24 min, which makes API exploration prohibitively slow).
 module Conway.Inspector
     ( inspect
     , InspectError(..)
@@ -27,14 +22,19 @@ import qualified Cardano.Ledger.Coin            as Coin
 import qualified Cardano.Ledger.Conway          as Conway
 import           Cardano.Ledger.Core            (TxLevel (..))
 import qualified Cardano.Ledger.Hashes          as Hashes
+import qualified Cardano.Ledger.Mary.Value      as Mary
+import qualified Cardano.Ledger.Plutus.Data     as PData
 import qualified Cardano.Ledger.TxIn            as TxIn
 import           Data.Aeson                     ((.=))
 import qualified Data.Aeson                     as Aeson
+import qualified Data.Aeson.Key                 as AesonKey
 import qualified Data.Aeson.KeyMap              as KeyMap
 import qualified Data.ByteString                as BS
 import qualified Data.ByteString.Base16         as B16
 import qualified Data.ByteString.Lazy           as BSL
+import qualified Data.ByteString.Short          as SBS
 import           Data.Foldable                  (toList)
+import qualified Data.Map.Strict                as Map
 import qualified Data.Text                      as T
 import qualified Data.Text.Encoding             as T
 import           Lens.Micro                     ((^.))
@@ -67,12 +67,16 @@ decodeConway bs =
 
 renderTx :: L.Tx TopTx Conway.ConwayEra -> Aeson.Value
 renderTx tx =
-    let body    = tx ^. L.bodyTxL
-        inputs  = toList (body ^. L.inputsTxBodyL)
-        refIns  = toList (body ^. L.referenceInputsTxBodyL)
-        outputs = toList (body ^. L.outputsTxBodyL)
-        fee     = body ^. L.feeTxBodyL
-        vldt    = body ^. L.vldtTxBodyL
+    let body        = tx ^. L.bodyTxL
+        inputs      = toList (body ^. L.inputsTxBodyL)
+        refIns      = toList (body ^. L.referenceInputsTxBodyL)
+        outputs     = toList (body ^. L.outputsTxBodyL)
+        fee         = body ^. L.feeTxBodyL
+        vldt        = body ^. L.vldtTxBodyL
+        mint        = body ^. L.mintTxBodyL
+        certs       = toList (body ^. L.certsTxBodyL)
+        withdrawals = body ^. L.withdrawalsTxBodyL
+        reqSigners  = toList (body ^. L.reqSignerHashesTxBodyL)
     in
         Aeson.Object $ KeyMap.fromList
             [ "era"                   .= ("Conway" :: T.Text)
@@ -82,9 +86,13 @@ renderTx tx =
             , "input_count"           .= length inputs
             , "reference_input_count" .= length refIns
             , "output_count"          .= length outputs
+            , "cert_count"            .= length certs
+            , "withdrawal_count"      .= withdrawalsCount withdrawals
+            , "required_signer_count" .= length reqSigners
             , "inputs"                .= map txInJson inputs
             , "reference_inputs"      .= map txInJson refIns
             , "outputs"               .= map txOutJson outputs
+            , "mint"                  .= multiAssetJson mint
             ]
 
 validityJson :: L.ValidityInterval -> Aeson.Value
@@ -98,15 +106,57 @@ validityJson (L.ValidityInterval before hereafter) =
     renderSlot BaseTypes.SNothing  = Aeson.Null
     renderSlot (BaseTypes.SJust s) = Aeson.toJSON (T.pack (show (BaseTypes.unSlotNo s)))
 
--- | Render a Conway TxOut with address (hex) + coin.
---   Multi-asset breakdown needs `cardano-ledger-mary` in build-depends; adding
---   a new build-dep resets the prebuiltDeps cache and triggers a 20-min rebuild
---   (tracked in the DevX notes). Deferred to a dedicated cabal-bump cycle.
+-- | Withdrawals are wrapped in a newtype; reach into the Map and count.
+--   Ledger versions differ on the exact constructor / accessor; use Show
+--   to bootstrap — replaceable with a proper accessor later.
+withdrawalsCount :: L.Withdrawals -> Int
+withdrawalsCount (L.Withdrawals m) = Map.size m
+
+-- | Render a Conway TxOut with address, value (coin + assets), and datum.
 txOutJson :: L.TxOut Conway.ConwayEra -> Aeson.Value
 txOutJson txOut =
-    Aeson.object
+    let value              = txOut ^. L.valueTxOutL
+        Mary.MaryValue c m = value
+    in Aeson.object
         [ "address_hex"   .= T.decodeUtf8 (B16.encode (Addr.serialiseAddr (txOut ^. L.addrTxOutL)))
-        , "coin_lovelace" .= T.pack (show (Coin.unCoin (txOut ^. L.coinTxOutL)))
+        , "coin_lovelace" .= T.pack (show (Coin.unCoin c))
+        , "assets"        .= multiAssetJson m
+        , "datum"         .= datumJson (txOut ^. L.datumTxOutL)
+        ]
+
+multiAssetJson :: Mary.MultiAsset -> Aeson.Value
+multiAssetJson (Mary.MultiAsset m) =
+    Aeson.Object $ KeyMap.fromList
+        [ ( AesonKey.fromText (policyHex pid)
+          , Aeson.Object $ KeyMap.fromList
+              [ ( AesonKey.fromText (assetNameHex an)
+                , Aeson.String (T.pack (show q))
+                )
+              | (an, q) <- Map.toList assetMap
+              ]
+          )
+        | (pid, assetMap) <- Map.toList m
+        ]
+  where
+    policyHex :: Mary.PolicyID -> T.Text
+    policyHex (Mary.PolicyID (Hashes.ScriptHash h)) =
+        T.decodeUtf8 (B16.encode (Crypto.hashToBytes h))
+    assetNameHex :: Mary.AssetName -> T.Text
+    assetNameHex (Mary.AssetName sbs) = T.decodeUtf8 (B16.encode (SBS.fromShort sbs))
+
+-- | Render TxOut datum state. The ledger's `Datum era` is three-cased.
+datumJson :: PData.Datum Conway.ConwayEra -> Aeson.Value
+datumJson PData.NoDatum =
+    Aeson.object [ "kind" .= ("no_datum" :: T.Text) ]
+datumJson (PData.DatumHash h) =
+    Aeson.object
+        [ "kind" .= ("datum_hash" :: T.Text)
+        , "hash" .= T.decodeUtf8 (B16.encode (Crypto.hashToBytes (Hashes.extractHash h)))
+        ]
+datumJson (PData.Datum _) =
+    Aeson.object
+        [ "kind" .= ("inline_datum" :: T.Text)
+        , "note" .= ("Plutus Data AST rendering deferred" :: T.Text)
         ]
 
 txInJson :: TxIn.TxIn -> Aeson.Value
