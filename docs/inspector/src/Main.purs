@@ -2,12 +2,21 @@ module Main (main) where
 
 import Prelude
 
+import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
+import Data.String (trim) as String
 import Effect (Effect)
+import Effect.Aff (attempt)
 import Effect.Aff.Class (class MonadAff)
+import Effect.Class (liftEffect)
+import Effect.Exception (message)
+import FFI.Blockfrost (Network(..))
 import FFI.Clipboard (copy) as Clipboard
 import FFI.Inspector (InspectorResult, runInspector)
 import FFI.Json (pretty) as Json
+import FFI.Storage as Storage
+import Provider (Provider(..))
+import Provider as Provider
 import Halogen as H
 import Halogen.Aff as HA
 import Halogen.HTML as HH
@@ -15,31 +24,80 @@ import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
 
+blockfrostKey :: String
+blockfrostKey = "blockfrost_project_id"
+
+koiosKey :: String
+koiosKey = "koios_bearer_token"
+
+providerKey :: String
+providerKey = "provider"
+
 main :: Effect Unit
 main = HA.runHalogenAff do
   body <- HA.awaitBody
-  runUI inspectorComponent unit body
+  bf   <- liftEffect (Storage.getItem blockfrostKey)
+  kOS  <- liftEffect (Storage.getItem koiosKey)
+  prov <- liftEffect (Storage.getItem providerKey)
+  let initialProv = case prov of
+        "Koios"      -> Koios
+        _            -> Blockfrost
+  runUI (inspectorComponent { bf, koios: kOS, prov: initialProv }) unit body
+
+data Mode = ByHash | ByHex
+
+derive instance eqMode :: Eq Mode
 
 type State =
-  { input :: String
+  { provider :: Provider
+  , blockfrostKey :: String
+  , koiosBearer :: String
+  , mode :: Mode
+  , network :: Network
+  , txHash :: String
+  , txHex :: String
   , result :: Maybe InspectorResult
   , running :: Boolean
   , copied :: Boolean
+  , fetchError :: Maybe String
+  }
+
+type InitialKeys =
+  { bf :: String
+  , koios :: String
+  , prov :: Provider
   }
 
 data Action
-  = SetInput String
+  = SetBlockfrostKey String
+  | SetKoiosBearer String
+  | SelectProvider Provider
+  | SelectMode Mode
+  | SelectNetwork Network
+  | SetTxHash String
+  | SetTxHex String
   | Decode
   | Copy
 
-inspectorComponent :: forall q i o m. MonadAff m => H.Component q i o m
-inspectorComponent =
+inspectorComponent
+  :: forall q i o m
+   . MonadAff m
+  => InitialKeys
+  -> H.Component q i o m
+inspectorComponent initial =
   H.mkComponent
     { initialState: \_ ->
-        { input: ""
+        { provider: initial.prov
+        , blockfrostKey: initial.bf
+        , koiosBearer: initial.koios
+        , mode: ByHash
+        , network: Mainnet
+        , txHash: ""
+        , txHex: ""
         , result: Nothing
         , running: false
         , copied: false
+        , fetchError: Nothing
         }
     , render
     , eval: H.mkEval H.defaultEval { handleAction = handleAction }
@@ -51,68 +109,239 @@ inspectorComponent =
       [ HH.h1_ [ HH.text "Conway tx inspector" ]
       , HH.p_
           [ HH.text
-              "This page decodes Cardano Conway-era transactions using the upstream Haskell ledger code "
+              "Decodes Cardano Conway-era transactions using the upstream Haskell ledger code "
           , HH.strong_ [ HH.text "unchanged" ]
           , HH.text " — the same "
           , HH.code_ [ HH.text "cardano-ledger-conway" ]
           , HH.text " + "
           , HH.code_ [ HH.text "cardano-ledger-binary" ]
-          , HH.text
-              " packages IntersectMBO ships for node and CLI, cross-compiled to "
+          , HH.text " packages IntersectMBO ships for node and CLI, cross-compiled to "
           , HH.code_ [ HH.text "wasm32-wasi" ]
-          , HH.text
-              " via GHC's WASM backend and loaded here through a browser WASI shim. No re-implementation, no CBOR re-encode: bytes in, ledger decoder runs, structural JSON out."
+          , HH.text " and loaded in the browser via a WASI shim."
           ]
-      , HH.p_
-          [ HH.text "Paste a Conway-era transaction CBOR hex. You can fetch one via Blockfrost: "
-          , HH.code_ [ HH.text "GET /txs/{hash}/cbor" ]
-          , HH.text "."
-          ]
-      , HH.textarea
-          [ HP.value state.input
-          , HP.placeholder "Conway tx hex..."
-          , HP.rows 8
-          , HE.onValueInput SetInput
-          ]
-      , HH.div_
-          [ HH.button
-              [ HP.disabled state.running
-              , HE.onClick (\_ -> Decode)
-              ]
-              [ HH.text (if state.running then "Decoding..." else "Decode") ]
-          ]
-      , case state.result of
-          Nothing -> HH.text ""
-          Just r ->
-            HH.div_
-              [ HH.div_
-                  [ HH.h2_ [ HH.text (if r.exitOk then "Decoded JSON" else "Error") ]
-                  , if r.exitOk
-                      then
-                        HH.button
-                          [ HE.onClick (\_ -> Copy)
-                          , HP.style "margin-left: 1rem; font-size: 0.875rem;"
-                          ]
-                          [ HH.text (if state.copied then "Copied!" else "Copy JSON") ]
-                      else HH.text ""
-                  ]
-              , HH.pre_ [ HH.text (Json.pretty r.stdout) ]
-              , if r.stderr == "" then HH.text ""
-                else
-                  HH.div_
-                    [ HH.h2_ [ HH.text "stderr" ]
-                    , HH.pre_ [ HH.text r.stderr ]
-                    ]
-              ]
+      , renderProvider state
+      , renderModeTabs state
+      , renderBody state
+      , renderResult state
       ]
 
+  renderProvider state =
+    HH.div_
+      [ HH.h2_ [ HH.text "Chain data provider" ]
+      , HH.div
+          [ HP.style "margin-bottom: 0.5rem;" ]
+          [ HH.text "Source: "
+          , providerRadio state Blockfrost "Blockfrost (API key required)"
+          , providerRadio state Koios      "Koios (keyless, rate-limited)"
+          ]
+      , HH.p_
+          [ HH.text "Used only for the "
+          , HH.strong_ [ HH.text "by tx hash" ]
+          , HH.text " mode. Keys are kept in your browser's localStorage; the CBOR never leaves your machine once fetched."
+          ]
+      , case state.provider of
+          Blockfrost ->
+            HH.div_
+              [ HH.input
+                  [ HP.type_ HP.InputText
+                  , HP.placeholder "Blockfrost project_id (mainnet.../preprod.../preview...)"
+                  , HP.value state.blockfrostKey
+                  , HE.onValueInput SetBlockfrostKey
+                  , HP.style "width: 100%; font-family: ui-monospace, monospace;"
+                  ]
+              , HH.p
+                  [ HP.style "margin-top: 0.25rem; font-size: 0.85rem; color: #555;" ]
+                  [ HH.text "Free tier at "
+                  , HH.a
+                      [ HP.href "https://blockfrost.io/"
+                      , HP.target "_blank"
+                      , HP.rel "noopener noreferrer"
+                      ]
+                      [ HH.text "blockfrost.io" ]
+                  , HH.text "."
+                  ]
+              ]
+          Koios ->
+            HH.div_
+              [ HH.input
+                  [ HP.type_ HP.InputText
+                  , HP.placeholder "Optional Koios bearer token (leave blank for anon)"
+                  , HP.value state.koiosBearer
+                  , HE.onValueInput SetKoiosBearer
+                  , HP.style "width: 100%; font-family: ui-monospace, monospace;"
+                  ]
+              , HH.p
+                  [ HP.style "margin-top: 0.25rem; font-size: 0.85rem; color: #555;" ]
+                  [ HH.text "Free keyless use works; bearer token lifts rate limits. Docs at "
+                  , HH.a
+                      [ HP.href "https://api.koios.rest/"
+                      , HP.target "_blank"
+                      , HP.rel "noopener noreferrer"
+                      ]
+                      [ HH.text "api.koios.rest" ]
+                  , HH.text "."
+                  ]
+              ]
+      , HH.div
+          [ HP.style "margin-top: 0.5rem; font-size: 0.9rem;" ]
+          [ HH.text "Network: "
+          , networkRadio state Mainnet "mainnet"
+          , networkRadio state Preprod "preprod"
+          , networkRadio state Preview "preview"
+          ]
+      ]
+
+  providerRadio state prov label =
+    HH.label
+      [ HP.style "margin-right: 1rem; cursor: pointer;" ]
+      [ HH.input
+          [ HP.type_ HP.InputRadio
+          , HP.name "provider"
+          , HP.checked (state.provider == prov)
+          , HE.onChange (\_ -> SelectProvider prov)
+          ]
+      , HH.text (" " <> label)
+      ]
+
+  networkRadio state net label =
+    HH.label
+      [ HP.style "margin-right: 1rem; cursor: pointer;" ]
+      [ HH.input
+          [ HP.type_ HP.InputRadio
+          , HP.name "network"
+          , HP.checked (state.network == net)
+          , HE.onChange (\_ -> SelectNetwork net)
+          ]
+      , HH.text (" " <> label)
+      ]
+
+  renderModeTabs state =
+    HH.div
+      [ HP.style "margin-top: 1.5rem;" ]
+      [ HH.h2_ [ HH.text "Input" ]
+      , HH.div_
+          [ modeButton state ByHash "By tx hash"
+          , modeButton state ByHex  "By CBOR hex"
+          ]
+      ]
+
+  modeButton state mode label =
+    HH.button
+      [ HE.onClick (\_ -> SelectMode mode)
+      , HP.style (
+          "margin-right: 0.5rem; padding: 0.35rem 0.75rem; font-size: 0.9rem; "
+            <> (if state.mode == mode
+                 then "border: 1px solid #333; background: #eee;"
+                 else "border: 1px solid #ccc; background: transparent;"))
+      ]
+      [ HH.text label ]
+
+  renderBody state = case state.mode of
+    ByHash ->
+      HH.div_
+        [ HH.input
+            [ HP.type_ HP.InputText
+            , HP.placeholder "64-char tx hash"
+            , HP.value state.txHash
+            , HE.onValueInput SetTxHash
+            , HP.style "width: 100%; font-family: ui-monospace, monospace;"
+            ]
+        , HH.div_
+            [ HH.button
+                [ HP.disabled state.running
+                , HE.onClick (\_ -> Decode)
+                ]
+                [ HH.text (if state.running then "Fetching & decoding..." else "Fetch & decode") ]
+            ]
+        ]
+    ByHex ->
+      HH.div_
+        [ HH.textarea
+            [ HP.value state.txHex
+            , HP.placeholder "Conway tx CBOR hex..."
+            , HP.rows 8
+            , HE.onValueInput SetTxHex
+            ]
+        , HH.div_
+            [ HH.button
+                [ HP.disabled state.running
+                , HE.onClick (\_ -> Decode)
+                ]
+                [ HH.text (if state.running then "Decoding..." else "Decode") ]
+            ]
+        ]
+
+  renderResult state =
+    case state.fetchError of
+      Just err ->
+        HH.div
+          [ HP.style "color: #b00; margin-top: 1rem;" ]
+          [ HH.strong_ [ HH.text "Fetch error: " ]
+          , HH.text err
+          ]
+      Nothing -> case state.result of
+        Nothing -> HH.text ""
+        Just r ->
+          HH.div_
+            [ HH.div_
+                [ HH.h2_ [ HH.text (if r.exitOk then "Decoded JSON" else "Error") ]
+                , if r.exitOk
+                    then
+                      HH.button
+                        [ HE.onClick (\_ -> Copy)
+                        , HP.style "margin-left: 1rem; font-size: 0.875rem;"
+                        ]
+                        [ HH.text (if state.copied then "Copied!" else "Copy JSON") ]
+                    else HH.text ""
+                ]
+            , HH.pre_ [ HH.text (Json.pretty r.stdout) ]
+            , if r.stderr == "" then HH.text ""
+              else
+                HH.div_
+                  [ HH.h2_ [ HH.text "stderr" ]
+                  , HH.pre_ [ HH.text r.stderr ]
+                  ]
+            ]
+
   handleAction = case _ of
-    SetInput s -> H.modify_ _ { input = s, copied = false }
+    SetBlockfrostKey s -> do
+      H.modify_ _ { blockfrostKey = s }
+      liftEffect (Storage.setItem blockfrostKey s)
+    SetKoiosBearer s -> do
+      H.modify_ _ { koiosBearer = s }
+      liftEffect (Storage.setItem koiosKey s)
+    SelectProvider p -> do
+      H.modify_ _ { provider = p, fetchError = Nothing }
+      liftEffect (Storage.setItem providerKey (Provider.providerName p))
+    SelectMode m -> H.modify_ _ { mode = m, fetchError = Nothing }
+    SelectNetwork n -> H.modify_ _ { network = n, fetchError = Nothing }
+    SetTxHash s -> H.modify_ _ { txHash = s, copied = false, fetchError = Nothing }
+    SetTxHex s -> H.modify_ _ { txHex = s, copied = false, fetchError = Nothing }
     Decode -> do
-      H.modify_ _ { running = true, result = Nothing, copied = false }
-      hex <- H.gets _.input
-      r <- H.liftAff (runInspector hex)
-      H.modify_ _ { running = false, result = Just r }
+      st <- H.get
+      H.modify_ _ { running = true, result = Nothing, copied = false, fetchError = Nothing }
+      hexE <- case st.mode of
+        ByHex -> pure (Right (String.trim st.txHex))
+        ByHash ->
+          let key = case st.provider of
+                Blockfrost -> String.trim st.blockfrostKey
+                Koios      -> String.trim st.koiosBearer
+              trimmedHash = String.trim st.txHash
+          in
+            if Provider.needsKey st.provider && key == ""
+              then pure (Left (Provider.providerName st.provider <> " key not set."))
+              else if trimmedHash == ""
+                then pure (Left "Tx hash is empty.")
+                else do
+                  e <- H.liftAff (attempt (Provider.fetchTxCbor st.provider st.network key trimmedHash))
+                  case e of
+                    Left err -> pure (Left (message err))
+                    Right cbor -> pure (Right cbor)
+      case hexE of
+        Left err -> H.modify_ _ { running = false, fetchError = Just err }
+        Right h -> do
+          r <- H.liftAff (runInspector h)
+          H.modify_ _ { running = false, result = Just r }
     Copy -> do
       mr <- H.gets _.result
       case mr of
