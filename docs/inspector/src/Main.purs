@@ -132,7 +132,7 @@ inspectorComponent initial =
           [ HP.style "margin-bottom: 0.5rem;" ]
           [ HH.text "Source: "
           , providerRadio state Blockfrost "Blockfrost (API key required)"
-          , providerRadio state Koios      "Koios (keyless — CORS-blocked in browser; works from CLI)"
+          , providerRadio state Koios      "Koios (bearer token required in browser; free tier at koios.rest)"
           ]
       , HH.p_
           [ HH.text "Used only for the "
@@ -165,21 +165,28 @@ inspectorComponent initial =
             HH.div_
               [ HH.input
                   [ HP.type_ HP.InputText
-                  , HP.placeholder "Optional Koios bearer token (leave blank for anon)"
+                  , HP.placeholder "Koios bearer token (required for browser use)"
                   , HP.value state.koiosBearer
                   , HE.onValueInput SetKoiosBearer
                   , HP.style "width: 100%; font-family: ui-monospace, monospace;"
                   ]
               , HH.p
                   [ HP.style "margin-top: 0.25rem; font-size: 0.85rem; color: #555;" ]
-                  [ HH.text "Free keyless use works; bearer token lifts rate limits. Docs at "
+                  [ HH.text "Koios intentionally strips CORS on unauthenticated requests (see "
                   , HH.a
-                      [ HP.href "https://api.koios.rest/"
+                      [ HP.href "https://github.com/cardano-community/koios-artifacts/issues/397"
                       , HP.target "_blank"
                       , HP.rel "noopener noreferrer"
                       ]
-                      [ HH.text "api.koios.rest" ]
-                  , HH.text "."
+                      [ HH.text "issue #397" ]
+                  , HH.text "). Free bearer tokens at "
+                  , HH.a
+                      [ HP.href "https://koios.rest/pricing/Pricing.html"
+                      , HP.target "_blank"
+                      , HP.rel "noopener noreferrer"
+                      ]
+                      [ HH.text "koios.rest/pricing" ]
+                  , HH.text " — the free tier covers 50k req/day. Without a token, use the CLI script and paste in 'By CBOR hex' mode."
                   ]
               ]
       , HH.div
@@ -339,7 +346,9 @@ inspectorComponent initial =
                       let raw = message err
                           diag = case st.provider of
                             Koios | raw == "Failed to fetch" ->
-                              "Koios is blocked by browser CORS (server doesn't echo ACAO on POST responses). Use CLI: scripts/fetch-tx-cbor.sh <hash>, then paste the hex in 'By CBOR hex' mode. Or switch to Blockfrost."
+                              if String.trim st.koiosBearer == ""
+                                then "Koios blocks anonymous browser requests by design (CORS stripped). Register at koios.rest/pricing for a free bearer token (50k req/day), paste it above, and retry. Or use scripts/fetch-tx-cbor.sh <hash> locally and paste the hex."
+                                else "Koios rejected the request. Check the bearer token is valid and the network matches (mainnet/preprod/preview)."
                             _ -> raw
                       in pure (Left diag)
                     Right cbor -> pure (Right cbor)
