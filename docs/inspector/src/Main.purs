@@ -13,8 +13,8 @@ import Effect.Class (liftEffect)
 import Effect.Exception (message)
 import FFI.Blockfrost (Network(..))
 import FFI.Clipboard (copy) as Clipboard
-import FFI.Inspector (InspectorResult, runInspector)
-import FFI.Json (browse, inspect, pretty) as Json
+import FFI.Inspector (InspectorResult, runInspectorRpc)
+import FFI.Json (Browser, inspect, pretty, rpcBrowser, rpcInspection) as Json
 import FFI.Storage as Storage
 import Provider (Provider(..))
 import Provider as Provider
@@ -78,6 +78,8 @@ type State =
   , txHash :: String
   , txHex :: String
   , result :: Maybe InspectorResult
+  , txCbor :: Maybe String
+  , browser :: Maybe Json.Browser
   , running :: Boolean
   , copied :: Boolean
   , copiedPath :: Maybe String
@@ -123,6 +125,8 @@ inspectorComponent initial =
         , txHash: ""
         , txHex: ""
         , result: Nothing
+        , txCbor: Nothing
+        , browser: Nothing
         , running: false
         , copied: false
         , copiedPath: Nothing
@@ -381,7 +385,6 @@ inspectorComponent initial =
         Just r ->
           let
             summary = Json.inspect r.stdout
-            browser = Json.browse r.stdout state.browserPath
           in
             HH.section
               [ classNames [ "panel", "result-panel" ] ]
@@ -407,13 +410,17 @@ inspectorComponent initial =
                      then renderInspection summary
                      else []
                  )
-              <> ( if r.exitOk && browser.valid
-                     then [ renderBrowser state browser ]
-                     else []
-                 )
+              <> renderBrowserMaybe state r.exitOk
               <> [ renderRawJson r.stdout ]
               <> renderStderr r.stderr
               )
+
+  renderBrowserMaybe state exitOk =
+    case state.browser of
+      Just browser ->
+        if exitOk && browser.valid then [ renderBrowser state browser ]
+        else []
+      Nothing -> []
 
   renderInspection summary =
     [ HH.div
@@ -576,6 +583,8 @@ inspectorComponent initial =
         _
           { running = true
           , result = Nothing
+          , txCbor = Nothing
+          , browser = Nothing
           , copied = false
           , copiedPath = Nothing
           , browserPath = "[]"
@@ -609,8 +618,18 @@ inspectorComponent initial =
       case hexE of
         Left err -> H.modify_ _ { running = false, fetchError = Just err, browserPath = "[]" }
         Right h -> do
-          r <- H.liftAff (runInspector h)
-          H.modify_ _ { running = false, result = Just r, browserPath = "[]" }
+          rpcResult <- H.liftAff (runInspectorRpc h "inspect" "[]")
+          let
+            inspectionResult = rpcResult { stdout = Json.rpcInspection rpcResult.stdout }
+            browser = Json.rpcBrowser rpcResult.stdout
+          H.modify_
+            _
+              { running = false
+              , result = Just inspectionResult
+              , txCbor = Just h
+              , browser = if rpcResult.exitOk && browser.valid then Just browser else Nothing
+              , browserPath = browser.currentPath
+              }
     Copy -> do
       mr <- H.gets _.result
       case mr of
@@ -622,4 +641,20 @@ inspectorComponent initial =
       H.liftAff (Clipboard.copy value)
       H.modify_ _ { copied = false, copiedPath = Just path }
     BrowseJson path ->
-      H.modify_ _ { browserPath = path, copiedPath = Nothing }
+      do
+        mt <- H.gets _.txCbor
+        case mt of
+          Nothing ->
+            H.modify_ _ { browserPath = path, copiedPath = Nothing }
+          Just txCbor -> do
+            H.modify_ _ { browserPath = path, copiedPath = Nothing }
+            rpcResult <- H.liftAff (runInspectorRpc txCbor "browse" path)
+            let browser = Json.rpcBrowser rpcResult.stdout
+            H.modify_
+              _
+                { browser = if rpcResult.exitOk && browser.valid then Just browser else Nothing
+                , browserPath = browser.currentPath
+                , fetchError =
+                    if rpcResult.exitOk && browser.valid then Nothing
+                    else Just (if rpcResult.stderr == "" then "Haskell RPC browse failed." else rpcResult.stderr)
+                }

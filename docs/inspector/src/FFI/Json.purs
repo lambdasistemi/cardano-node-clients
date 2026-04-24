@@ -6,14 +6,16 @@ module FFI.Json
   , Metric
   , MintRow
   , OutputRow
-  , browse
   , inspect
   , pretty
+  , rpcBrowser
+  , rpcInspection
   ) where
 
 foreign import prettyImpl :: String -> String
 foreign import inspectImpl :: String -> Inspection
-foreign import browseImpl :: String -> String -> Browser
+foreign import rpcInspectionImpl :: String -> String
+foreign import rpcBrowserImpl :: String -> Browser
 
 type Metric =
   { label :: String
@@ -77,5 +79,8 @@ pretty = prettyImpl
 inspect :: String -> Inspection
 inspect = inspectImpl
 
-browse :: String -> String -> Browser
-browse = browseImpl
+rpcInspection :: String -> String
+rpcInspection = rpcInspectionImpl
+
+rpcBrowser :: String -> Browser
+rpcBrowser = rpcBrowserImpl

@@ -181,150 +181,63 @@ export const inspectImpl = (raw) => {
 
 const pathRoot = "[]";
 
-const encodePath = (segments) => JSON.stringify(segments);
+const invalidBrowser = (title, subtitle, currentJson = "") => ({
+  valid: false,
+  title,
+  subtitle,
+  currentPath: pathRoot,
+  currentJson,
+  breadcrumbs: [{ label: "tx", path: pathRoot }],
+  rows: [],
+});
 
-const decodePath = (path) => {
-  try {
-    const parsed = JSON.parse(path);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_err) {
-    return [];
+const normalizeBrowser = (browser) => {
+  if (!browser || typeof browser !== "object") {
+    return invalidBrowser("Transaction browser", "RPC response missing browser.");
   }
-};
-
-const valueAt = (root, path) =>
-  path.reduce((cursor, segment) => {
-    if (cursor === null || cursor === undefined) return undefined;
-    return cursor[segment];
-  }, root);
-
-const kindOf = (value) => {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  return typeof value;
-};
-
-const prettyValue = (value) => JSON.stringify(value, null, 2);
-
-const copyText = (value) => {
-  const kind = kindOf(value);
-  if (kind === "object" || kind === "array") return prettyValue(value);
-  if (kind === "string") return value;
-  if (kind === "undefined") return "";
-  return String(value);
-};
-
-const fieldLabel = (segment) =>
-  typeof segment === "number" ? `#${segment}` : String(segment);
-
-const childCount = (value) => {
-  if (Array.isArray(value)) return value.length;
-  if (value && typeof value === "object") return Object.keys(value).length;
-  return 0;
-};
-
-const isContainer = (value) => {
-  const kind = kindOf(value);
-  return kind === "array" || kind === "object";
-};
-
-const valueSummary = (value) => {
-  const kind = kindOf(value);
-  switch (kind) {
-    case "array":
-      return plural(value.length, "item");
-    case "object":
-      return plural(Object.keys(value).length, "field");
-    case "string":
-      return shortHex(value, 40, 16);
-    case "undefined":
-      return "";
-    default:
-      return String(value);
-  }
-};
-
-const browserRows = (value, parentPath) => {
-  const kind = kindOf(value);
-  if (kind === "array") {
-    return value.map((child, index) => {
-      const path = parentPath.concat(index);
-      const childKind = kindOf(child);
-      return {
-        label: fieldLabel(index),
-        path: encodePath(path),
-        kind: childKind,
-        summary: valueSummary(child),
-        copyValue: copyText(child),
-        canDive: isContainer(child),
-      };
-    });
-  }
-
-  if (kind === "object") {
-    return Object.entries(value).map(([key, child]) => {
-      const path = parentPath.concat(key);
-      const childKind = kindOf(child);
-      return {
-        label: key,
-        path: encodePath(path),
-        kind: childKind,
-        summary: valueSummary(child),
-        copyValue: copyText(child),
-        canDive: isContainer(child),
-      };
-    });
-  }
-
-  return [];
-};
-
-const breadcrumbsFor = (path) => {
-  const breadcrumbs = [{ label: "tx", path: pathRoot }];
-  path.forEach((_segment, index) => {
-    const here = path.slice(0, index + 1);
-    breadcrumbs.push({
-      label: fieldLabel(path[index]),
-      path: encodePath(here),
-    });
-  });
-  return breadcrumbs;
-};
-
-export const browseImpl = (raw) => (pathText) => {
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (_err) {
-    return {
-      valid: false,
-      title: "Raw output",
-      subtitle: "The decoder did not return JSON.",
-      currentPath: pathRoot,
-      currentJson: raw,
-      breadcrumbs: [{ label: "raw", path: pathRoot }],
-      rows: [],
-    };
-  }
-
-  const requestedPath = decodePath(pathText);
-  const current = valueAt(parsed, requestedPath);
-  const path = current === undefined ? [] : requestedPath;
-  const value = current === undefined ? parsed : current;
-  const breadcrumbs = breadcrumbsFor(path);
-  const label = breadcrumbs[breadcrumbs.length - 1]?.label || "tx";
-  const kind = kindOf(value);
 
   return {
-    valid: true,
-    title: label,
-    subtitle:
-      kind === "array" || kind === "object"
-        ? `${kind} / ${valueSummary(value)}`
-        : kind,
-    currentPath: encodePath(path),
-    currentJson: copyText(value),
-    breadcrumbs,
-    rows: browserRows(value, path),
+    valid: browser.valid === true,
+    title: String(browser.title ?? "tx"),
+    subtitle: String(browser.subtitle ?? ""),
+    currentPath: String(browser.currentPath ?? pathRoot),
+    currentJson: String(browser.currentJson ?? ""),
+    breadcrumbs: Array.isArray(browser.breadcrumbs)
+      ? browser.breadcrumbs.map((crumb) => ({
+          label: String(crumb?.label ?? "tx"),
+          path: String(crumb?.path ?? pathRoot),
+        }))
+      : [{ label: "tx", path: pathRoot }],
+    rows: Array.isArray(browser.rows)
+      ? browser.rows.map((row) => ({
+          label: String(row?.label ?? ""),
+          path: String(row?.path ?? pathRoot),
+          kind: String(row?.kind ?? ""),
+          summary: String(row?.summary ?? ""),
+          copyValue: String(row?.copyValue ?? ""),
+          canDive: row?.canDive === true,
+        }))
+      : [],
   };
+};
+
+export const rpcInspectionImpl = (raw) => {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, "inspection")) {
+      return JSON.stringify(parsed.inspection);
+    }
+  } catch (_err) {
+    return raw;
+  }
+  return raw;
+};
+
+export const rpcBrowserImpl = (raw) => {
+  try {
+    const parsed = JSON.parse(raw);
+    return normalizeBrowser(parsed?.browser);
+  } catch (_err) {
+    return invalidBrowser("Transaction browser", "RPC response was not JSON.", raw);
+  }
 };
