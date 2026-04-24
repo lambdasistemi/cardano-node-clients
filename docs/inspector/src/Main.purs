@@ -124,18 +124,18 @@ inspectorComponent initial =
 
   render state =
     HH.div_
-      [ HH.h1_ [ HH.text "Conway tx inspector" ]
-      , HH.p_
+      [ HH.p
+          [ HP.class_ (HH.ClassName "muted") ]
           [ HH.text
               "Decodes Cardano Conway-era transactions using the upstream Haskell ledger code "
           , HH.strong_ [ HH.text "unchanged" ]
-          , HH.text " — the same "
+          , HH.text " — same "
           , HH.code_ [ HH.text "cardano-ledger-conway" ]
           , HH.text " + "
           , HH.code_ [ HH.text "cardano-ledger-binary" ]
-          , HH.text " packages IntersectMBO ships for node and CLI, cross-compiled to "
+          , HH.text " that node and CLI use, cross-compiled to "
           , HH.code_ [ HH.text "wasm32-wasi" ]
-          , HH.text " and loaded in the browser via a WASI shim."
+          , HH.text " and loaded via a WASI shim."
           ]
       , renderProvider state
       , renderModeTabs state

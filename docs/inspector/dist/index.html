@@ -10,18 +10,75 @@
       href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
     />
     <style>
-      pre { overflow-x: auto; }
-      textarea { font-family: var(--pico-font-family-monospace); font-size: 0.875rem; }
-      input[type="text"], input[type="password"] { font-family: var(--pico-font-family-monospace); }
-      .muted { color: var(--pico-muted-color); font-size: 0.875rem; }
+      /* Tighten Pico's type and spacing for a denser, less-exaggerated look. */
+      :root {
+        --pico-font-size: 15px;
+        --pico-line-height: 1.5;
+        --pico-spacing: 0.75rem;
+        --pico-typography-spacing-vertical: 0.9rem;
+        --pico-form-element-spacing-vertical: 0.4rem;
+        --pico-form-element-spacing-horizontal: 0.65rem;
+        --pico-border-radius: 0.25rem;
+      }
+      h1 { font-size: 1.6rem; margin-bottom: 0.4rem; }
+      h2 { font-size: 1.2rem; margin-top: 0; }
+      h3 { font-size: 1.05rem; }
+      p { margin: 0.5rem 0; }
+      article { padding: 1rem 1.1rem; margin-block: 1rem; }
+      article > header { padding-block: 0.4rem; margin-block-end: 0.6rem; }
+      fieldset { margin-bottom: 0.6rem; }
+      fieldset legend { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--pico-muted-color); }
+      pre { overflow-x: auto; font-size: 0.8rem; padding: 0.75rem 1rem; }
+      textarea { font-family: var(--pico-font-family-monospace); font-size: 0.8rem; }
+      input[type="text"], input[type="password"] { font-family: var(--pico-font-family-monospace); font-size: 0.85rem; }
+      button { font-size: 0.9rem; }
+      .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
       .warning { color: var(--pico-color-amber-550); }
-      .error { color: var(--pico-color-red-550); }
+      .error { border-color: var(--pico-color-red-550); }
+      nav.site-nav { padding-block: 0.5rem; }
+      nav.site-nav strong { font-size: 0.95rem; }
+      footer.site-footer { padding-block: 1.5rem; color: var(--pico-muted-color); font-size: 0.85rem; border-top: 1px solid var(--pico-muted-border-color); margin-top: 2rem; }
     </style>
   </head>
   <body>
+    <header class="container">
+      <nav class="site-nav">
+        <ul>
+          <li><strong>Conway tx inspector</strong></li>
+        </ul>
+        <ul>
+          <li>
+            <a
+              href="https://github.com/lambdasistemi/cardano-node-clients"
+              target="_blank"
+              rel="noopener noreferrer"
+              >GitHub ↗</a
+            >
+          </li>
+        </ul>
+      </nav>
+    </header>
     <main class="container">
       <div id="app"></div>
     </main>
+    <footer class="container site-footer">
+      <div>
+        Built with the upstream Haskell ledger, cross-compiled to
+        <code>wasm32-wasi</code> via
+        <a
+          href="https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta"
+          target="_blank"
+          rel="noopener noreferrer"
+          >ghc-wasm-meta</a
+        >. Source:
+        <a
+          href="https://github.com/lambdasistemi/cardano-node-clients"
+          target="_blank"
+          rel="noopener noreferrer"
+          >lambdasistemi/cardano-node-clients</a
+        >.
+      </div>
+    </footer>
     <script src="index.js"></script>
   </body>
 </html>
