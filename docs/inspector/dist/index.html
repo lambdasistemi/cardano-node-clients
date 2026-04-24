@@ -528,6 +528,20 @@
         padding: 0.62rem 0.7rem;
       }
 
+      .browser-row.is-expanded {
+        border-color: var(--accent);
+        background: #f7fffd;
+      }
+
+      .browser-children {
+        display: grid;
+        gap: 8px;
+        min-width: 0;
+        margin-left: 18px;
+        padding-left: 12px;
+        border-left: 2px solid var(--border);
+      }
+
       .browser-row-main {
         display: grid;
         gap: 0.32rem;
@@ -715,6 +729,11 @@
           justify-content: start;
         }
 
+        .browser-children {
+          margin-left: 8px;
+          padding-left: 8px;
+        }
+
         .browser-keyline code {
           max-width: 100%;
         }
@@ -769,6 +788,6 @@
         >.
       </div>
     </footer>
-    <script src="index.js?v=ledger-rpc-1"></script>
+    <script src="index.js?v=ledger-rpc-tree-1"></script>
   </body>
 </html>

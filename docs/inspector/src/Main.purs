@@ -80,11 +80,18 @@ type State =
   , result :: Maybe InspectorResult
   , txCbor :: Maybe String
   , browser :: Maybe Json.Browser
+  , browserNodes :: Array BrowserNode
+  , expandedPaths :: Array String
   , running :: Boolean
   , copied :: Boolean
   , copiedPath :: Maybe String
   , browserPath :: String
   , fetchError :: Maybe String
+  }
+
+type BrowserNode =
+  { path :: String
+  , browser :: Json.Browser
   }
 
 type InitialKeys =
@@ -127,6 +134,8 @@ inspectorComponent initial =
         , result: Nothing
         , txCbor: Nothing
         , browser: Nothing
+        , browserNodes: []
+        , expandedPaths: []
         , running: false
         , copied: false
         , copiedPath: Nothing
@@ -438,9 +447,6 @@ inspectorComponent initial =
           [ classNames [ "browser-heading" ] ]
           [ HH.div_
               [ HH.h3_ [ HH.text "Transaction browser" ]
-              , HH.div
-                  [ classNames [ "breadcrumb-bar" ] ]
-                  (map renderBreadcrumb browser.breadcrumbs)
               , HH.p_ [ HH.text browser.subtitle ]
               ]
           , HH.button
@@ -455,61 +461,111 @@ inspectorComponent initial =
                   )
               ]
           ]
-      , if Array.null browser.rows then
-          HH.div
-            [ classNames [ "scalar-value" ] ]
-            [ HH.code_ [ HH.text browser.currentJson ] ]
-        else
-          HH.div
-            [ classNames [ "browser-row-list" ] ]
-            (map (renderBrowserRow state) browser.rows)
+      , HH.div
+          [ classNames [ "browser-row-list" ] ]
+          (renderTreeRows state browser)
       ]
 
-  renderBreadcrumb crumb =
-    HH.button
-      [ HE.onClick (\_ -> BrowseJson crumb.path)
-      , classNames [ "breadcrumb-button" ]
-      ]
-      [ HH.text crumb.label ]
-
-  renderBrowserRow state row =
-    HH.div
-      [ classNames [ "browser-row" ] ]
+  renderTreeRows state browser =
+    if Array.null browser.rows then
       [ HH.div
-          [ classNames [ "browser-row-main" ] ]
+          [ classNames [ "scalar-value" ] ]
+          [ HH.code_ [ HH.text browser.currentJson ] ]
+      ]
+    else
+      Array.concatMap (renderTreeRow state) browser.rows
+
+  renderTreeRow state row =
+    let
+      expanded = isExpanded row.path state.expandedPaths
+      child = browserAt row.path state.browserNodes
+    in
+      [ HH.div
+          [ classNames
+              ( if expanded then
+                  [ "browser-row", "is-expanded" ]
+                else
+                  [ "browser-row" ]
+              )
+          ]
           [ HH.div
-              [ classNames [ "browser-keyline" ] ]
-              [ HH.code_ [ HH.text row.label ]
-              , HH.span
-                  [ classNames [ "kind-badge" ] ]
-                  [ HH.text row.kind ]
+              [ classNames [ "browser-row-main" ] ]
+              [ HH.div
+                  [ classNames [ "browser-keyline" ] ]
+                  [ HH.code_ [ HH.text row.label ]
+                  , HH.span
+                      [ classNames [ "kind-badge" ] ]
+                      [ HH.text row.kind ]
+                  ]
+              , HH.div
+                  [ classNames [ "browser-summary" ] ]
+                  [ HH.text row.summary ]
               ]
           , HH.div
-              [ classNames [ "browser-summary" ] ]
-              [ HH.text row.summary ]
-          ]
-      , HH.div
-          [ classNames [ "browser-actions" ] ]
-          [ if row.canDive then
-              HH.button
-                [ HE.onClick (\_ -> BrowseJson row.path)
-                , classNames [ "inline-action" ]
-                ]
-                [ HH.text "Open" ]
-            else HH.text ""
-          , HH.button
-              [ HE.onClick (\_ -> CopyValue row.path row.copyValue)
-              , classNames [ "inline-action" ]
-              ]
-              [ HH.text
-                  ( if state.copiedPath == Just row.path then
-                      "Copied"
-                    else
-                      "Copy"
-                  )
+              [ classNames [ "browser-actions" ] ]
+              [ if row.canDive then
+                  HH.button
+                    [ HE.onClick (\_ -> BrowseJson row.path)
+                    , classNames [ "inline-action" ]
+                    ]
+                    [ HH.text (if expanded then "Close" else "Open") ]
+                else HH.text ""
+              , HH.button
+                  [ HE.onClick (\_ -> CopyValue row.path row.copyValue)
+                  , classNames [ "inline-action" ]
+                  ]
+                  [ HH.text
+                      ( if state.copiedPath == Just row.path then
+                          "Copied"
+                        else
+                          "Copy"
+                      )
+                  ]
               ]
           ]
-      ]
+      ] <> if expanded then
+        [ HH.div
+            [ classNames [ "browser-children" ] ]
+            ( case child of
+                Just browser ->
+                  renderTreeRows state browser
+                Nothing ->
+                  [ HH.div
+                      [ classNames [ "scalar-value" ] ]
+                      [ HH.code_ [ HH.text "Loading..." ] ]
+                  ]
+            )
+        ]
+      else []
+
+  isExpanded path paths =
+    Array.elem path paths
+
+  browserAt path nodes =
+    _.browser <$> Array.find (\node -> node.path == path) nodes
+
+  upsertBrowserNode path browser nodes =
+    if Array.any (\node -> node.path == path) nodes then
+      map
+        ( \node ->
+            if node.path == path then
+              { path, browser }
+            else
+              node
+        )
+        nodes
+    else
+      Array.snoc nodes { path, browser }
+
+  expandPath path paths =
+    if Array.elem path paths then paths
+    else Array.snoc paths path
+
+  closePath path paths =
+    Array.filter (_ /= path) paths
+
+  rootBrowserNodes browser =
+    [ { path: browser.currentPath, browser } ]
 
   renderMetric metric =
     HH.div
@@ -585,6 +641,8 @@ inspectorComponent initial =
           , result = Nothing
           , txCbor = Nothing
           , browser = Nothing
+          , browserNodes = []
+          , expandedPaths = []
           , copied = false
           , copiedPath = Nothing
           , browserPath = "[]"
@@ -628,6 +686,10 @@ inspectorComponent initial =
               , result = Just inspectionResult
               , txCbor = Just h
               , browser = if rpcResult.exitOk && browser.valid then Just browser else Nothing
+              , browserNodes =
+                  if rpcResult.exitOk && browser.valid then rootBrowserNodes browser
+                  else []
+              , expandedPaths = []
               , browserPath = browser.currentPath
               }
     Copy -> do
@@ -642,8 +704,10 @@ inspectorComponent initial =
       H.modify_ _ { copied = false, copiedPath = Just path }
     BrowseJson path ->
       do
-        mt <- H.gets _.txCbor
-        case mt of
+        st <- H.get
+        if isExpanded path st.expandedPaths then
+          H.modify_ _ { expandedPaths = closePath path st.expandedPaths, copiedPath = Nothing }
+        else case st.txCbor of
           Nothing ->
             H.modify_ _ { browserPath = path, copiedPath = Nothing }
           Just txCbor -> do
@@ -652,7 +716,16 @@ inspectorComponent initial =
             let browser = Json.rpcBrowser rpcResult.stdout
             H.modify_
               _
-                { browser = if rpcResult.exitOk && browser.valid then Just browser else Nothing
+                { browserNodes =
+                    if rpcResult.exitOk && browser.valid then
+                      upsertBrowserNode path browser st.browserNodes
+                    else
+                      st.browserNodes
+                , expandedPaths =
+                    if rpcResult.exitOk && browser.valid then
+                      expandPath path st.expandedPaths
+                    else
+                      st.expandedPaths
                 , browserPath = browser.currentPath
                 , fetchError =
                     if rpcResult.exitOk && browser.valid then Nothing
