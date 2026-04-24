@@ -37,7 +37,13 @@ nix develop .#wasm-dev                                # host-side iteration shel
 
 - **Haskell-only edits to `nix/wasm/tx-inspector/wasm-tx-inspector/src/Conway/Inspector.hs`**: ~11 s rebuild. This is the fast path. The split builder (`prebuiltDeps` + `wasm`) keeps the ledger closure cached; Inspector edits only re-link the exe.
 - **Edits to `wasm-tx-inspector.cabal` (adding build-depends)**: ~24 min, because `prebuiltDeps`'s `srcMetadata` filter picks up the cabal file change → its hash changes → full `wasm32-wasi-cabal build --only-dependencies` from scratch in a fresh sandbox.
-- **Edits to `docs/inspector/src/*.purs` (UI)**: ~30 s via `nix build .#tx-inspector-ui`. Or iterate locally faster: `nix shell 'github:paolino/purescript-overlay/fix/remove-nodePackages#{purs,spago-unstable}' -c 'spago build'`.
+- **Edits to `docs/inspector/src/*.purs` (UI)**: ~30 s via `nix build .#tx-inspector-ui`. Or iterate locally faster:
+  ```bash
+  nix shell \
+    'github:paolino/purescript-overlay?ref=fix/remove-nodePackages#purs' \
+    'github:paolino/purescript-overlay?ref=fix/remove-nodePackages#spago-unstable' \
+    -c spago build
+  ```
 - **FOD deps hashes**: hard-coded in `nix/wasm-targets.nix`. If you change forks or bump cabal deps, set `dependenciesHash = pkgs.lib.fakeHash`, build once, replace with the hash Nix prints.
 - Key gotcha: `srcMetadata` in `nix/wasm/mkCardanoLedgerWasm.nix` must set `name = builtins.baseNameOf (toString src)`. Default `"source"` kills the cache because the sandbox extraction path won't match between `prebuiltDeps` and `wasm`.
 
