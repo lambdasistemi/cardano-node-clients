@@ -2,6 +2,7 @@ module Main (main) where
 
 import Prelude
 
+import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.String (trim) as String
@@ -13,7 +14,7 @@ import Effect.Exception (message)
 import FFI.Blockfrost (Network(..))
 import FFI.Clipboard (copy) as Clipboard
 import FFI.Inspector (InspectorResult, runInspector)
-import FFI.Json (pretty) as Json
+import FFI.Json (inspect, pretty) as Json
 import FFI.Storage as Storage
 import Provider (Provider(..))
 import Provider as Provider
@@ -184,11 +185,11 @@ inspectorComponent initial =
                   [ classNames [ "field-label" ] ]
                   [ HH.text "Blockfrost project ID"
                   , HH.a
-                      [ HP.href "https://blockfrost.io/auth/signup"
+                      [ HP.href "https://blockfrost.io/dashboard"
                       , HP.target "_blank"
                       , HP.rel "noopener noreferrer"
                       ]
-                      [ HH.text "Signup" ]
+                      [ HH.text "Dashboard" ]
                   ]
               Koios ->
                 HH.label
@@ -372,29 +373,164 @@ inspectorComponent initial =
                 [ HH.text "No result yet." ]
             ]
         Just r ->
-          HH.section
-            [ classNames [ "panel", "result-panel" ] ]
-            [ HH.div
-                [ classNames [ "panel-heading", "result-heading" ] ]
-                [ HH.h2_ [ HH.text (if r.exitOk then "Decoded JSON" else "Error") ]
-                , if r.exitOk
-                    then
-                      HH.button
-                        [ HE.onClick (\_ -> Copy)
-                        , classNames [ "secondary-action" ]
+          let summary = Json.inspect r.stdout
+          in
+            HH.section
+              [ classNames [ "panel", "result-panel" ] ]
+              ( [ HH.div
+                    [ classNames [ "panel-heading", "result-heading" ] ]
+                    [ HH.div_
+                        [ HH.h2_ [ HH.text (if r.exitOk then "Inspection" else "Error") ]
+                        , if r.exitOk && summary.valid
+                            then HH.p_ [ HH.text summary.title ]
+                            else HH.text ""
                         ]
-                        [ HH.text (if state.copied then "Copied" else "Copy JSON") ]
-                    else HH.text ""
+                    , if r.exitOk
+                        then
+                          HH.button
+                            [ HE.onClick (\_ -> Copy)
+                            , classNames [ "secondary-action" ]
+                            ]
+                            [ HH.text (if state.copied then "Copied" else "Copy JSON") ]
+                        else HH.text ""
+                    ]
                 ]
-            , HH.pre_ [ HH.text (Json.pretty r.stdout) ]
-            , if r.stderr == "" then HH.text ""
-              else
-                HH.div
-                  [ classNames [ "stderr-block" ] ]
-                  [ HH.h3_ [ HH.text "stderr" ]
-                  , HH.pre_ [ HH.text r.stderr ]
-                  ]
-            ]
+              <> ( if r.exitOk && summary.valid
+                     then renderInspection summary
+                     else []
+                 )
+              <> [ renderRawJson r.stdout ]
+              <> renderStderr r.stderr
+              )
+
+  renderInspection summary =
+    [ HH.div
+        [ classNames [ "inspection-summary" ] ]
+        [ HH.div
+            [ classNames [ "metric-grid" ] ]
+            (map renderMetric summary.metrics)
+        , HH.div
+            [ classNames [ "inspection-grid" ] ]
+            ( renderOutputs summary
+            <> renderMint summary
+            <> renderInputs summary
+            )
+        ]
+    ]
+
+  renderMetric metric =
+    HH.div
+      [ classNames [ "metric-card" ] ]
+      [ HH.span
+          [ classNames [ "metric-label" ] ]
+          [ HH.text metric.label ]
+      , HH.strong_ [ HH.text metric.value ]
+      ]
+
+  renderOutputs summary =
+    if Array.null summary.outputs then []
+    else
+      [ HH.div
+          [ classNames [ "inspection-section", "wide-section" ] ]
+          [ HH.div
+              [ classNames [ "section-heading" ] ]
+              [ HH.h3_ [ HH.text "Outputs" ]
+              , HH.span_ [ HH.text summary.outputNote ]
+              ]
+          , HH.div
+              [ classNames [ "output-list" ] ]
+              (map renderOutput summary.outputs)
+          ]
+      ]
+
+  renderOutput output =
+    HH.div
+      [ classNames [ "output-row" ] ]
+      [ HH.span
+          [ classNames [ "row-index" ] ]
+          [ HH.text output.index ]
+      , HH.div
+          [ classNames [ "output-main" ] ]
+          [ HH.code_ [ HH.text output.address ]
+          , HH.span_ [ HH.text output.coin ]
+          ]
+      , HH.div
+          [ classNames [ "output-meta" ] ]
+          [ HH.span_ [ HH.text output.assets ]
+          , HH.span_ [ HH.text output.datum ]
+          ]
+      ]
+
+  renderMint summary =
+    if Array.null summary.mint then []
+    else
+      [ HH.div
+          [ classNames [ "inspection-section" ] ]
+          [ HH.div
+              [ classNames [ "section-heading" ] ]
+              [ HH.h3_ [ HH.text "Mint" ]
+              , HH.span_ [ HH.text summary.mintNote ]
+              ]
+          , HH.div
+              [ classNames [ "mint-list" ] ]
+              (map renderMintRow summary.mint)
+          ]
+      ]
+
+  renderMintRow row =
+    HH.div
+      [ classNames [ "mint-row" ] ]
+      [ HH.code_ [ HH.text row.policy ]
+      , HH.span_ [ HH.text row.assets ]
+      ]
+
+  renderInputs summary =
+    if Array.null summary.inputs && Array.null summary.referenceInputs then []
+    else
+      [ HH.div
+          [ classNames [ "inspection-section" ] ]
+          [ HH.div
+              [ classNames [ "section-heading" ] ]
+              [ HH.h3_ [ HH.text "Inputs" ]
+              , HH.span_ [ HH.text summary.inputNote ]
+              ]
+          , if Array.null summary.inputs then HH.text ""
+            else
+              HH.div
+                [ classNames [ "hash-group" ] ]
+                [ HH.span_ [ HH.text "Spending" ]
+                , HH.div
+                    [ classNames [ "hash-list" ] ]
+                    (map (\input -> HH.code_ [ HH.text input ]) summary.inputs)
+                ]
+          , if Array.null summary.referenceInputs then HH.text ""
+            else
+              HH.div
+                [ classNames [ "hash-group" ] ]
+                [ HH.span_ [ HH.text "Reference" ]
+                , HH.div
+                    [ classNames [ "hash-list" ] ]
+                    (map (\input -> HH.code_ [ HH.text input ]) summary.referenceInputs)
+                ]
+          ]
+      ]
+
+  renderRawJson stdout =
+    HH.details
+      [ classNames [ "raw-json-block" ] ]
+      [ HH.summary_ [ HH.text "Raw JSON" ]
+      , HH.pre_ [ HH.text (Json.pretty stdout) ]
+      ]
+
+  renderStderr stderr =
+    if stderr == "" then []
+    else
+      [ HH.div
+          [ classNames [ "stderr-block" ] ]
+          [ HH.h3_ [ HH.text "stderr" ]
+          , HH.pre_ [ HH.text stderr ]
+          ]
+      ]
 
   classNames :: forall r a. Array String -> HP.IProp (class :: String | r) a
   classNames names = HP.classes (map HH.ClassName names)
