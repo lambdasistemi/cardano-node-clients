@@ -23,6 +23,7 @@ import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.VDom.Driver (runUI)
+import Web.DOM.ParentNode (QuerySelector(..))
 
 blockfrostKey :: String
 blockfrostKey = "blockfrost_project_id"
@@ -39,6 +40,7 @@ persistKeysStorageKey = "persist_api_keys"
 main :: Effect Unit
 main = HA.runHalogenAff do
   body    <- HA.awaitBody
+  app     <- HA.selectElement (QuerySelector "#app")
   persist <- liftEffect (Storage.getItem persistKeysStorageKey)
   let persistInitial = persist == "true"
   bf   <- liftEffect
@@ -49,6 +51,9 @@ main = HA.runHalogenAff do
   let initialProv = case prov of
         "Koios"      -> Koios
         _            -> Blockfrost
+      mountTarget = case app of
+        Just el -> el
+        Nothing -> body
   runUI
     ( inspectorComponent
         { bf
@@ -56,7 +61,7 @@ main = HA.runHalogenAff do
         , prov: initialProv
         , persistKeys: persistInitial
         }
-    ) unit body
+    ) unit mountTarget
 
 data Mode = ByHash | ByHex
 
@@ -123,150 +128,198 @@ inspectorComponent initial =
   where
 
   render state =
-    HH.div_
-      [ HH.p
-          [ HP.class_ (HH.ClassName "muted") ]
-          [ HH.text
-              "Decodes Cardano Conway-era transactions using the upstream Haskell ledger code "
-          , HH.strong_ [ HH.text "unchanged" ]
-          , HH.text " — same "
-          , HH.code_ [ HH.text "cardano-ledger-conway" ]
-          , HH.text " + "
-          , HH.code_ [ HH.text "cardano-ledger-binary" ]
-          , HH.text " that node and CLI use, cross-compiled to "
-          , HH.code_ [ HH.text "wasm32-wasi" ]
-          , HH.text " and loaded via a WASI shim."
+    HH.div
+      [ classNames [ "app-shell" ] ]
+      [ HH.section
+          [ classNames [ "intro-strip" ] ]
+          [ HH.div_
+              [ HH.h1_ [ HH.text "Conway tx inspector" ]
+              , HH.p_
+                  [ HH.text
+                      "Decode Conway transaction CBOR in the browser with the upstream Haskell ledger compiled to "
+                  , HH.code_ [ HH.text "wasm32-wasi" ]
+                  , HH.text "."
+                  ]
+              ]
+          , HH.div
+              [ classNames [ "tech-pills" ] ]
+              [ HH.span_ [ HH.text "cardano-ledger-conway" ]
+              , HH.span_ [ HH.text "cardano-ledger-binary" ]
+              , HH.span_ [ HH.text "WASI" ]
+              ]
           ]
-      , renderProvider state
-      , renderModeTabs state
-      , renderResult state
+      , HH.div
+          [ classNames [ "workspace" ] ]
+          [ renderProvider state
+          , HH.div
+              [ classNames [ "workspace-main" ] ]
+              [ renderModeTabs state
+              , renderResult state
+              ]
+          ]
       ]
 
   renderProvider state =
-    HH.article_
-      [ HH.header_ [ HH.h2_ [ HH.text "Chain data provider" ] ]
-      , HH.p_
-          [ HH.text "Pick a provider. Both offer a free tier that needs a quick signup — paste the resulting credential below. Used only in the "
-          , HH.strong_ [ HH.text "by tx hash" ]
-          , HH.text " mode."
+    HH.section
+      [ classNames [ "panel", "provider-panel" ] ]
+      [ HH.div
+          [ classNames [ "panel-heading" ] ]
+          [ HH.h2_ [ HH.text "Chain data" ]
+          , HH.p_ [ HH.text "Credentials stay in memory unless persistence is enabled." ]
           ]
-      , HH.fieldset_
-          [ HH.legend_ [ HH.text "Source" ]
-          , providerRadio state Blockfrost "Blockfrost"
-          , providerRadio state Koios      "Koios"
+      , HH.fieldset
+          [ classNames [ "control-group" ] ]
+          [ HH.legend_ [ HH.text "Provider" ]
+          , HH.div
+              [ classNames [ "option-stack" ] ]
+              [ providerRadio state Blockfrost "Blockfrost"
+              , providerRadio state Koios      "Koios"
+              ]
           ]
-      , case state.provider of
-          Blockfrost ->
-            HH.label_
-              [ HH.text "Blockfrost project ID (free tier at "
-              , HH.a
-                  [ HP.href "https://blockfrost.io/auth/signup"
-                  , HP.target "_blank"
-                  , HP.rel "noopener noreferrer"
+      , HH.div
+          [ classNames [ "field-stack" ] ]
+          [ case state.provider of
+              Blockfrost ->
+                HH.label
+                  [ classNames [ "field-label" ] ]
+                  [ HH.text "Blockfrost project ID"
+                  , HH.a
+                      [ HP.href "https://blockfrost.io/auth/signup"
+                      , HP.target "_blank"
+                      , HP.rel "noopener noreferrer"
+                      ]
+                      [ HH.text "Signup" ]
                   ]
-                  [ HH.text "blockfrost.io signup" ]
-              , HH.text ")"
-              , HH.input
+              Koios ->
+                HH.label
+                  [ classNames [ "field-label" ] ]
+                  [ HH.text "Koios bearer token"
+                  , HH.a
+                      [ HP.href "https://koios.rest/auth/Auth.html"
+                      , HP.target "_blank"
+                      , HP.rel "noopener noreferrer"
+                      ]
+                      [ HH.text "Auth" ]
+                  ]
+          , case state.provider of
+              Blockfrost ->
+                HH.input
                   [ HP.type_ HP.InputPassword
                   , HP.placeholder "mainnet... / preprod... / preview..."
                   , HP.value state.blockfrostKey
                   , HE.onValueInput SetBlockfrostKey
                   ]
-              ]
-          Koios ->
-            HH.label_
-              [ HH.text "Koios bearer token (free tier at "
-              , HH.a
-                  [ HP.href "https://koios.rest/auth/Auth.html"
-                  , HP.target "_blank"
-                  , HP.rel "noopener noreferrer"
-                  ]
-                  [ HH.text "koios.rest auth" ]
-              , HH.text ")"
-              , HH.input
+              Koios ->
+                HH.input
                   [ HP.type_ HP.InputPassword
                   , HP.placeholder "eyJhbGciOi..."
                   , HP.value state.koiosBearer
                   , HE.onValueInput SetKoiosBearer
                   ]
-              ]
-      , HH.fieldset_
+          ]
+      , HH.fieldset
+          [ classNames [ "control-group" ] ]
           [ HH.legend_ [ HH.text "Network" ]
-          , networkRadio state Mainnet "mainnet"
-          , networkRadio state Preprod "preprod"
-          , networkRadio state Preview "preview"
+          , HH.div
+              [ classNames [ "option-stack", "compact-options" ] ]
+              [ networkRadio state Mainnet "mainnet"
+              , networkRadio state Preprod "preprod"
+              , networkRadio state Preview "preview"
+              ]
           ]
       , renderPersistToggle state
       ]
 
   renderPersistToggle state =
-    HH.fieldset_
-      [ HH.label_
+    HH.div
+      [ classNames [ "persist-block" ] ]
+      [ HH.label
+          [ classNames [ "switch-row" ] ]
           [ HH.input
               [ HP.type_ HP.InputCheckbox
               , HH.attr (HH.AttrName "role") "switch"
               , HP.checked state.persistKeys
               , HE.onChecked TogglePersist
               ]
-          , HH.text " Persist API credentials across sessions"
+          , HH.span_ [ HH.text "Persist API credentials" ]
           ]
-      , HH.small
-          [ HP.class_ (HH.ClassName "warning") ]
-          [ HH.text
-              "⚠ When enabled, the credential is saved in your browser's localStorage "
-          , HH.strong_ [ HH.text "in cleartext" ]
+      , HH.p
+          [ classNames [ "warning-note" ] ]
+          [ HH.strong_ [ HH.text "Warning: " ]
           , HH.text
-              ". Any JavaScript running on this origin (including future updates of this page) can read it. When disabled (default), the credential stays in memory only and is lost on reload."
+              "when enabled, credentials are saved in localStorage in cleartext. When disabled, they stay in memory only."
           ]
       ]
 
   providerRadio state prov label =
-    HH.label_
+    HH.label
+      [ choiceClass (state.provider == prov) ]
       [ HH.input
           [ HP.type_ HP.InputRadio
           , HP.name "provider"
           , HP.checked (state.provider == prov)
           , HE.onChange (\_ -> SelectProvider prov)
           ]
-      , HH.text (" " <> label)
+      , HH.span
+          [ classNames [ "choice-copy" ] ]
+          [ HH.span
+              [ classNames [ "choice-title" ] ]
+              [ HH.text label ]
+          ]
       ]
 
   networkRadio state net label =
-    HH.label_
+    HH.label
+      [ choiceClass (state.network == net) ]
       [ HH.input
           [ HP.type_ HP.InputRadio
           , HP.name "network"
           , HP.checked (state.network == net)
           , HE.onChange (\_ -> SelectNetwork net)
           ]
-      , HH.text (" " <> label)
+      , HH.span
+          [ classNames [ "choice-title" ] ]
+          [ HH.text label ]
       ]
 
   renderModeTabs state =
-    HH.article_
-      [ HH.header_ [ HH.h2_ [ HH.text "Input" ] ]
-      , HH.fieldset_
+    HH.section
+      [ classNames [ "panel", "input-panel" ] ]
+      [ HH.div
+          [ classNames [ "panel-heading" ] ]
+          [ HH.h2_ [ HH.text "Input" ]
+          , HH.p_ [ HH.text "Fetch by transaction hash or paste raw CBOR hex." ]
+          ]
+      , HH.fieldset
+          [ classNames [ "control-group" ] ]
           [ HH.legend_ [ HH.text "Mode" ]
-          , modeRadio state ByHash "By tx hash"
-          , modeRadio state ByHex  "By CBOR hex"
+          , HH.div
+              [ classNames [ "mode-options" ] ]
+              [ modeRadio state ByHash "Tx hash"
+              , modeRadio state ByHex  "CBOR hex"
+              ]
           ]
       , renderBody state
       ]
 
   modeRadio state mode label =
-    HH.label_
+    HH.label
+      [ choiceClass (state.mode == mode) ]
       [ HH.input
           [ HP.type_ HP.InputRadio
           , HP.name "mode"
           , HP.checked (state.mode == mode)
           , HE.onChange (\_ -> SelectMode mode)
           ]
-      , HH.text (" " <> label)
+      , HH.span
+          [ classNames [ "choice-title" ] ]
+          [ HH.text label ]
       ]
 
   renderBody state = case state.mode of
     ByHash ->
-      HH.div_
+      HH.div
+        [ classNames [ "decode-form", "hash-form" ] ]
         [ HH.input
             [ HP.type_ HP.InputText
             , HP.placeholder "64-char tx hash"
@@ -275,20 +328,23 @@ inspectorComponent initial =
             ]
         , HH.button
             [ HP.disabled state.running
+            , classNames [ "primary-action" ]
             , HE.onClick (\_ -> Decode)
             ]
-            [ HH.text (if state.running then "Fetching & decoding..." else "Fetch & decode") ]
+            [ HH.text (if state.running then "Fetching..." else "Fetch and decode") ]
         ]
     ByHex ->
-      HH.div_
+      HH.div
+        [ classNames [ "decode-form" ] ]
         [ HH.textarea
             [ HP.value state.txHex
             , HP.placeholder "Conway tx CBOR hex..."
-            , HP.rows 8
+            , HP.rows 9
             , HE.onValueInput SetTxHex
             ]
         , HH.button
             [ HP.disabled state.running
+            , classNames [ "primary-action" ]
             , HE.onClick (\_ -> Decode)
             ]
             [ HH.text (if state.running then "Decoding..." else "Decode") ]
@@ -297,34 +353,60 @@ inspectorComponent initial =
   renderResult state =
     case state.fetchError of
       Just err ->
-        HH.article
-          [ HP.class_ (HH.ClassName "error") ]
-          [ HH.strong_ [ HH.text "Fetch error: " ]
-          , HH.text err
+        HH.section
+          [ classNames [ "panel", "result-panel", "error-panel" ] ]
+          [ HH.div
+              [ classNames [ "panel-heading" ] ]
+              [ HH.h2_ [ HH.text "Fetch error" ] ]
+          , HH.p_ [ HH.text err ]
           ]
       Nothing -> case state.result of
-        Nothing -> HH.text ""
+        Nothing ->
+          HH.section
+            [ classNames [ "panel", "result-panel", "empty-result" ] ]
+            [ HH.div
+                [ classNames [ "panel-heading" ] ]
+                [ HH.h2_ [ HH.text "Decoded JSON" ] ]
+            , HH.div
+                [ classNames [ "empty-state" ] ]
+                [ HH.text "No result yet." ]
+            ]
         Just r ->
-          HH.article_
-            [ HH.header_
+          HH.section
+            [ classNames [ "panel", "result-panel" ] ]
+            [ HH.div
+                [ classNames [ "panel-heading", "result-heading" ] ]
                 [ HH.h2_ [ HH.text (if r.exitOk then "Decoded JSON" else "Error") ]
                 , if r.exitOk
                     then
                       HH.button
                         [ HE.onClick (\_ -> Copy)
-                        , HP.class_ (HH.ClassName "secondary")
+                        , classNames [ "secondary-action" ]
                         ]
-                        [ HH.text (if state.copied then "Copied!" else "Copy JSON") ]
+                        [ HH.text (if state.copied then "Copied" else "Copy JSON") ]
                     else HH.text ""
                 ]
             , HH.pre_ [ HH.text (Json.pretty r.stdout) ]
             , if r.stderr == "" then HH.text ""
               else
-                HH.div_
+                HH.div
+                  [ classNames [ "stderr-block" ] ]
                   [ HH.h3_ [ HH.text "stderr" ]
                   , HH.pre_ [ HH.text r.stderr ]
                   ]
             ]
+
+  classNames :: forall r a. Array String -> HP.IProp (class :: String | r) a
+  classNames names = HP.classes (map HH.ClassName names)
+
+  choiceClass :: forall r a. Boolean -> HP.IProp (class :: String | r) a
+  choiceClass selected =
+    classNames
+      ( if selected then
+          [ "choice-option", "is-selected" ]
+        else
+          [ "choice-option" ]
+      )
 
   handleAction = case _ of
     SetBlockfrostKey s -> do
