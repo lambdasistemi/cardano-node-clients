@@ -139,7 +139,6 @@ inspectorComponent initial =
           ]
       , renderProvider state
       , renderModeTabs state
-      , renderBody state
       , renderResult state
       ]
 
