@@ -14,7 +14,7 @@ import Effect.Exception (message)
 import FFI.Blockfrost (Network(..))
 import FFI.Clipboard (copy) as Clipboard
 import FFI.Inspector (InspectorResult, runInspector)
-import FFI.Json (inspect, pretty) as Json
+import FFI.Json (browse, inspect, pretty) as Json
 import FFI.Storage as Storage
 import Provider (Provider(..))
 import Provider as Provider
@@ -80,6 +80,8 @@ type State =
   , result :: Maybe InspectorResult
   , running :: Boolean
   , copied :: Boolean
+  , copiedPath :: Maybe String
+  , browserPath :: String
   , fetchError :: Maybe String
   }
 
@@ -101,6 +103,8 @@ data Action
   | SetTxHex String
   | Decode
   | Copy
+  | CopyValue String String
+  | BrowseJson String
 
 inspectorComponent
   :: forall q i o m
@@ -121,6 +125,8 @@ inspectorComponent initial =
         , result: Nothing
         , running: false
         , copied: false
+        , copiedPath: Nothing
+        , browserPath: "[]"
         , fetchError: Nothing
         }
     , render
@@ -373,7 +379,9 @@ inspectorComponent initial =
                 [ HH.text "No result yet." ]
             ]
         Just r ->
-          let summary = Json.inspect r.stdout
+          let
+            summary = Json.inspect r.stdout
+            browser = Json.browse r.stdout state.browserPath
           in
             HH.section
               [ classNames [ "panel", "result-panel" ] ]
@@ -399,6 +407,10 @@ inspectorComponent initial =
                      then renderInspection summary
                      else []
                  )
+              <> ( if r.exitOk && browser.valid
+                     then [ renderBrowser state browser ]
+                     else []
+                 )
               <> [ renderRawJson r.stdout ]
               <> renderStderr r.stderr
               )
@@ -409,14 +421,88 @@ inspectorComponent initial =
         [ HH.div
             [ classNames [ "metric-grid" ] ]
             (map renderMetric summary.metrics)
-        , HH.div
-            [ classNames [ "inspection-grid" ] ]
-            ( renderOutputs summary
-            <> renderMint summary
-            <> renderInputs summary
-            )
         ]
     ]
+
+  renderBrowser state browser =
+    HH.div
+      [ classNames [ "json-browser" ] ]
+      [ HH.div
+          [ classNames [ "browser-heading" ] ]
+          [ HH.div_
+              [ HH.h3_ [ HH.text "Transaction browser" ]
+              , HH.div
+                  [ classNames [ "breadcrumb-bar" ] ]
+                  (map renderBreadcrumb browser.breadcrumbs)
+              , HH.p_ [ HH.text browser.subtitle ]
+              ]
+          , HH.button
+              [ HE.onClick (\_ -> CopyValue browser.currentPath browser.currentJson)
+              , classNames [ "inline-action" ]
+              ]
+              [ HH.text
+                  ( if state.copiedPath == Just browser.currentPath then
+                      "Copied"
+                    else
+                      "Copy current"
+                  )
+              ]
+          ]
+      , if Array.null browser.rows then
+          HH.div
+            [ classNames [ "scalar-value" ] ]
+            [ HH.code_ [ HH.text browser.currentJson ] ]
+        else
+          HH.div
+            [ classNames [ "browser-row-list" ] ]
+            (map (renderBrowserRow state) browser.rows)
+      ]
+
+  renderBreadcrumb crumb =
+    HH.button
+      [ HE.onClick (\_ -> BrowseJson crumb.path)
+      , classNames [ "breadcrumb-button" ]
+      ]
+      [ HH.text crumb.label ]
+
+  renderBrowserRow state row =
+    HH.div
+      [ classNames [ "browser-row" ] ]
+      [ HH.div
+          [ classNames [ "browser-row-main" ] ]
+          [ HH.div
+              [ classNames [ "browser-keyline" ] ]
+              [ HH.code_ [ HH.text row.label ]
+              , HH.span
+                  [ classNames [ "kind-badge" ] ]
+                  [ HH.text row.kind ]
+              ]
+          , HH.div
+              [ classNames [ "browser-summary" ] ]
+              [ HH.text row.summary ]
+          ]
+      , HH.div
+          [ classNames [ "browser-actions" ] ]
+          [ if row.canDive then
+              HH.button
+                [ HE.onClick (\_ -> BrowseJson row.path)
+                , classNames [ "inline-action" ]
+                ]
+                [ HH.text "Open" ]
+            else HH.text ""
+          , HH.button
+              [ HE.onClick (\_ -> CopyValue row.path row.copyValue)
+              , classNames [ "inline-action" ]
+              ]
+              [ HH.text
+                  ( if state.copiedPath == Just row.path then
+                      "Copied"
+                    else
+                      "Copy"
+                  )
+              ]
+          ]
+      ]
 
   renderMetric metric =
     HH.div
@@ -425,94 +511,6 @@ inspectorComponent initial =
           [ classNames [ "metric-label" ] ]
           [ HH.text metric.label ]
       , HH.strong_ [ HH.text metric.value ]
-      ]
-
-  renderOutputs summary =
-    if Array.null summary.outputs then []
-    else
-      [ HH.div
-          [ classNames [ "inspection-section", "wide-section" ] ]
-          [ HH.div
-              [ classNames [ "section-heading" ] ]
-              [ HH.h3_ [ HH.text "Outputs" ]
-              , HH.span_ [ HH.text summary.outputNote ]
-              ]
-          , HH.div
-              [ classNames [ "output-list" ] ]
-              (map renderOutput summary.outputs)
-          ]
-      ]
-
-  renderOutput output =
-    HH.div
-      [ classNames [ "output-row" ] ]
-      [ HH.span
-          [ classNames [ "row-index" ] ]
-          [ HH.text output.index ]
-      , HH.div
-          [ classNames [ "output-main" ] ]
-          [ HH.code_ [ HH.text output.address ]
-          , HH.span_ [ HH.text output.coin ]
-          ]
-      , HH.div
-          [ classNames [ "output-meta" ] ]
-          [ HH.span_ [ HH.text output.assets ]
-          , HH.span_ [ HH.text output.datum ]
-          ]
-      ]
-
-  renderMint summary =
-    if Array.null summary.mint then []
-    else
-      [ HH.div
-          [ classNames [ "inspection-section" ] ]
-          [ HH.div
-              [ classNames [ "section-heading" ] ]
-              [ HH.h3_ [ HH.text "Mint" ]
-              , HH.span_ [ HH.text summary.mintNote ]
-              ]
-          , HH.div
-              [ classNames [ "mint-list" ] ]
-              (map renderMintRow summary.mint)
-          ]
-      ]
-
-  renderMintRow row =
-    HH.div
-      [ classNames [ "mint-row" ] ]
-      [ HH.code_ [ HH.text row.policy ]
-      , HH.span_ [ HH.text row.assets ]
-      ]
-
-  renderInputs summary =
-    if Array.null summary.inputs && Array.null summary.referenceInputs then []
-    else
-      [ HH.div
-          [ classNames [ "inspection-section" ] ]
-          [ HH.div
-              [ classNames [ "section-heading" ] ]
-              [ HH.h3_ [ HH.text "Inputs" ]
-              , HH.span_ [ HH.text summary.inputNote ]
-              ]
-          , if Array.null summary.inputs then HH.text ""
-            else
-              HH.div
-                [ classNames [ "hash-group" ] ]
-                [ HH.span_ [ HH.text "Spending" ]
-                , HH.div
-                    [ classNames [ "hash-list" ] ]
-                    (map (\input -> HH.code_ [ HH.text input ]) summary.inputs)
-                ]
-          , if Array.null summary.referenceInputs then HH.text ""
-            else
-              HH.div
-                [ classNames [ "hash-group" ] ]
-                [ HH.span_ [ HH.text "Reference" ]
-                , HH.div
-                    [ classNames [ "hash-list" ] ]
-                    (map (\input -> HH.code_ [ HH.text input ]) summary.referenceInputs)
-                ]
-          ]
       ]
 
   renderRawJson stdout =
@@ -568,13 +566,21 @@ inspectorComponent initial =
           else do
             Storage.setItem blockfrostKey ""
             Storage.setItem koiosKey ""
-    SelectMode m -> H.modify_ _ { mode = m, fetchError = Nothing }
-    SelectNetwork n -> H.modify_ _ { network = n, fetchError = Nothing }
-    SetTxHash s -> H.modify_ _ { txHash = s, copied = false, fetchError = Nothing }
-    SetTxHex s -> H.modify_ _ { txHex = s, copied = false, fetchError = Nothing }
+    SelectMode m -> H.modify_ _ { mode = m, fetchError = Nothing, copiedPath = Nothing }
+    SelectNetwork n -> H.modify_ _ { network = n, fetchError = Nothing, copiedPath = Nothing }
+    SetTxHash s -> H.modify_ _ { txHash = s, copied = false, copiedPath = Nothing, fetchError = Nothing }
+    SetTxHex s -> H.modify_ _ { txHex = s, copied = false, copiedPath = Nothing, fetchError = Nothing }
     Decode -> do
       st <- H.get
-      H.modify_ _ { running = true, result = Nothing, copied = false, fetchError = Nothing }
+      H.modify_
+        _
+          { running = true
+          , result = Nothing
+          , copied = false
+          , copiedPath = Nothing
+          , browserPath = "[]"
+          , fetchError = Nothing
+          }
       hexE <- case st.mode of
         ByHex -> pure (Right (String.trim st.txHex))
         ByHash ->
@@ -601,14 +607,19 @@ inspectorComponent initial =
                       in pure (Left diag)
                     Right cbor -> pure (Right cbor)
       case hexE of
-        Left err -> H.modify_ _ { running = false, fetchError = Just err }
+        Left err -> H.modify_ _ { running = false, fetchError = Just err, browserPath = "[]" }
         Right h -> do
           r <- H.liftAff (runInspector h)
-          H.modify_ _ { running = false, result = Just r }
+          H.modify_ _ { running = false, result = Just r, browserPath = "[]" }
     Copy -> do
       mr <- H.gets _.result
       case mr of
         Nothing -> pure unit
         Just r -> do
           H.liftAff (Clipboard.copy (Json.pretty r.stdout))
-          H.modify_ _ { copied = true }
+          H.modify_ _ { copied = true, copiedPath = Nothing }
+    CopyValue path value -> do
+      H.liftAff (Clipboard.copy value)
+      H.modify_ _ { copied = false, copiedPath = Just path }
+    BrowseJson path ->
+      H.modify_ _ { browserPath = path, copiedPath = Nothing }
