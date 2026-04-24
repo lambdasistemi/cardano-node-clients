@@ -19,6 +19,7 @@ module Conway.Inspector
     ) where
 
 import qualified Cardano.Crypto.Hash            as Crypto
+import qualified Cardano.Ledger.Address         as Addr
 import qualified Cardano.Ledger.Api             as L
 import qualified Cardano.Ledger.BaseTypes       as BaseTypes
 import qualified Cardano.Ledger.Binary          as Binary
@@ -71,17 +72,42 @@ renderTx tx =
         refIns  = toList (body ^. L.referenceInputsTxBodyL)
         outputs = toList (body ^. L.outputsTxBodyL)
         fee     = body ^. L.feeTxBodyL
+        vldt    = body ^. L.vldtTxBodyL
     in
         Aeson.Object $ KeyMap.fromList
             [ "era"                   .= ("Conway" :: T.Text)
             , "decoder"               .= ("cardano-ledger-conway + cardano-ledger-binary (wasm32-wasi, GHC 9.12)" :: T.Text)
             , "fee_lovelace"          .= T.pack (show (Coin.unCoin fee))
+            , "validity_interval"     .= validityJson vldt
             , "input_count"           .= length inputs
             , "reference_input_count" .= length refIns
             , "output_count"          .= length outputs
             , "inputs"                .= map txInJson inputs
             , "reference_inputs"      .= map txInJson refIns
+            , "outputs"               .= map txOutJson outputs
             ]
+
+validityJson :: L.ValidityInterval -> Aeson.Value
+validityJson (L.ValidityInterval before hereafter) =
+    Aeson.object
+        [ "invalid_before"    .= renderSlot before
+        , "invalid_hereafter" .= renderSlot hereafter
+        ]
+  where
+    renderSlot :: BaseTypes.StrictMaybe BaseTypes.SlotNo -> Aeson.Value
+    renderSlot BaseTypes.SNothing  = Aeson.Null
+    renderSlot (BaseTypes.SJust s) = Aeson.toJSON (T.pack (show (BaseTypes.unSlotNo s)))
+
+-- | Render a Conway TxOut with address (hex) + coin.
+--   Multi-asset breakdown needs `cardano-ledger-mary` in build-depends; adding
+--   a new build-dep resets the prebuiltDeps cache and triggers a 20-min rebuild
+--   (tracked in the DevX notes). Deferred to a dedicated cabal-bump cycle.
+txOutJson :: L.TxOut Conway.ConwayEra -> Aeson.Value
+txOutJson txOut =
+    Aeson.object
+        [ "address_hex"   .= T.decodeUtf8 (B16.encode (Addr.serialiseAddr (txOut ^. L.addrTxOutL)))
+        , "coin_lovelace" .= T.pack (show (Coin.unCoin (txOut ^. L.coinTxOutL)))
+        ]
 
 txInJson :: TxIn.TxIn -> Aeson.Value
 txInJson (TxIn.TxIn (TxIn.TxId safeHash) (BaseTypes.TxIx ix)) =
