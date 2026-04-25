@@ -3,7 +3,7 @@
 export const runInspectorImpl = (stdinText) => () =>
   globalThis.runInspector(stdinText);
 
-export const runInspectorRpcImpl = (txCbor) => (method) => (pathText) => () => {
+export const runLedgerOperationImpl = (txCbor) => (op) => (pathText) => () => {
   let path = [];
   try {
     const parsed = JSON.parse(pathText);
@@ -15,8 +15,8 @@ export const runInspectorRpcImpl = (txCbor) => (method) => (pathText) => () => {
   return globalThis.runInspector(
     JSON.stringify({
       tx_cbor: txCbor,
-      method,
-      path,
+      op,
+      args: { path },
     })
   );
 };

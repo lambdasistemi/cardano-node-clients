@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | WASI reactor entry: read either raw Conway tx hex or a JSON RPC envelope
-  on stdin, write JSON on stdout. Error category on stderr, non-zero exit,
-  no partial JSON on stdout.
+{- | WASI reactor entry: read either raw Conway tx hex or a JSON ledger-operation
+  envelope on stdin, write JSON on stdout. Error category on stderr, non-zero
+  exit, no partial JSON on stdout.
 -}
 module Main (main) where
 
@@ -17,12 +17,13 @@ import System.IO (hPutStrLn, stderr, stdout)
 main :: IO ()
 main = do
     input <- BS.getContents
-    case Inspector.rpc input of
+    case Inspector.runLedgerOperationInput input of
         Left (Inspector.MalformedHex err) -> die "malformed_hex" err
         Left (Inspector.MalformedCbor err) -> die "malformed_cbor" err
-        Left (Inspector.MalformedRpc err) -> die "malformed_rpc" err
-        Left (Inspector.UnknownRpcMethod method) ->
-            die "unknown_rpc_method" (T.unpack method)
+        Left (Inspector.MalformedLedgerOperation err) ->
+            die "malformed_ledger_operation" err
+        Left (Inspector.UnknownLedgerOperation operation) ->
+            die "unknown_ledger_operation" (T.unpack operation)
         Right value -> do
             BSL.hPut stdout (Aeson.encode value)
             BSL.hPut stdout "\n"

@@ -6,13 +6,14 @@
 
   Decoder-only: no signature checking, no script evaluation, no fee
   validation. The hard work (CBOR → Conway `Tx`) is delegated to the
-  upstream Haskell ledger packages. Browser-facing calls use a small RPC
-  envelope so each UI interaction can go back through the ledger value
-  instead of navigating a stale client-side JSON projection.
+  upstream Haskell ledger packages. Browser-facing calls use a small
+  ledger-operation envelope so each UI interaction can go back through
+  the ledger value instead of navigating a stale client-side JSON
+  projection.
 -}
 module Conway.Inspector (
     inspect,
-    rpc,
+    runLedgerOperationInput,
     InspectError (..),
 ) where
 
@@ -49,22 +50,51 @@ import Text.Read (readMaybe)
 data InspectError
     = MalformedHex String
     | MalformedCbor String
-    | MalformedRpc String
-    | UnknownRpcMethod T.Text
+    | MalformedLedgerOperation String
+    | UnknownLedgerOperation T.Text
     deriving (Show)
 
-data RpcRequest = RpcRequest
-    { rrTxCbor :: T.Text
-    , rrMethod :: T.Text
-    , rrPath :: [T.Text]
+data LedgerOperationRequest = LedgerOperationRequest
+    { lorTxCbor :: T.Text
+    , lorOperation :: T.Text
+    , lorPath :: [T.Text]
     }
 
-instance Aeson.FromJSON RpcRequest where
-    parseJSON = Aeson.withObject "RpcRequest" $ \o ->
-        RpcRequest
-            <$> o Aeson..: "tx_cbor"
-            <*> o Aeson..: "method"
-            <*> o Aeson..:? "path" Aeson..!= []
+instance Aeson.FromJSON LedgerOperationRequest where
+    parseJSON = Aeson.withObject "LedgerOperationRequest" $ \o -> do
+        txCbor <- o Aeson..: "tx_cbor"
+        operation <- parseOperation o
+        legacyPath <- o Aeson..:? "path" Aeson..!= []
+        args <- o Aeson..:? "args" Aeson..!= Aeson.object []
+        path <- parsePathArg args legacyPath
+        pure
+            LedgerOperationRequest
+                { lorTxCbor = txCbor
+                , lorOperation = normalizeOperation operation
+                , lorPath = path
+                }
+      where
+        parseOperation o = do
+            maybeOp <- o Aeson..:? "op"
+            case maybeOp of
+                Just op -> pure op
+                Nothing -> do
+                    maybeMethod <- o Aeson..:? "method"
+                    case maybeMethod of
+                        Just method -> pure method
+                        Nothing -> fail "missing required field: op"
+
+        parsePathArg args legacyPath =
+            case args of
+                Aeson.Object obj ->
+                    case KeyMap.lookup "path" obj of
+                        Just pathValue -> Aeson.parseJSON pathValue
+                        Nothing -> pure legacyPath
+                _ -> pure legacyPath
+
+        normalizeOperation "inspect" = "tx.inspect"
+        normalizeOperation "browse" = "tx.browse"
+        normalizeOperation op = op
 
 -- | Hex → bytes → Conway tx → JSON.
 inspect :: BS.ByteString -> Either InspectError Aeson.Value
@@ -72,45 +102,51 @@ inspect hexBytes = do
     tx <- decodeTx hexBytes
     pure (renderTx tx)
 
-{- | Browser/runtime RPC. If stdin is not a JSON RPC request, fall back to the
-  legacy raw-CBOR inspection path used by CLI recipes.
+{- | Browser/runtime ledger operation. If stdin is not a JSON operation request,
+  fall back to the legacy raw-CBOR inspection path used by CLI recipes.
 -}
-rpc :: BS.ByteString -> Either InspectError Aeson.Value
-rpc input =
+runLedgerOperationInput :: BS.ByteString -> Either InspectError Aeson.Value
+runLedgerOperationInput input =
     case Aeson.eitherDecodeStrict' input of
-        Right request -> runRpc request
+        Right request -> runLedgerOperation request
         Left err
-            | looksLikeRpc input -> Left (MalformedRpc err)
+            | looksLikeJsonRequest input -> Left (MalformedLedgerOperation err)
             | otherwise -> inspect input
 
-looksLikeRpc :: BS.ByteString -> Bool
-looksLikeRpc input =
+looksLikeJsonRequest :: BS.ByteString -> Bool
+looksLikeJsonRequest input =
     case BS.dropWhile isJsonWhitespace input of
         bs | BS.null bs -> False
         bs -> BS.head bs == 0x7b
   where
     isJsonWhitespace c = c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d
 
-runRpc :: RpcRequest -> Either InspectError Aeson.Value
-runRpc request = do
-    tx <- decodeTx (T.encodeUtf8 (rrTxCbor request))
-    case rrMethod request of
-        "inspect" ->
+runLedgerOperation :: LedgerOperationRequest -> Either InspectError Aeson.Value
+runLedgerOperation request = do
+    tx <- decodeTx (T.encodeUtf8 (lorTxCbor request))
+    case lorOperation request of
+        "tx.inspect" ->
             pure $
-                Aeson.object
-                    [ "rpc" .= ("conway-tx-inspector/v1" :: T.Text)
-                    , "method" .= rrMethod request
-                    , "inspection" .= renderTx tx
-                    , "browser" .= browserJson tx (rrPath request)
+                ledgerOperationResponse
+                    (lorOperation request)
+                    [ "inspection" .= renderTx tx
+                    , "browser" .= browserJson tx (lorPath request)
                     ]
-        "browse" ->
+        "tx.browse" ->
             pure $
-                Aeson.object
-                    [ "rpc" .= ("conway-tx-inspector/v1" :: T.Text)
-                    , "method" .= rrMethod request
-                    , "browser" .= browserJson tx (rrPath request)
+                ledgerOperationResponse
+                    (lorOperation request)
+                    [ "browser" .= browserJson tx (lorPath request)
                     ]
-        other -> Left (UnknownRpcMethod other)
+        other -> Left (UnknownLedgerOperation other)
+
+ledgerOperationResponse :: T.Text -> [(AesonKey.Key, Aeson.Value)] -> Aeson.Value
+ledgerOperationResponse operation resultFields =
+    Aeson.object
+        [ "ledger_functional_layer" .= ("cardano-ledger-functional/v1" :: T.Text)
+        , "op" .= operation
+        , "result" .= Aeson.object resultFields
+        ]
 
 decodeTx ::
     BS.ByteString ->
@@ -256,9 +292,9 @@ breadcrumbsFor path =
         , "path" .= encodePath []
         ]
         : [ Aeson.object
-                [ "label" .= label
-                , "path" .= encodePath (take n path)
-                ]
+            [ "label" .= label
+            , "path" .= encodePath (take n path)
+            ]
           | (n, label) <- zip [1 :: Int ..] path
           ]
 

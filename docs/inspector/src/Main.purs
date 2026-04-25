@@ -13,8 +13,8 @@ import Effect.Class (liftEffect)
 import Effect.Exception (message)
 import FFI.Blockfrost (Network(..))
 import FFI.Clipboard (copy) as Clipboard
-import FFI.Inspector (InspectorResult, runInspectorRpc)
-import FFI.Json (Browser, inspect, pretty, rpcBrowser, rpcInspection) as Json
+import FFI.Inspector (InspectorResult, runLedgerOperation)
+import FFI.Json (Browser, inspect, operationBrowser, operationInspection, pretty) as Json
 import FFI.Storage as Storage
 import Provider (Provider(..))
 import Provider as Provider
@@ -676,18 +676,18 @@ inspectorComponent initial =
       case hexE of
         Left err -> H.modify_ _ { running = false, fetchError = Just err, browserPath = "[]" }
         Right h -> do
-          rpcResult <- H.liftAff (runInspectorRpc h "inspect" "[]")
+          operationResult <- H.liftAff (runLedgerOperation h "tx.inspect" "[]")
           let
-            inspectionResult = rpcResult { stdout = Json.rpcInspection rpcResult.stdout }
-            browser = Json.rpcBrowser rpcResult.stdout
+            inspectionResult = operationResult { stdout = Json.operationInspection operationResult.stdout }
+            browser = Json.operationBrowser operationResult.stdout
           H.modify_
             _
               { running = false
               , result = Just inspectionResult
               , txCbor = Just h
-              , browser = if rpcResult.exitOk && browser.valid then Just browser else Nothing
+              , browser = if operationResult.exitOk && browser.valid then Just browser else Nothing
               , browserNodes =
-                  if rpcResult.exitOk && browser.valid then rootBrowserNodes browser
+                  if operationResult.exitOk && browser.valid then rootBrowserNodes browser
                   else []
               , expandedPaths = []
               , browserPath = browser.currentPath
@@ -712,22 +712,22 @@ inspectorComponent initial =
             H.modify_ _ { browserPath = path, copiedPath = Nothing }
           Just txCbor -> do
             H.modify_ _ { browserPath = path, copiedPath = Nothing }
-            rpcResult <- H.liftAff (runInspectorRpc txCbor "browse" path)
-            let browser = Json.rpcBrowser rpcResult.stdout
+            operationResult <- H.liftAff (runLedgerOperation txCbor "tx.browse" path)
+            let browser = Json.operationBrowser operationResult.stdout
             H.modify_
               _
                 { browserNodes =
-                    if rpcResult.exitOk && browser.valid then
+                    if operationResult.exitOk && browser.valid then
                       upsertBrowserNode path browser st.browserNodes
                     else
                       st.browserNodes
                 , expandedPaths =
-                    if rpcResult.exitOk && browser.valid then
+                    if operationResult.exitOk && browser.valid then
                       expandPath path st.expandedPaths
                     else
                       st.expandedPaths
                 , browserPath = browser.currentPath
                 , fetchError =
-                    if rpcResult.exitOk && browser.valid then Nothing
-                    else Just (if rpcResult.stderr == "" then "Haskell RPC browse failed." else rpcResult.stderr)
+                    if operationResult.exitOk && browser.valid then Nothing
+                    else Just (if operationResult.stderr == "" then "Haskell ledger operation browse failed." else operationResult.stderr)
                 }

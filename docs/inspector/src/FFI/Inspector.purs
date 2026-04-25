@@ -1,7 +1,7 @@
 module FFI.Inspector
   ( InspectorResult
   , runInspector
-  , runInspectorRpc
+  , runLedgerOperation
   ) where
 
 import Prelude
@@ -17,10 +17,10 @@ type InspectorResult =
   }
 
 foreign import runInspectorImpl :: String -> Effect (Promise InspectorResult)
-foreign import runInspectorRpcImpl :: String -> String -> String -> Effect (Promise InspectorResult)
+foreign import runLedgerOperationImpl :: String -> String -> String -> Effect (Promise InspectorResult)
 
 runInspector :: String -> Aff InspectorResult
 runInspector = toAffE <<< runInspectorImpl
 
-runInspectorRpc :: String -> String -> String -> Aff InspectorResult
-runInspectorRpc txCbor method path = toAffE (runInspectorRpcImpl txCbor method path)
+runLedgerOperation :: String -> String -> String -> Aff InspectorResult
+runLedgerOperation txCbor op path = toAffE (runLedgerOperationImpl txCbor op path)

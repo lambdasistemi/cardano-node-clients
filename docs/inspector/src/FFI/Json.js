@@ -193,7 +193,7 @@ const invalidBrowser = (title, subtitle, currentJson = "") => ({
 
 const normalizeBrowser = (browser) => {
   if (!browser || typeof browser !== "object") {
-    return invalidBrowser("Transaction browser", "RPC response missing browser.");
+    return invalidBrowser("Transaction browser", "Ledger operation response missing browser.");
   }
 
   return {
@@ -221,11 +221,14 @@ const normalizeBrowser = (browser) => {
   };
 };
 
-export const rpcInspectionImpl = (raw) => {
+const operationResult = (parsed) => parsed?.result ?? parsed;
+
+export const operationInspectionImpl = (raw) => {
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && Object.prototype.hasOwnProperty.call(parsed, "inspection")) {
-      return JSON.stringify(parsed.inspection);
+    const result = operationResult(parsed);
+    if (result && Object.prototype.hasOwnProperty.call(result, "inspection")) {
+      return JSON.stringify(result.inspection);
     }
   } catch (_err) {
     return raw;
@@ -233,11 +236,11 @@ export const rpcInspectionImpl = (raw) => {
   return raw;
 };
 
-export const rpcBrowserImpl = (raw) => {
+export const operationBrowserImpl = (raw) => {
   try {
     const parsed = JSON.parse(raw);
-    return normalizeBrowser(parsed?.browser);
+    return normalizeBrowser(operationResult(parsed)?.browser);
   } catch (_err) {
-    return invalidBrowser("Transaction browser", "RPC response was not JSON.", raw);
+    return invalidBrowser("Transaction browser", "Ledger operation response was not JSON.", raw);
   }
 };
