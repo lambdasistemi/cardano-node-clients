@@ -2,7 +2,7 @@ module Cardano.Node.Client.BalanceSpec (spec) where
 
 import Data.List (nub, sort)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe)
 import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set qualified as Set
 import Lens.Micro ((&), (.~), (^.))
@@ -11,7 +11,11 @@ import Test.QuickCheck
 
 import Cardano.Crypto.Hash (hashFromStringAsHex)
 import Cardano.Ledger.Address (Addr (..))
-import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
+import Cardano.Ledger.Alonzo.Scripts (
+    AsIx (..),
+    fromPlutusScript,
+    mkPlutusScript,
+ )
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.PParams (
     ppTxFeeFixedL,
@@ -26,16 +30,19 @@ import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     mkBasicTxBody,
     outputsTxBodyL,
+    referenceInputsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     coinTxOutL,
     mkBasicTxOut,
+    referenceScriptTxOutL,
  )
 import Cardano.Ledger.BaseTypes (
     Inject (..),
     Network (..),
     StrictMaybe (..),
     TxIx (..),
+    boundRational,
  )
 import Cardano.Ledger.Coin (
     Coin (..),
@@ -44,10 +51,14 @@ import Cardano.Ledger.Coin (
  )
 import Cardano.Ledger.Compactible (fromCompact)
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Conway.PParams (
+    ppMinFeeRefScriptCostPerByteL,
+ )
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
 import Cardano.Ledger.Core (
+    Script,
     emptyPParams,
     getMinFeeTx,
  )
@@ -63,8 +74,13 @@ import Cardano.Ledger.Keys (
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
+    Plutus (..),
+    PlutusBinary (..),
  )
 import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
+import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Char8 qualified as BS8
+import Data.ByteString.Short qualified as SBS
 import PlutusCore.Data qualified as PLC
 
 import Cardano.Node.Client.Balance (
@@ -73,6 +89,7 @@ import Cardano.Node.Client.Balance (
     balanceTx,
     computeScriptIntegrity,
     placeholderExUnits,
+    refScriptsSize,
     spendingIndex,
  )
 
@@ -82,6 +99,8 @@ spec = describe "Balance helpers" $ do
     computeScriptIntegritySpec
     placeholderExUnitsSpec
     balanceTxSpec
+    refScriptsSizeSpec
+    balanceTxRefScriptFeeSpec
 
 -- -----------------------------------------------------------
 -- Test TxIn construction
@@ -284,6 +303,7 @@ balanceTxSpec =
             case balanceTx
                 pp
                 inputUtxos
+                []
                 (mkAddr 3)
                 template of
                 Left err ->
@@ -327,6 +347,7 @@ balanceTxSpec =
             case balanceTx
                 pp
                 inputUtxos
+                []
                 (mkAddr 2)
                 template of
                 Left (InsufficientFee required available) -> do
@@ -338,3 +359,131 @@ balanceTxSpec =
                 Right _ ->
                     expectationFailure
                         "expected InsufficientFee"
+
+-- -----------------------------------------------------------
+-- refScriptsSize + balanceTx ref-script fee accounting (#74)
+-- -----------------------------------------------------------
+
+{- | Compiled always-true Plutus V3 validator
+(@validators/always_true.ak@). 215 bytes of CBOR
+when wrapped as a Plutus V3 script.
+-}
+alwaysTrueHex :: BS8.ByteString
+alwaysTrueHex =
+    "58d501010029800aba2aba1aab9eaab9dab9a48888966002646465\
+    \300130053754003300700398038012444b30013370e9000001c4c\
+    \9289bae300a3009375400915980099b874800800e2646644944c0\
+    \2c004c02cc030004c024dd5002456600266e1d200400389925130\
+    \0a3009375400915980099b874801800e2646644944dd698058009\
+    \805980600098049baa0048acc004cdc3a40100071324a26014601\
+    \26ea80122646644944dd698058009805980600098049baa004401\
+    \c8039007200e401c3006300700130060013003375400d149a26ca\
+    \c8009"
+
+alwaysTrueScript :: Script ConwayEra
+alwaysTrueScript =
+    let bytes =
+            either error id $
+                Base16.decode (BS8.filter (/= '\n') alwaysTrueHex)
+        plutus = Plutus @PlutusV3 (PlutusBinary (SBS.toShort bytes))
+     in maybe
+            (error "alwaysTrueScript: mkPlutusScript")
+            fromPlutusScript
+            (mkPlutusScript plutus)
+
+scriptByteLen :: Int
+scriptByteLen = 215 -- 430 hex chars / 2
+
+refScriptsSizeSpec :: Spec
+refScriptsSizeSpec =
+    describe "refScriptsSize" $ do
+        it "returns 0 when no UTxOs are passed" $
+            refScriptsSize Set.empty [] `shouldBe` 0
+        it "returns 0 when the body has no ref inputs" $ do
+            let utxoIn = mkTxIn 1
+                refUtxo =
+                    mkBasicTxOut (mkAddr 1) (inject (Coin 5_000_000))
+                        & referenceScriptTxOutL .~ SJust alwaysTrueScript
+            refScriptsSize Set.empty [(utxoIn, refUtxo)]
+                `shouldBe` 0
+        it "sums Plutus script bytes for matching ref inputs" $ do
+            let utxoIn = mkTxIn 1
+                refUtxo =
+                    mkBasicTxOut (mkAddr 1) (inject (Coin 5_000_000))
+                        & referenceScriptTxOutL .~ SJust alwaysTrueScript
+            refScriptsSize
+                (Set.singleton utxoIn)
+                [(utxoIn, refUtxo)]
+                `shouldBe` scriptByteLen
+        it "ignores UTxOs whose TxIn isn't in the body's ref-input set" $ do
+            let utxoIn = mkTxIn 1
+                otherIn = mkTxIn 2
+                refUtxo =
+                    mkBasicTxOut (mkAddr 1) (inject (Coin 5_000_000))
+                        & referenceScriptTxOutL .~ SJust alwaysTrueScript
+            refScriptsSize
+                (Set.singleton otherIn)
+                [(utxoIn, refUtxo)]
+                `shouldBe` 0
+
+balanceTxRefScriptFeeSpec :: Spec
+balanceTxRefScriptFeeSpec =
+    describe "balanceTx ref-script fee accounting"
+        $ it
+            "fee with refUtxos exceeds fee without by ≈ scriptBytes × minFeeRefScriptCostPerByte"
+        $ do
+            let costPerByte = 44 :: Integer
+                interval =
+                    fromMaybe
+                        (error "boundRational")
+                        (boundRational (toRational costPerByte))
+                pp =
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
+                        & ppMinFeeRefScriptCostPerByteL .~ interval
+                refIn = mkTxIn 99
+                refUtxo =
+                    mkBasicTxOut (mkAddr 9) (inject (Coin 5_000_000))
+                        & referenceScriptTxOutL
+                            .~ SJust alwaysTrueScript
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 10_000_000))
+                        )
+                    ]
+                template =
+                    mkBasicTx $
+                        mkBasicTxBody
+                            & outputsTxBodyL
+                                .~ StrictSeq.singleton
+                                    ( mkBasicTxOut
+                                        (mkAddr 2)
+                                        (inject (Coin 3_000_000))
+                                    )
+                            & referenceInputsTxBodyL
+                                .~ Set.singleton refIn
+            feeWith <- runBalance pp inputUtxos [(refIn, refUtxo)] template
+            feeWithout <- runBalance pp inputUtxos [] template
+            let Coin gap =
+                    Coin
+                        ( let Coin a = feeWith
+                              Coin b = feeWithout
+                           in a - b
+                        )
+                expected =
+                    fromIntegral scriptByteLen * costPerByte
+            gap `shouldBe` expected
+  where
+    runBalance pp ins refs tx =
+        case balanceTx pp ins refs (mkAddr 3) tx of
+            Left err -> do
+                expectationFailure (show err)
+                pure (Coin 0)
+            Right BalanceResult{balancedTx = bal} ->
+                pure (bal ^. bodyTxL . feeTxBodyL)

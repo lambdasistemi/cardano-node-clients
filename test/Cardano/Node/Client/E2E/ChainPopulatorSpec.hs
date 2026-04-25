@@ -84,6 +84,7 @@ buildTxChain pp utxo n =
     case balanceTx
         pp
         [utxo]
+        []
         genesisAddr
         (mkBasicTx mkBasicTxBody) of
         Left err ->

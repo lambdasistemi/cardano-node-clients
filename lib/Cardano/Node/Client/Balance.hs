@@ -22,6 +22,7 @@ module Cardano.Node.Client.Balance (
     balanceTx,
     BalanceResult (..),
     balanceFeeLoop,
+    refScriptsSize,
 
     -- * Script helpers
     computeScriptIntegrity,
@@ -34,6 +35,7 @@ module Cardano.Node.Client.Balance (
     FeeLoopError (..),
 ) where
 
+import Data.ByteString qualified as BS
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
 import Data.Word (Word32)
@@ -61,11 +63,13 @@ import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     inputsTxBodyL,
     outputsTxBodyL,
+    referenceInputsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
     coinTxOutL,
     mkBasicTxOut,
+    referenceScriptTxOutL,
  )
 import Cardano.Ledger.BaseTypes (
     Inject (..),
@@ -74,6 +78,7 @@ import Cardano.Ledger.BaseTypes (
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
+import Cardano.Ledger.Hashes (originalBytes)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
@@ -113,13 +118,25 @@ balanceTx ::
     --     script inputs not yet in the body). Their
     --     'TxIn's are unioned with the body's inputs.
     [(TxIn, TxOut ConwayEra)] ->
+    -- | Resolved reference-input UTxOs whose
+    --     'referenceScriptTxOutL' carries a Plutus
+    --     script. Their byte sizes are passed to
+    --     'estimateMinFeeTx' so the Conway
+    --     @minFeeRefScriptCostPerByte@ tier is
+    --     accounted for. Pass @[]@ if the tx has no
+    --     reference scripts.
+    [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->
     -- | Unbalanced transaction
     ConwayTx ->
     Either BalanceError BalanceResult
-balanceTx pp inputUtxos changeAddr tx =
+balanceTx pp inputUtxos refUtxos changeAddr tx =
     let body = tx ^. bodyTxL
+        refScriptBytes =
+            refScriptsSize
+                (body ^. referenceInputsTxBodyL)
+                refUtxos
         inputCoin =
             foldl'
                 ( \(Coin acc) (_, o) ->
@@ -181,7 +198,7 @@ balanceTx pp inputUtxos changeAddr tx =
                             candidate
                             1 -- key witnesses
                             0 -- Byron witnesses
-                            0 -- ref scripts bytes
+                            refScriptBytes
                  in if newFee <= currentFee
                         then Right currentFee
                         else go (n + 1) newFee
@@ -272,12 +289,20 @@ balanceFeeLoop ::
     -- | Number of key witnesses to assume for
     --     fee estimation.
     Int ->
+    -- | Resolved reference-input UTxOs (see
+    --     'balanceTx'). Pass @[]@ if the tx has no
+    --     reference scripts.
+    [(TxIn, TxOut ConwayEra)] ->
     -- | Template transaction.
     ConwayTx ->
     Either FeeLoopError ConwayTx
-balanceFeeLoop pp mkOutputs numWitnesses tx =
+balanceFeeLoop pp mkOutputs numWitnesses refUtxos tx =
     go 0 (Coin 0)
   where
+    refScriptBytes =
+        refScriptsSize
+            (tx ^. bodyTxL . referenceInputsTxBodyL)
+            refUtxos
     go !n currentFee
         | n > (10 :: Int) = Left FeeDidNotConverge
         | otherwise =
@@ -296,10 +321,39 @@ balanceFeeLoop pp mkOutputs numWitnesses tx =
                                 candidate
                                 numWitnesses
                                 0 -- boot witnesses
-                                0 -- ref scripts bytes
+                                refScriptBytes
                      in if newFee <= currentFee
                             then Right candidate
                             else go (n + 1) newFee
+
+{- | Sum the byte lengths of any reference scripts
+attached to UTxOs whose 'TxIn' is in the body's
+@referenceInputsTxBodyL@ set. Used to feed
+@estimateMinFeeTx@ so the Conway
+@minFeeRefScriptCostPerByte@ tier is correctly
+charged.
+
+Native (timelock) scripts are included in the sum;
+the Conway ledger only charges Plutus scripts, so
+including timelock bytes can over-estimate slightly,
+which is safe — over-paying fee is accepted by the
+ledger; under-paying is rejected with
+@FeeTooSmallUTxO@.
+-}
+refScriptsSize ::
+    Set.Set TxIn ->
+    [(TxIn, TxOut ConwayEra)] ->
+    Int
+refScriptsSize bodyRefIns =
+    foldr
+        ( \(i, o) acc ->
+            if Set.member i bodyRefIns
+                then case o ^. referenceScriptTxOutL of
+                    SJust s -> acc + BS.length (originalBytes s)
+                    SNothing -> acc
+                else acc
+        )
+        0
 
 -- -----------------------------------------------------------
 -- Script helpers

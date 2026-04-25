@@ -178,7 +178,7 @@ buildAndSubmit (provider, submitter, pp, utxos) = do
                         CustomFail MissingRequiredSigner
             pure ()
 
-    build pp interpret eval [seed] genesisAddr prog
+    build pp interpret eval [seed] [] genesisAddr prog
         >>= \case
             Left err ->
                 expectationFailure (show err)

@@ -87,7 +87,7 @@ singleOutput (pp, addr, utxos) = do
                     & collateralInputsTxBodyL
                         .~ Set.singleton seedIn
                 )
-    case balanceFeeLoop pp mkOutputs 1 template of
+    case balanceFeeLoop pp mkOutputs 1 [] template of
         Left err -> fail $ "balanceFeeLoop: " <> show err
         Right tx -> do
             let Coin fee = tx ^. bodyTxL . feeTxBodyL
@@ -141,7 +141,7 @@ multiOutput (pp, addr, utxos) = do
                     & collateralInputsTxBodyL
                         .~ Set.singleton seedIn
                 )
-    case balanceFeeLoop pp mkOutputs 1 template of
+    case balanceFeeLoop pp mkOutputs 1 [] template of
         Left err -> fail $ "balanceFeeLoop: " <> show err
         Right tx -> do
             let Coin fee = tx ^. bodyTxL . feeTxBodyL
@@ -170,7 +170,7 @@ negativeRefund (pp, _addr, utxos) = do
                     & inputsTxBodyL
                         .~ Set.singleton seedIn
                 )
-    balanceFeeLoop pp mkOutputs 1 template
+    balanceFeeLoop pp mkOutputs 1 [] template
         `shouldBe` Left (OutputError "not enough funds")
 
 -- | The converged fee is ≥ the estimated minimum.
@@ -199,7 +199,7 @@ feeIsSufficient (pp, addr, utxos) = do
                     & collateralInputsTxBodyL
                         .~ Set.singleton seedIn
                 )
-    case balanceFeeLoop pp mkOutputs 1 template of
+    case balanceFeeLoop pp mkOutputs 1 [] template of
         Left err -> fail $ "balanceFeeLoop: " <> show err
         Right tx -> do
             let Coin fee = tx ^. bodyTxL . feeTxBodyL

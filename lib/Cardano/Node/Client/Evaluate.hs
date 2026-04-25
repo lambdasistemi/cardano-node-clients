@@ -85,12 +85,17 @@ evaluateAndBalance ::
     --     Their 'TxIn's are unioned with the body's
     --     inputs.
     [(TxIn, TxOut ConwayEra)] ->
+    -- | Resolved reference-input UTxOs whose
+    --     'referenceScriptTxOutL' carries a Plutus
+    --     script. Pass @[]@ if the tx has no
+    --     ref-input scripts.
+    [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->
     -- | Unbalanced tx with 'placeholderExUnits'
     ConwayTx ->
     IO ConwayTx
-evaluateAndBalance lang prov pp inputUtxos changeAddr tx =
+evaluateAndBalance lang prov pp inputUtxos refUtxos changeAddr tx =
     do
         -- Pre-add all inputs so the evaluator sees
         -- the complete input set and spending indices
@@ -152,6 +157,7 @@ evaluateAndBalance lang prov pp inputUtxos changeAddr tx =
         case balanceTx
             pp
             inputUtxos
+            refUtxos
             changeAddr
             patched' of
             Left err ->

@@ -434,6 +434,7 @@ buildGoldenTx expected inputCoins =
         noCtxInterpretIO
         (\_ -> pure (expectedExUnits expected))
         inputUtxos
+        []
         changeAddr
         (txBuildFromTx expected :: TxBuild NoCtx () ())
         >>= \case
