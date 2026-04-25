@@ -561,6 +561,7 @@ validSpec =
                     noCtxInterpretIO
                     mockEval
                     [feeUtxo]
+                    []
                     (mkAddr 1)
                     prog
             case result of
@@ -600,6 +601,7 @@ validSpec =
                         noCtxInterpretIO
                         mockEval
                         [feeUtxo]
+                        []
                         (mkAddr 1)
                         prog
                 case result of
@@ -644,6 +646,7 @@ validSpec =
                         noCtxInterpretIO
                         mockEval
                         [feeUtxo]
+                        []
                         (mkAddr 1)
                         prog
                 case result of
@@ -689,6 +692,7 @@ validSpec =
                     noCtxInterpretIO
                     mockEval
                     [feeUtxo]
+                    []
                     (mkAddr 1)
                     prog
             case result of
@@ -756,6 +760,7 @@ buildSpec =
                         noCtxInterpretIO
                         mockEval
                         [feeUtxo]
+                        []
                         (mkAddr 1)
                         prog
                 case result of
@@ -794,6 +799,7 @@ buildSpec =
                     noCtxInterpretIO
                     mockEval
                     [feeUtxo]
+                    []
                     (mkAddr 1)
                     prog
             case result of
@@ -837,6 +843,7 @@ buildSpec =
                     interpret
                     mockEval
                     [feeUtxo]
+                    []
                     (mkAddr 1)
                     prog
             case result of
@@ -986,6 +993,7 @@ buildSpec =
                         [ feeUtxo
                         , scriptUtxo
                         ]
+                        []
                         (mkAddr 1)
                         prog
                 case result of
@@ -1050,6 +1058,7 @@ buildSpec =
                     interpret
                     mockEval
                     [feeUtxo, spendUtxo]
+                    []
                     (mkAddr 1)
                     prog
             history <- readRecordedFees feeHistoryRef
@@ -1100,6 +1109,7 @@ buildSpec =
                     interpret
                     mockEval
                     [feeUtxo, spendUtxo]
+                    []
                     (mkAddr 1)
                     prog
             case result of
@@ -1155,6 +1165,7 @@ buildSpec =
                     interpret
                     mockEval
                     [feeUtxo]
+                    []
                     (mkAddr 1)
                     prog
             case result of
@@ -1196,6 +1207,7 @@ buildSpec =
                     case balanceTx
                         pp
                         inputUtxos
+                        []
                         (mkAddr 1)
                         ( draft pp $ do
                             _ <- spend (mkTxIn 2)
@@ -1251,6 +1263,7 @@ buildSpec =
                     interpret
                     mockEval
                     inputUtxos
+                    []
                     (mkAddr 1)
                     prog
             history <- readRecordedFees feeHistoryRef

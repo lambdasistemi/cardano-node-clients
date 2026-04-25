@@ -163,7 +163,7 @@ simplePay = do
     payTo charlieAddr (inject (Coin 3_000_000))
 
 -- build handles input selection + fee + change
-result <- build pp evaluator utxos changeAddr simplePay
+result <- build pp evaluator utxos [] changeAddr simplePay
 ```
 
 ## Case 7: Script Evaluation (ExUnits)
@@ -291,7 +291,7 @@ myTx = do
     ...
 
 -- build handles everything
-result <- build pp evaluator utxos changeAddr myTx
+result <- build pp evaluator utxos [] changeAddr myTx
 ```
 
 ## Bonus: Transaction Chaining (Helios pattern)

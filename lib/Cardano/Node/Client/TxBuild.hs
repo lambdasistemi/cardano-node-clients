@@ -195,6 +195,7 @@ import Cardano.Node.Client.Balance (
     balanceTx,
     computeScriptIntegrity,
     evalBudgetExUnits,
+    refScriptsSize,
  )
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo)
@@ -881,11 +882,18 @@ build ::
     ) ->
     -- | All input UTxOs
     [(TxIn, TxOut ConwayEra)] ->
+    -- | Resolved reference-input UTxOs. Their
+    --     'referenceScriptTxOutL' bytes feed
+    --     'estimateMinFeeTx' so Conway's
+    --     @minFeeRefScriptCostPerByte@ is charged
+    --     correctly. Pass @[]@ if the tx has no
+    --     ref-input scripts.
+    [(TxIn, TxOut ConwayEra)] ->
     -- | Change address
     Addr ->
     TxBuild q e a ->
     IO (Either (BuildError e) ConwayTx)
-build pp interpret evaluateTx inputUtxos changeAddr prog =
+build pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
     step Set.empty (Coin 0) 0 (mkBasicTx mkBasicTxBody)
   where
     -- Pre-compute the extra TxIns from inputUtxos
@@ -899,6 +907,15 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
          in tx
                 & bodyTxL . inputsTxBodyL
                     .~ Set.union existing extraIns
+
+    -- \| Total bytes of any reference scripts
+    -- attached to UTxOs in @refUtxos@ that the
+    -- current tx body actually references. Conway
+    -- charges these via @minFeeRefScriptCostPerByte@.
+    refScriptBytesOf tx =
+        refScriptsSize
+            (tx ^. bodyTxL . referenceInputsTxBodyL)
+            refUtxos
 
     -- \| One iteration: interpret, assemble, eval,
     -- patch, balance. Track seen fees to detect
@@ -963,7 +980,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                             txForEval
                             1
                             0
-                            0
+                            (refScriptBytesOf txForEval)
                 if evalRetries >= (1 :: Int)
                     then
                         -- Already retried once with a
@@ -994,6 +1011,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                                 case balanceTx
                                     pp
                                     inputUtxos
+                                    refUtxos
                                     changeAddr
                                     patchedTx of
                                     Left err ->
@@ -1047,6 +1065,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                 case balanceTx
                     pp
                     inputUtxos
+                    refUtxos
                     changeAddr
                     patchedTx of
                     Left err ->
@@ -1179,6 +1198,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
                     case balanceTx
                         pp
                         inputUtxos
+                        refUtxos
                         changeAddr
                         tx' of
                         Left _ ->
@@ -1253,6 +1273,7 @@ build pp interpret evaluateTx inputUtxos changeAddr prog =
         case balanceTx
             pp
             inputUtxos
+            refUtxos
             changeAddr
             patched of
             Left err ->

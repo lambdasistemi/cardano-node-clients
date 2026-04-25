@@ -152,6 +152,7 @@ test-suite unit-tests
 
   build-depends:
     , base
+    , base16-bytestring
     , bytestring
     , cardano-crypto-class
     , cardano-ledger-allegra
