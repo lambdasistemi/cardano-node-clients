@@ -1,0 +1,38 @@
+cabal-version: 3.0
+name:          wasm-tx-inspector
+version:       0.1.0.0
+synopsis:      Conway tx inspector built on the Haskell ledger code, compiled to wasm32-wasi
+author:        lambdasistemi
+license:       Apache-2.0
+build-type:    Simple
+
+library
+  exposed-modules:  Conway.Inspector
+  hs-source-dirs:   src
+  build-depends:    base                  >=4.19 && <5
+                  , aeson
+                  , base16-bytestring
+                  , bytestring
+                  , cardano-crypto-class
+                  , cardano-ledger-api
+                  , cardano-ledger-binary
+                  , cardano-ledger-conway
+                  , cardano-ledger-core
+                  , cardano-ledger-mary
+                  , containers
+                  , microlens
+                  , plutus-ledger-api
+                  , text
+  default-language: Haskell2010
+  ghc-options:      -Wall
+
+executable wasm-tx-inspector
+  main-is:          Main.hs
+  hs-source-dirs:   app
+  build-depends:    base                  >=4.19 && <5
+                  , aeson
+                  , bytestring
+                  , text
+                  , wasm-tx-inspector
+  default-language: Haskell2010
+  ghc-options:      -Wall

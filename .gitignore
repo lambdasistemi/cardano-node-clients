@@ -2,4 +2,7 @@ dist-newstyle/
 .llm/
 cabal.project.local
 result
+result-*
 site/
+docs/site/
+docs/inspector/assets/inspector.wasm
