@@ -869,12 +869,13 @@ the Tx body stabilizes:
 5. Balance (fee + change)
 6. If any Peek returned Iterate or Tx changed → 1
 -}
+
 {- | Knobs that influence 'buildWith'. New options
 will be added here without breaking 'build', whose
 default behaviour is preserved by 'defaultBuildOptions'.
 -}
-data BuildOptions = BuildOptions
-    { boExUnitsMargin :: !(ExUnits -> ExUnits)
+newtype BuildOptions = BuildOptions
+    { boExUnitsMargin :: ExUnits -> ExUnits
     -- ^ Transform each redeemer's evaluated 'ExUnits'
     -- before the integrity hash is recomputed and the
     -- tx is balanced. Defaults to 'id'.
