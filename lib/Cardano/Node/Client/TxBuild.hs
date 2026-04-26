@@ -75,6 +75,9 @@ module Cardano.Node.Client.TxBuild (
     draft,
     draftWith,
     build,
+    buildWith,
+    BuildOptions (..),
+    defaultBuildOptions,
 
     -- * Errors
     BuildError (..),
@@ -866,6 +869,31 @@ the Tx body stabilizes:
 5. Balance (fee + change)
 6. If any Peek returned Iterate or Tx changed → 1
 -}
+{- | Knobs that influence 'buildWith'. New options
+will be added here without breaking 'build', whose
+default behaviour is preserved by 'defaultBuildOptions'.
+-}
+data BuildOptions = BuildOptions
+    { boExUnitsMargin :: !(ExUnits -> ExUnits)
+    -- ^ Transform each redeemer's evaluated 'ExUnits'
+    -- before the integrity hash is recomputed and the
+    -- tx is balanced. Defaults to 'id'.
+    --
+    -- Use a small overshoot (e.g. @1.20×@, mirroring
+    -- @cardano-cli@) when the client-side ledger
+    -- evaluator (the one running here, via
+    -- @evalTxExUnits@) is older than the cluster
+    -- node's: the same script can cost a few hundred
+    -- mem / a few hundred-thousand steps more on the
+    -- newer side, and that delta lands as
+    -- 'PlutusFailure' at submit time even though the
+    -- shape of the tx is correct.
+    }
+
+-- | All defaults preserve pre-'buildWith' behaviour.
+defaultBuildOptions :: BuildOptions
+defaultBuildOptions = BuildOptions{boExUnitsMargin = id}
+
 build ::
     PParams ConwayEra ->
     InterpretIO q ->
@@ -893,7 +921,29 @@ build ::
     Addr ->
     TxBuild q e a ->
     IO (Either (BuildError e) ConwayTx)
-build pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
+build = buildWith defaultBuildOptions
+
+-- | 'build' with explicit 'BuildOptions'.
+buildWith ::
+    BuildOptions ->
+    PParams ConwayEra ->
+    InterpretIO q ->
+    ( ConwayTx ->
+      IO
+        ( Map
+            ( ConwayPlutusPurpose
+                AsIx
+                ConwayEra
+            )
+            (Either String ExUnits)
+        )
+    ) ->
+    [(TxIn, TxOut ConwayEra)] ->
+    [(TxIn, TxOut ConwayEra)] ->
+    Addr ->
+    TxBuild q e a ->
+    IO (Either (BuildError e) ConwayTx)
+buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
     step Set.empty (Coin 0) 0 (mkBasicTx mkBasicTxBody)
   where
     -- Pre-compute the extra TxIns from inputUtxos
@@ -1303,10 +1353,14 @@ build pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                                         ChecksFailed
                                             errs
 
-    -- \| Patch ExUnits from eval result.
+    -- \| Patch ExUnits from eval result, applying
+    -- the caller-supplied 'boExUnitsMargin'
+    -- transform. Default options leave the value
+    -- untouched (identity).
     patchExUnits tx evalResult =
         let Redeemers rdmrMap =
                 tx ^. witsTxL . rdmrsTxWitsL
+            margin = boExUnitsMargin opts
             patched =
                 Map.mapWithKey
                     ( \purpose (dat, eu) ->
@@ -1314,7 +1368,7 @@ build pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                             purpose
                             evalResult of
                             Just (Right eu') ->
-                                (dat, eu')
+                                (dat, margin eu')
                             _ -> (dat, eu)
                     )
                     rdmrMap
