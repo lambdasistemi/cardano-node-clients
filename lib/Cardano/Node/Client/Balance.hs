@@ -472,6 +472,14 @@ exceed the budget are terminated. This value is
 injected before 'evaluateTx' so scripts get
 enough room to run, then replaced by the real
 ExUnits from the evaluation result.
+
+Sized to mainnet's Conway-era @maxTxExUnits@
+(epoch 627+: 16_500_000 mem, 10_000_000_000
+steps), so heavy scripts that already run on
+mainnet — e.g. asteria's @add_new_ship@ — fit
+under the eval budget locally too. Submission
+fails the same way as it would on mainnet if a
+script's actual usage exceeds the cluster's pp.
 -}
 evalBudgetExUnits :: ExUnits
-evalBudgetExUnits = ExUnits 14_000_000 10_000_000_000
+evalBudgetExUnits = ExUnits 16_500_000 10_000_000_000
