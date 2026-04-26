@@ -183,19 +183,23 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.BalanceSpec
     Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
+    Cardano.Node.Client.E2E.MultiAssetChangeSpec
     Cardano.Node.Client.E2E.ProviderSpec
     Cardano.Node.Client.E2E.TxBuildSpec
 
   build-depends:
     , async
     , base
+    , base16-bytestring
     , bytestring
     , cardano-crypto-class
     , cardano-ledger-allegra
+    , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-mary
     , cardano-ledger-read
     , cardano-node-clients
     , cardano-node-clients:devnet
