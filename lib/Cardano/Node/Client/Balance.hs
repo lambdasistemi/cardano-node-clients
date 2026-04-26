@@ -12,10 +12,19 @@ estimated iteratively via 'estimateMinFeeTx' from
 (at most 10 rounds). The function internally injects
 dummy VKey witnesses for correct size estimation.
 
-This is a simplified balancer that only handles
-ADA-only fee inputs. Multi-asset coin selection is
-out of scope — callers construct the script inputs
-and this module adds the fee delta.
+The change output absorbs both the residual ADA
+(@input − fee − sum(existing output ADA)@) and any
+residual multi-assets (@sum(input MA) + mint −
+sum(existing output MA)@). This lets callers mint
+NFTs without emitting an explicit recipient output:
+the minted asset lands in the change output along
+with the ADA leftovers, matching the convention of
+mainnet off-chain code that returns the PILOT NFT in
+the same output as the player's ADA change.
+
+Multi-asset coin selection is still out of scope —
+callers construct the script inputs and this module
+only folds the leftover into a single change output.
 -}
 module Cardano.Node.Client.Balance (
     -- * Balancing
@@ -62,23 +71,29 @@ import Cardano.Ledger.Api.Tx (
 import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     inputsTxBodyL,
+    mintTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
-    coinTxOutL,
     mkBasicTxOut,
     referenceScriptTxOutL,
+    valueTxOutL,
  )
 import Cardano.Ledger.BaseTypes (
-    Inject (..),
     StrictMaybe (SJust, SNothing),
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Hashes (originalBytes)
+import Cardano.Ledger.Mary.Value (
+    MaryValue (..),
+    MultiAsset (..),
+    filterMultiAsset,
+    mapMaybeMultiAsset,
+ )
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
@@ -137,30 +152,56 @@ balanceTx pp inputUtxos refUtxos changeAddr tx =
             refScriptsSize
                 (body ^. referenceInputsTxBodyL)
                 refUtxos
-        inputCoin =
+        valueOf o = let MaryValue c m = o ^. valueTxOutL in (c, m)
+        sumValues ::
+            (Foldable t) =>
+            t (TxOut ConwayEra) ->
+            (Coin, MultiAsset)
+        sumValues =
             foldl'
-                ( \(Coin acc) (_, o) ->
-                    let Coin c = o ^. coinTxOutL
-                     in Coin (acc + c)
+                ( \(Coin a, ma) o ->
+                    let (Coin c, m) = valueOf o
+                     in (Coin (a + c), ma <> m)
                 )
-                (Coin 0)
-                inputUtxos
+                (Coin 0, mempty)
+        (inputCoin, inputMA) = sumValues (map snd inputUtxos)
         newInputs =
             foldl'
                 (\s (tin, _) -> Set.insert tin s)
                 (body ^. inputsTxBodyL)
                 inputUtxos
         origOutputs = body ^. outputsTxBodyL
-        -- Sum ADA already committed in existing
-        -- outputs (e.g. cage output with 2 ADA).
-        Coin origAda =
-            foldl'
-                ( \(Coin acc) o ->
-                    let Coin c = o ^. coinTxOutL
-                     in Coin (acc + c)
+        -- Sum ADA / multi-assets already committed
+        -- in existing outputs (e.g. asteria + ship
+        -- outputs in a spawn-ship tx).
+        (Coin origAda, origMA) = sumValues origOutputs
+        bodyMint :: MultiAsset
+        bodyMint = body ^. mintTxBodyL
+        -- Residual multi-assets that no existing
+        -- output absorbed: input + mint − output.
+        -- A positive residual indicates minted tokens
+        -- (e.g. a PILOT NFT) or unspent input assets
+        -- that must land in the change output to
+        -- satisfy the ledger's value-conservation
+        -- equation.
+        --
+        -- Negative entries — output references assets
+        -- the balancer wasn't told about — are
+        -- filtered out: the caller has already
+        -- balanced those via inputs not surfaced in
+        -- @inputUtxos@, and the ledger checks
+        -- conservation against the real UTxO state
+        -- at submission time.
+        changeMA :: MultiAsset
+        changeMA =
+            filterMultiAsset
+                (\_ _ q -> q > 0)
+                ( inputMA
+                    <> bodyMint
+                    <> mapMaybeMultiAsset
+                        (\_ _ q -> Just (negate q))
+                        origMA
                 )
-                (Coin 0)
-                origOutputs
         -- Build a candidate tx for a given fee.
         -- Change is clamped to 0 so fee estimation
         -- works even when funds are insufficient.
@@ -174,7 +215,7 @@ balanceTx pp inputUtxos refUtxos changeAddr tx =
                 changeOut =
                     mkBasicTxOut
                         changeAddr
-                        (inject (Coin change))
+                        (MaryValue (Coin change) changeMA)
                 finalBody =
                     body
                         & inputsTxBodyL
