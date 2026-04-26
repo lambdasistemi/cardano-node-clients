@@ -28,6 +28,7 @@ import Cardano.Ledger.Api.Tx (
  )
 import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
+    mintTxBodyL,
     mkBasicTxBody,
     outputsTxBodyL,
     referenceInputsTxBodyL,
@@ -36,6 +37,7 @@ import Cardano.Ledger.Api.Tx.Out (
     coinTxOutL,
     mkBasicTxOut,
     referenceScriptTxOutL,
+    valueTxOutL,
  )
 import Cardano.Ledger.BaseTypes (
     Inject (..),
@@ -66,10 +68,16 @@ import Cardano.Ledger.Credential (
     Credential (KeyHashObj),
     StakeReference (StakeRefNull),
  )
-import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
+import Cardano.Ledger.Hashes (ScriptHash (..), unsafeMakeSafeHash)
 import Cardano.Ledger.Keys (
     KeyHash (..),
     KeyRole (Payment),
+ )
+import Cardano.Ledger.Mary.Value (
+    AssetName (..),
+    MaryValue (..),
+    MultiAsset (..),
+    PolicyID (..),
  )
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (
@@ -99,6 +107,7 @@ spec = describe "Balance helpers" $ do
     computeScriptIntegritySpec
     placeholderExUnitsSpec
     balanceTxSpec
+    balanceTxMultiAssetSpec
     refScriptsSizeSpec
     balanceTxRefScriptFeeSpec
 
@@ -487,3 +496,177 @@ balanceTxRefScriptFeeSpec =
                 pure (Coin 0)
             Right BalanceResult{balancedTx = bal} ->
                 pure (bal ^. bodyTxL . feeTxBodyL)
+
+-- -----------------------------------------------------------
+-- balanceTx multi-asset change folding
+-- -----------------------------------------------------------
+
+-- | Deterministic policy ID from an Int.
+mkPolicy :: Int -> PolicyID
+mkPolicy n =
+    let hexStr =
+            replicate 52 '0'
+                ++ hexByte (n `div` 256)
+                ++ hexByte (n `mod` 256)
+        h = fromJust (hashFromStringAsHex hexStr)
+     in PolicyID (ScriptHash h)
+  where
+    hexByte b =
+        let (hi, lo) = b `divMod` 16
+         in [hexDigit hi, hexDigit lo]
+    hexDigit d
+        | d < 10 = toEnum (fromEnum '0' + d)
+        | otherwise = toEnum (fromEnum 'a' + d - 10)
+
+mkAssetName :: BS8.ByteString -> AssetName
+mkAssetName = AssetName . SBS.toShort
+
+singletonMA :: PolicyID -> AssetName -> Integer -> MultiAsset
+singletonMA p a q =
+    MultiAsset (Map.singleton p (Map.singleton a q))
+
+balanceTxMultiAssetSpec :: Spec
+balanceTxMultiAssetSpec =
+    describe "balanceTx multi-asset change folding" $ do
+        it "folds minted NFT into the change output" $ do
+            let pp =
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
+                policy = mkPolicy 7
+                pilot = mkAssetName "PILOT0"
+                mintMA = singletonMA policy pilot 1
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 10_000_000))
+                        )
+                    ]
+                template =
+                    mkBasicTx $
+                        mkBasicTxBody
+                            & outputsTxBodyL
+                                .~ StrictSeq.singleton
+                                    ( mkBasicTxOut
+                                        (mkAddr 2)
+                                        (inject (Coin 3_000_000))
+                                    )
+                            & mintTxBodyL .~ mintMA
+            case balanceTx pp inputUtxos [] (mkAddr 3) template of
+                Left err -> expectationFailure (show err)
+                Right BalanceResult{balancedTx = tx} -> do
+                    let outs =
+                            foldr (:) [] (tx ^. bodyTxL . outputsTxBodyL)
+                        MaryValue _ changeMA =
+                            last outs ^. valueTxOutL
+                    changeMA `shouldBe` mintMA
+
+        it "non-minting tx still produces ADA-only change" $ do
+            let pp =
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 10_000_000))
+                        )
+                    ]
+                template =
+                    mkBasicTx $
+                        mkBasicTxBody
+                            & outputsTxBodyL
+                                .~ StrictSeq.singleton
+                                    ( mkBasicTxOut
+                                        (mkAddr 2)
+                                        (inject (Coin 3_000_000))
+                                    )
+            case balanceTx pp inputUtxos [] (mkAddr 3) template of
+                Left err -> expectationFailure (show err)
+                Right BalanceResult{balancedTx = tx} -> do
+                    let outs =
+                            foldr (:) [] (tx ^. bodyTxL . outputsTxBodyL)
+                        MaryValue _ changeMA =
+                            last outs ^. valueTxOutL
+                    changeMA `shouldBe` mempty
+
+        it "passes through asset already present in input" $ do
+            let pp =
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
+                policy = mkPolicy 8
+                token = mkAssetName "TOKEN"
+                inputMA = singletonMA policy token 5
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (MaryValue (Coin 10_000_000) inputMA)
+                        )
+                    ]
+                template =
+                    mkBasicTx $
+                        mkBasicTxBody
+                            & outputsTxBodyL
+                                .~ StrictSeq.singleton
+                                    ( mkBasicTxOut
+                                        (mkAddr 2)
+                                        (inject (Coin 3_000_000))
+                                    )
+            case balanceTx pp inputUtxos [] (mkAddr 3) template of
+                Left err -> expectationFailure (show err)
+                Right BalanceResult{balancedTx = tx} -> do
+                    let outs =
+                            foldr (:) [] (tx ^. bodyTxL . outputsTxBodyL)
+                        MaryValue _ changeMA =
+                            last outs ^. valueTxOutL
+                    changeMA `shouldBe` inputMA
+
+        it "subtracts asset already absorbed by an existing output" $ do
+            let pp =
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
+                policy = mkPolicy 9
+                token = mkAssetName "TOKEN"
+                inputMA = singletonMA policy token 5
+                outputMA = singletonMA policy token 2
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (MaryValue (Coin 10_000_000) inputMA)
+                        )
+                    ]
+                template =
+                    mkBasicTx $
+                        mkBasicTxBody
+                            & outputsTxBodyL
+                                .~ StrictSeq.singleton
+                                    ( mkBasicTxOut
+                                        (mkAddr 2)
+                                        (MaryValue (Coin 3_000_000) outputMA)
+                                    )
+            case balanceTx pp inputUtxos [] (mkAddr 3) template of
+                Left err -> expectationFailure (show err)
+                Right BalanceResult{balancedTx = tx} -> do
+                    let outs =
+                            foldr (:) [] (tx ^. bodyTxL . outputsTxBodyL)
+                        MaryValue _ changeMA =
+                            last outs ^. valueTxOutL
+                    changeMA `shouldBe` singletonMA policy token 3
