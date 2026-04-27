@@ -146,6 +146,7 @@ library utxo-indexer-lib
   exposed-modules:
     Cardano.Node.Client.UTxOIndexer.Columns
     Cardano.Node.Client.UTxOIndexer.Indexer
+    Cardano.Node.Client.UTxOIndexer.IndexerOp
     Cardano.Node.Client.UTxOIndexer.Types
 
   build-depends:

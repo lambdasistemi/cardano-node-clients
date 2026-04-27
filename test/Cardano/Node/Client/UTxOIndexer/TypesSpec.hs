@@ -13,10 +13,13 @@ module Cardano.Node.Client.UTxOIndexer.TypesSpec (spec) where
 import Cardano.Node.Client.UTxOIndexer.Types (
     AddrKey (..),
     Address (..),
+    SlotNo (..),
     TxIn (..),
     addrKeyFromBytes,
     addrKeyToBytes,
     addressPrefix,
+    slotFromBytes,
+    slotToBytes,
     txInFromBytes,
     txInToBytes,
  )
@@ -79,6 +82,32 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Types" $ do
             property $
                 \(SmallishAddrKey k) ->
                     (addrKeyFromBytes =<< addrKeyToBytes k) === Just k
+
+    describe "SlotNo codec" $ do
+        it "round-trips concrete slot values" $ do
+            let go w =
+                    (slotFromBytes . slotToBytes) (SlotNo w)
+                        `shouldBe` Just (SlotNo w)
+            mapM_
+                go
+                [0, 1, 42, 0xFF, 0xFFFF, 0xFFFFFFFF, maxBound]
+
+        it "encodes to exactly 8 bytes" $ do
+            BS.length (slotToBytes (SlotNo 0)) `shouldBe` 8
+            BS.length (slotToBytes (SlotNo maxBound)) `shouldBe` 8
+
+        it "decodes nothing for non-8-byte input" $ do
+            slotFromBytes BS.empty `shouldBe` Nothing
+            slotFromBytes (BS.replicate 7 0) `shouldBe` Nothing
+            slotFromBytes (BS.replicate 9 0) `shouldBe` Nothing
+
+        it "produces big-endian bytes (lex order = numeric)" $ do
+            slotToBytes (SlotNo 1)
+                < slotToBytes (SlotNo 2)
+                `shouldBe` True
+            slotToBytes (SlotNo 0xFF)
+                < slotToBytes (SlotNo 0x100)
+                `shouldBe` True
 
     describe "addressPrefix" $ do
         it "is the strict byte prefix of any AddrKey at that address" $ do
