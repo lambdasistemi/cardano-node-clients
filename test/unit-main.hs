@@ -5,6 +5,7 @@ import Test.Hspec (hspec)
 import Cardano.Node.Client.BalanceSpec qualified as BalanceSpec
 import Cardano.Node.Client.TxBuildGoldenSpec qualified as TxBuildGoldenSpec
 import Cardano.Node.Client.TxBuildSpec qualified as TxBuildSpec
+import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.TypesSpec qualified as UTxOIndexerTypesSpec
 import Data.List.SampleFibonacciSpec qualified as SampleFibonacciSpec
 
@@ -15,3 +16,4 @@ main = hspec $ do
     TxBuildSpec.spec
     TxBuildGoldenSpec.spec
     UTxOIndexerTypesSpec.spec
+    UTxOIndexerSpec.spec

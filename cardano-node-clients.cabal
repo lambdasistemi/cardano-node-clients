@@ -145,11 +145,14 @@ library utxo-indexer-lib
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.UTxOIndexer.Columns
+    Cardano.Node.Client.UTxOIndexer.Indexer
     Cardano.Node.Client.UTxOIndexer.Types
 
   build-depends:
     , base
     , bytestring
+    , dependent-map
+    , dependent-sum
     , lens
     , rocksdb-kv-transactions:kv-transactions
     , some
@@ -174,6 +177,7 @@ test-suite unit-tests
     Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.TxBuildGoldenSpec
     Cardano.Node.Client.TxBuildSpec
+    Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
     Data.List.SampleFibonacciSpec
 
