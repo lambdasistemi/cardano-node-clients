@@ -41,6 +41,7 @@ module Cardano.Node.Client.UTxOIndexer.Types (
     TxOut (..),
     AddrKey (..),
     SlotNo (..),
+    BlockHash (..),
 
     -- * Composite-key encoding (AddressIndex column)
     addrKeyToBytes,
@@ -186,6 +187,14 @@ matches numeric ordering (a lower slot lexicographically
 precedes a higher slot at the byte level).
 -}
 newtype SlotNo = SlotNo {unSlotNo :: Word64}
+    deriving newtype (Eq, Ord, Show)
+
+{- | Cardano block hash, raw 32 bytes. Stored alongside
+the slot in @await@ observations and (in a follow-up
+patch) wired through to the rollback column for
+chain-rewind fidelity.
+-}
+newtype BlockHash = BlockHash {unBlockHash :: ByteString}
     deriving newtype (Eq, Ord, Show)
 
 -- | Serialise a 'SlotNo' to its 8-byte big-endian form.

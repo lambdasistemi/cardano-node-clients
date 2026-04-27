@@ -36,10 +36,12 @@ module Cardano.Node.Client.UTxOIndexer.Server (
 ) where
 
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    AwaitObservation (..),
     IndexerHandle (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
+    BlockHash (..),
     SlotNo (..),
     TxIn (..),
     TxOut (..),
@@ -164,6 +166,9 @@ handleConn idx getReady conn = (`finally` close conn) $ do
         Just Ready -> do
             rs <- getReady
             sendLine conn (encode rs)
+        Just (Await txIn mTimeout) -> do
+            mObs <- awaitTxIn idx txIn mTimeout
+            sendLine conn (encode (AwaitResponse mObs))
 
 {- | Read up to and including the first @\n@. The line
 itself is returned without the trailing newline.
@@ -201,6 +206,7 @@ sendLine s payload =
 data Request
     = UtxosAt !Address
     | Ready
+    | Await !TxIn !(Maybe Int)
     deriving stock (Eq, Show)
 
 instance FromJSON Request where
@@ -211,12 +217,37 @@ instance FromJSON Request where
                         _ <- o .: "ready" :: Aeson.Parser Aeson.Value
                         pure Ready
                     )
+                <|> ( do
+                        s <- o .: "await"
+                        txIn <- parseTxInWire s
+                        mt <-
+                            o Aeson..:? "timeout_seconds" ::
+                                Aeson.Parser (Maybe Int)
+                        pure (Await txIn mt)
+                    )
       where
         parseHexAddress :: Text -> Aeson.Parser Address
         parseHexAddress t = case Base16.decode (Text.encodeUtf8 t) of
             Right bs -> pure (Address bs)
             Left err ->
                 fail $ "utxos_at: invalid base16 — " <> err
+
+parseTxInWire :: Text -> Aeson.Parser TxIn
+parseTxInWire s =
+    case Text.splitOn (Text.pack "#") s of
+        [tidT, ixT] -> do
+            tid <- case Base16.decode (Text.encodeUtf8 tidT) of
+                Right bs
+                    | BS.length bs == 32 -> pure bs
+                Right _ -> fail "await: txid must be 32 bytes (64 hex)"
+                Left err -> fail $ "await: invalid txid hex — " <> err
+            ix <- case reads (Text.unpack ixT) of
+                [(n, "")] | n >= 0 && n <= 65535 -> pure (fromInteger n)
+                _ ->
+                    fail
+                        "await: ix must be a non-negative integer ≤ 65535"
+            pure (TxIn tid ix)
+        _ -> fail "await: expected \"<txid_hex>#<ix>\""
 
 newtype UtxosResponse = UtxosResponse [(TxIn, TxOut)]
 
@@ -240,3 +271,24 @@ txInWire (TxIn tid ix) =
 
 errorResponse :: Text -> Value
 errorResponse msg = object ["error" .= msg]
+
+newtype AwaitResponse = AwaitResponse (Maybe AwaitObservation)
+
+instance ToJSON AwaitResponse where
+    toJSON (AwaitResponse Nothing) =
+        object ["timeout" .= True]
+    toJSON
+        ( AwaitResponse
+                ( Just
+                        AwaitObservation
+                            { aoSlot = SlotNo s
+                            , aoBlockHash = BlockHash bh
+                            , aoTxOut = txOut
+                            }
+                    )
+            ) =
+            object
+                [ "slot" .= s
+                , "blockHash" .= Text.decodeUtf8 (Base16.encode bh)
+                , "txout" .= Text.decodeUtf8 (Base16.encode (unTxOut txOut))
+                ]
