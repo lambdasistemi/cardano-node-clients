@@ -138,6 +138,14 @@ library devnet
     , time
     , unix
 
+executable utxo-indexer
+  import:           warnings
+  hs-source-dirs:   app/utxo-indexer
+  main-is:          Main.hs
+  default-language: GHC2021
+  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+  build-depends:    base
+
 test-suite unit-tests
   import:           warnings
   type:             exitcode-stdio-1.0
