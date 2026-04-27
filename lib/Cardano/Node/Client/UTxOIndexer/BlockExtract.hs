@@ -22,45 +22,46 @@ workloads post-date the Byron→Shelley hard fork; if a
 consumer ever needs Byron data, the stub is the obvious
 place to wire it in.
 -}
-module Cardano.Node.Client.UTxOIndexer.BlockExtract
-    ( extractBlock
-    ) where
+module Cardano.Node.Client.UTxOIndexer.BlockExtract (
+    extractBlock,
+) where
 
 import Cardano.Crypto.Hash.Class (hashToBytes)
 import Cardano.Ledger.Address (serialiseAddr)
+import Cardano.Ledger.BaseTypes (TxIx (..))
 import Cardano.Ledger.Binary (serialize')
-import Cardano.Ledger.Core
-    ( EraTx
-    , EraTxBody
-    , EraTxOut
-    , TopTx
-    , addrTxOutL
-    , bodyTxL
-    , eraProtVerLow
-    , inputsTxBodyL
-    , outputsTxBodyL
-    , txIdTxBody
-    )
+import Cardano.Ledger.Core (
+    EraTx,
+    EraTxBody,
+    EraTxOut,
+    TopTx,
+    addrTxOutL,
+    bodyTxL,
+    eraProtVerLow,
+    inputsTxBodyL,
+    outputsTxBodyL,
+    txIdTxBody,
+ )
 import Cardano.Ledger.Core qualified as Ledger
 import Cardano.Ledger.Hashes (extractHash)
-import Cardano.Ledger.BaseTypes (TxIx (..))
 import Cardano.Ledger.TxIn qualified as SH
 import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (UtxoOp (..))
-import Cardano.Node.Client.UTxOIndexer.Types
-    ( Address (..)
-    , SlotNo (..)
-    , TxIn (..)
-    , TxOut (..)
-    )
+import Cardano.Node.Client.UTxOIndexer.Types (
+    Address (..),
+    SlotNo (..),
+    TxIn (..),
+    TxOut (..),
+ )
 import Cardano.Read.Ledger.Block.Block (fromConsensusBlock)
 import Cardano.Read.Ledger.Block.Txs (getEraTransactions)
 import Cardano.Read.Ledger.Eras.EraValue (applyEraFun)
-import Cardano.Read.Ledger.Eras.KnownEras
-    ( Era (..)
-    , IsEra
-    , theEra
-    )
+import Cardano.Read.Ledger.Eras.KnownEras (
+    Era (..),
+    IsEra,
+    theEra,
+ )
+
 -- Era pattern aliases are exported via 'Era (..)' above; the
 -- 'Dijkstra' case in 'changes' below requires this re-export
 -- pattern match to be exhaustive.
@@ -88,21 +89,23 @@ extractBlock blk =
     , applyEraFun (changes . getEraTransactions) (fromConsensusBlock blk)
     )
 
--- | Slot of the block. Cardano blocks are non-genesis;
--- the @Origin@ case is structurally impossible here so
--- we map it to slot 0 (defensive).
+{- | Slot of the block. Cardano blocks are non-genesis;
+the @Origin@ case is structurally impossible here so
+we map it to slot 0 (defensive).
+-}
 blockSlot :: Block -> SlotNo
 blockSlot blk =
     case Network.pointSlot (Network.blockPoint blk) of
         Network.Point.Origin -> SlotNo 0
         Network.Point.At s -> SlotNo (Network.unSlotNo s)
 
--- | UTxO ops produced by a single era's tx list. Byron
--- returns @[]@ — pre-Shelley blocks are not exercised by
--- current workloads. Each Shelley-family branch narrows
--- @TxT era ~ Core.Tx Core.TopTx era@ so the
--- @bodyTxL@/@inputsTxBodyL@/@outputsTxBodyL@ lenses
--- become applicable.
+{- | UTxO ops produced by a single era's tx list. Byron
+returns @[]@ — pre-Shelley blocks are not exercised by
+current workloads. Each Shelley-family branch narrows
+@TxT era ~ Core.Tx Core.TopTx era@ so the
+@bodyTxL@/@inputsTxBodyL@/@outputsTxBodyL@ lenses
+become applicable.
+-}
 changes :: forall era. (IsEra era) => [Tx era] -> [UtxoOp]
 changes txs = case theEra @era of
     Byron -> []
@@ -114,13 +117,14 @@ changes txs = case theEra @era of
     Conway -> concatMap (shelleyTxChanges . unTx) txs
     Dijkstra -> concatMap (shelleyTxChanges . unTx) txs
 
--- | Convert a Shelley-family @'Core.Tx' TopTx era@ into a
--- list of @UtxoOp@s.
-shelleyTxChanges
-    :: forall era
-     . (EraTx era)
-    => Ledger.Tx TopTx era
-    -> [UtxoOp]
+{- | Convert a Shelley-family @'Core.Tx' TopTx era@ into a
+list of @UtxoOp@s.
+-}
+shelleyTxChanges ::
+    forall era.
+    (EraTx era) =>
+    Ledger.Tx TopTx era ->
+    [UtxoOp]
 shelleyTxChanges tx =
     let body = tx ^. bodyTxL
         tid = txBodyIdBytes @era body
@@ -134,10 +138,11 @@ shelleyTxChanges tx =
                 (toList outs)
      in spends <> creates
 
--- | Bytes of the Shelley-family TxBody's hash (used as
--- @txInId@ for outputs created by this body).
-txBodyIdBytes
-    :: forall era. (EraTxBody era) => Ledger.TxBody TopTx era -> ByteString
+{- | Bytes of the Shelley-family TxBody's hash (used as
+@txInId@ for outputs created by this body).
+-}
+txBodyIdBytes ::
+    forall era. (EraTxBody era) => Ledger.TxBody TopTx era -> ByteString
 txBodyIdBytes body =
     case txIdTxBody body of
         SH.TxId safeHash -> hashToBytes (extractHash safeHash)
@@ -149,15 +154,15 @@ shelleyTxInToIndexer (SH.TxIn (SH.TxId safeHash) (TxIx ix)) =
         , txInIx = fromIntegral ix
         }
 
-mkCreate
-    :: forall era
-     . (EraTxOut era)
-    => ByteString
-    -- ^ producing tx id (32 raw bytes)
-    -> Word16
-    -- ^ output index
-    -> Ledger.TxOut era
-    -> UtxoOp
+mkCreate ::
+    forall era.
+    (EraTxOut era) =>
+    -- | producing tx id (32 raw bytes)
+    ByteString ->
+    -- | output index
+    Word16 ->
+    Ledger.TxOut era ->
+    UtxoOp
 mkCreate tid ix out =
     UtxoCreate
         TxIn{txInId = tid, txInIx = ix}
