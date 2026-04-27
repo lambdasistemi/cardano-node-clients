@@ -5,38 +5,24 @@ License     : Apache-2.0
 
 Minimal address->UTxO indexer daemon. Follows the chain
 via N2C ChainSync from one relay socket, maintains an
-in-memory address->UTxO index, exposes two read primitives
-(@utxos_at@, @await@) plus a @ready@ probe over a Unix
-domain socket using newline-delimited JSON.
+in-memory address->UTxO index, exposes two read
+primitives (@utxos_at@, @await@) plus a @ready@ probe
+over a Unix domain socket using newline-delimited JSON.
 
-This Main is the scaffolding patch: parses CLI flags,
-prints the resolved config, exits 0. Subsequent patches
-wire the chain-sync follower, the STM index, and the
-NDJSON server.
+This @Main@ is just CLI parsing; everything else lives
+in 'Cardano.Node.Client.UTxOIndexer.Daemon.runDaemon'.
 -}
 module Main (main) where
 
+import Cardano.Node.Client.UTxOIndexer.Daemon (
+    DaemonConfig (..),
+    runDaemon,
+ )
 import Data.Maybe (fromMaybe)
 import System.Environment (getArgs, getProgName)
-import System.Exit (exitFailure, exitSuccess)
+import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 import Text.Read (readMaybe)
-
--- | Resolved daemon configuration, populated from CLI flags.
-data Config = Config
-    { cfgRelaySocket :: FilePath
-    -- ^ Path to the Cardano relay's N2C Unix socket.
-    , cfgListenSocket :: FilePath
-    -- ^ Path the daemon will listen on.
-    , cfgNetworkMagic :: Word
-    -- ^ Network magic of the target network.
-    , cfgByronEpochSlots :: Word
-    -- ^ Byron epoch slot count (genesis configuration).
-    , cfgReadyThresholdSlots :: Word
-    -- ^ Maximum @slotsBehind@ for the daemon to report
-    -- @ready=true@ on the @ready@ request.
-    }
-    deriving stock (Show)
 
 -- | Default ready threshold (slots).
 defaultReadyThreshold :: Word
@@ -54,10 +40,10 @@ takeFlag key args = go [] args
         | k == key = Just (v, reverse seen ++ rest)
     go seen (x : rest) = go (x : seen) rest
 
-{- | Parse all CLI flags into a 'Config'. On error,
-print usage to stderr and exit non-zero.
+{- | Parse all CLI flags into a 'DaemonConfig'. On
+error, print usage to stderr and exit non-zero.
 -}
-parseConfig :: [String] -> IO Config
+parseConfig :: [String] -> IO DaemonConfig
 parseConfig args0 = do
     (relay, args1) <- requireFlag "--relay-socket" args0
     (listen, args2) <- requireFlag "--listen" args1
@@ -73,12 +59,12 @@ parseConfig args0 = do
     slots <- requireWord "--byron-epoch-slots" slotsS
     ready <- requireWord "--ready-threshold-slots" readyS
     pure
-        Config
-            { cfgRelaySocket = relay
-            , cfgListenSocket = listen
-            , cfgNetworkMagic = magic
-            , cfgByronEpochSlots = slots
-            , cfgReadyThresholdSlots = ready
+        DaemonConfig
+            { dcRelaySocket = relay
+            , dcListenSocket = listen
+            , dcNetworkMagic = fromIntegral (magic :: Word)
+            , dcByronEpochSlots = fromIntegral (slots :: Word)
+            , dcReadyThresholdSlots = fromIntegral (ready :: Word)
             }
   where
     requireFlag key args =
@@ -106,11 +92,10 @@ dieUsage msg = do
     hPutStrLn stderr "  [--ready-threshold-slots INT]"
     exitFailure
 
--- | Entry point. Phase 0: parse args, log config, exit 0.
+-- | Entry point. Parse args, log config, run the daemon.
 main :: IO ()
 main = do
     args <- getArgs
     cfg <- parseConfig args
-    putStrLn $ "utxo-indexer: " <> show cfg
-    putStrLn "utxo-indexer: scaffolding only — chain-sync, index, and server land in subsequent patches"
-    exitSuccess
+    hPutStrLn stderr $ "utxo-indexer: " <> show cfg
+    runDaemon cfg
