@@ -7,7 +7,7 @@ Database layout for the address->UTxO indexer expressed
 against the 'Database.KV.Transaction' abstraction from
 @kv-transactions@.
 
-Two live-state columns:
+Three columns:
 
 * 'TxInCol' :: @KV TxIn Address@ — primary table keyed
   by the 'TxIn' alone. The chain block consuming an
@@ -19,6 +19,10 @@ Two live-state columns:
   @lenByte || address || txId || ix@ so a cursor seek to
   @lenByte || address@ yields every UTxO at that address
   with its full 'TxOut' inline (no second-stage lookup).
+* 'RollbackCol' :: @KV SlotNo [UtxoOp]@ — slot-tagged
+  inverse-op log used to undo apply-block writes on a
+  chain-sync rollback. Keyed by 'SlotNo' (8-byte BE) so
+  cursor ordering matches numeric slot ordering.
 
 A future RocksDB swap is a one-line backend choice via
 @mkInMemoryDatabase@ → @mkRocksDBDatabase@; nothing in
@@ -31,32 +35,41 @@ module Cardano.Node.Client.UTxOIndexer.Columns (
     -- * Codecs
     txInColCodecs,
     addressIndexCodecs,
+    rollbackCodecs,
+
+    -- * Inverse-op list encoding
+    encodeOps,
+    decodeOps,
 ) where
 
+import Cardano.Node.Client.UTxOIndexer.IndexerOp (UtxoOp (..))
 import Cardano.Node.Client.UTxOIndexer.Types (
     AddrKey,
     Address (..),
+    SlotNo,
     TxIn,
     TxOut (..),
     addrKeyFromBytes,
     addrKeyToBytes,
+    slotFromBytes,
+    slotToBytes,
     txInFromBytes,
     txInToBytes,
  )
 import Control.Lens (Prism', prism')
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
 import Data.GADT.Compare (
     GCompare (..),
     GEq (..),
     GOrdering (..),
  )
 import Data.Type.Equality (type (:~:) (Refl))
+import Data.Word (Word32)
 import Database.KV.Transaction (Codecs (..), KV)
 
-{- | The indexer database's column families. Two live
-columns; rollback support lands in a follow-up patch and
-adds a third.
--}
+-- | The indexer database's column families.
 data Cols c where
     -- | Primary table: @TxIn → Address@. Lets the
     -- spend-by-TxIn path resolve the consumed UTxO's
@@ -68,23 +81,28 @@ data Cols c where
     -- prefix-scan by address yields @(TxIn, TxOut)@
     -- pairs directly.
     AddressIndex :: Cols (KV AddrKey TxOut)
+    -- | Rollback log: 'SlotNo' → list of inverse ops to
+    -- undo writes applied at that slot. The list is in
+    -- the order to apply on rollback (i.e. already
+    -- reversed relative to the original apply order).
+    RollbackCol :: Cols (KV SlotNo [UtxoOp])
 
 instance GEq Cols where
     geq TxInCol TxInCol = Just Refl
     geq AddressIndex AddressIndex = Just Refl
+    geq RollbackCol RollbackCol = Just Refl
     geq _ _ = Nothing
 
 instance GCompare Cols where
     gcompare TxInCol TxInCol = GEQ
-    gcompare TxInCol AddressIndex = GLT
-    gcompare AddressIndex TxInCol = GGT
+    gcompare TxInCol _ = GLT
+    gcompare _ TxInCol = GGT
     gcompare AddressIndex AddressIndex = GEQ
+    gcompare AddressIndex RollbackCol = GLT
+    gcompare RollbackCol AddressIndex = GGT
+    gcompare RollbackCol RollbackCol = GEQ
 
-{- | Codecs for 'TxInCol'. Both key (34 bytes fixed) and
-value (raw address bytes) are length-determined; the
-prism is total on encode, partial only on shape on
-decode.
--}
+-- | Codecs for 'TxInCol'.
 txInColCodecs :: Codecs (KV TxIn Address)
 txInColCodecs =
     Codecs
@@ -92,22 +110,24 @@ txInColCodecs =
         , valueCodec = addressPrism
         }
 
-{- | Codecs for 'AddressIndex'. The key codec is total
-on the encode side modulo the @maxAddressLength@
-invariant baked into 'addrKeyToBytes'; on the decode
-side it returns 'Nothing' for any byte string that
-does not match the
-@lenByte || address(lenByte) || txId(32) || ix(2)@
-shape.
-
-The value side is the raw CBOR 'TxOut' as observed on
-chain; the indexer never decodes it.
--}
+-- | Codecs for 'AddressIndex'.
 addressIndexCodecs :: Codecs (KV AddrKey TxOut)
 addressIndexCodecs =
     Codecs
         { keyCodec = addrKeyPrism
         , valueCodec = txOutPrism
+        }
+
+{- | Codecs for the rollback-log column. The op list uses
+a stable hand-rolled binary form (see 'encodeOps') so a
+future RocksDB swap can read entries written by the
+in-memory backend.
+-}
+rollbackCodecs :: Codecs (KV SlotNo [UtxoOp])
+rollbackCodecs =
+    Codecs
+        { keyCodec = slotPrism
+        , valueCodec = opsPrism
         }
 
 -- Internal --------------------------------------------------------
@@ -136,3 +156,116 @@ addrKeyPrism =
 
 txOutPrism :: Prism' ByteString TxOut
 txOutPrism = prism' unTxOut (Just . TxOut)
+
+slotPrism :: Prism' ByteString SlotNo
+slotPrism = prism' slotToBytes slotFromBytes
+
+opsPrism :: Prism' ByteString [UtxoOp]
+opsPrism = prism' encodeOps decodeOps
+
+-- Inverse-op list binary encoding ---------------------------------
+--
+-- @
+-- list   = listLen ++ encodedOps
+-- create = 0 ++ txIn(34) ++ addrLen(4 BE) ++ addr ++ txOutLen(4 BE) ++ txOut
+-- spend  = 1 ++ txIn(34)
+-- @
+
+{- | Encode a list of 'UtxoOp' into the rollback-column's
+on-disk byte form.
+-}
+encodeOps :: [UtxoOp] -> ByteString
+encodeOps ops =
+    word32BE (fromIntegral (length ops))
+        <> mconcat (map encodeOp ops)
+
+encodeOp :: UtxoOp -> ByteString
+encodeOp (UtxoCreate txIn (Address addr) (TxOut txOut)) =
+    BS.singleton 0
+        <> txInToBytes txIn
+        <> lenPrefixed addr
+        <> lenPrefixed txOut
+encodeOp (UtxoSpend txIn) =
+    BS.singleton 1 <> txInToBytes txIn
+
+lenPrefixed :: ByteString -> ByteString
+lenPrefixed bs = word32BE (fromIntegral (BS.length bs)) <> bs
+
+{- | Inverse of 'encodeOps'. Returns 'Nothing' if the
+byte string is malformed.
+-}
+decodeOps :: ByteString -> Maybe [UtxoOp]
+decodeOps bs0 = do
+    (n, rest0) <- readWord32 bs0
+    (ops, rest1) <- readN (fromIntegral n) decodeOp rest0
+    if BS.null rest1
+        then Just ops
+        else Nothing
+
+decodeOp :: ByteString -> Maybe (UtxoOp, ByteString)
+decodeOp bs0 = do
+    (tag, rest0) <- BS.uncons bs0
+    case tag of
+        0 -> do
+            (txInBs, rest1) <- splitFixed 34 rest0
+            txIn <- txInFromBytes txInBs
+            (addrBs, rest2) <- readLenPrefixed rest1
+            (txOutBs, rest3) <- readLenPrefixed rest2
+            Just
+                ( UtxoCreate
+                    txIn
+                    (Address addrBs)
+                    (TxOut txOutBs)
+                , rest3
+                )
+        1 -> do
+            (txInBs, rest1) <- splitFixed 34 rest0
+            txIn <- txInFromBytes txInBs
+            Just (UtxoSpend txIn, rest1)
+        _ -> Nothing
+
+splitFixed :: Int -> ByteString -> Maybe (ByteString, ByteString)
+splitFixed n bs
+    | BS.length bs < n = Nothing
+    | otherwise = Just (BS.splitAt n bs)
+
+readLenPrefixed :: ByteString -> Maybe (ByteString, ByteString)
+readLenPrefixed bs0 = do
+    (n, rest0) <- readWord32 bs0
+    let len = fromIntegral n
+    if BS.length rest0 < len
+        then Nothing
+        else Just (BS.splitAt len rest0)
+
+readWord32 :: ByteString -> Maybe (Word32, ByteString)
+readWord32 bs
+    | BS.length bs < 4 = Nothing
+    | otherwise =
+        let (hd, tl) = BS.splitAt 4 bs
+            w =
+                foldr (.|.) 0 $
+                    zipWith
+                        (\s b -> fromIntegral b `shiftL` s)
+                        [24 :: Int, 16, 8, 0]
+                        (BS.unpack hd)
+         in Just (w, tl)
+
+readN ::
+    Int ->
+    (ByteString -> Maybe (a, ByteString)) ->
+    ByteString ->
+    Maybe ([a], ByteString)
+readN 0 _ bs = Just ([], bs)
+readN n step bs = do
+    (a, bs') <- step bs
+    (as, bs'') <- readN (n - 1) step bs'
+    Just (a : as, bs'')
+
+word32BE :: Word32 -> ByteString
+word32BE w =
+    BS.pack
+        [ fromIntegral (w `shiftR` 24) .&. 0xFF
+        , fromIntegral (w `shiftR` 16) .&. 0xFF
+        , fromIntegral (w `shiftR` 8) .&. 0xFF
+        , fromIntegral w .&. 0xFF
+        ]

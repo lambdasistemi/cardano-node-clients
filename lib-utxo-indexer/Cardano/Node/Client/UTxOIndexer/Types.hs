@@ -40,6 +40,7 @@ module Cardano.Node.Client.UTxOIndexer.Types (
     TxIn (..),
     TxOut (..),
     AddrKey (..),
+    SlotNo (..),
 
     -- * Composite-key encoding (AddressIndex column)
     addrKeyToBytes,
@@ -49,12 +50,16 @@ module Cardano.Node.Client.UTxOIndexer.Types (
     -- * TxIn key encoding (TxInCol column)
     txInToBytes,
     txInFromBytes,
+
+    -- * Slot encoding (RollbackCol column key)
+    slotToBytes,
+    slotFromBytes,
 ) where
 
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.Word (Word16, Word8)
+import Data.Word (Word16, Word64, Word8)
 
 {- | Raw payment-address bytes as observed in a 'TxOut'.
 The indexer does not parse Cardano address structure;
@@ -173,6 +178,28 @@ txInFromBytes bs
         let (tid, ixBs) = BS.splitAt 32 bs
          in TxIn tid <$> word16FromBE ixBs
 
+-- Slot encoding ------------------------------------------------------
+
+{- | Cardano slot number. Stored as the 'KeyOf' of the
+rollback column; encoded big-endian so cursor ordering
+matches numeric ordering (a lower slot lexicographically
+precedes a higher slot at the byte level).
+-}
+newtype SlotNo = SlotNo {unSlotNo :: Word64}
+    deriving newtype (Eq, Ord, Show)
+
+-- | Serialise a 'SlotNo' to its 8-byte big-endian form.
+slotToBytes :: SlotNo -> ByteString
+slotToBytes (SlotNo w) = word64BE w
+
+{- | Parse the inverse of 'slotToBytes'. Returns 'Nothing'
+if the byte string is not exactly 8 bytes.
+-}
+slotFromBytes :: ByteString -> Maybe SlotNo
+slotFromBytes bs
+    | BS.length bs /= 8 = Nothing
+    | otherwise = Just $ SlotNo $ word64FromBE bs
+
 -- Internal helpers --------------------------------------------------
 
 word16ToBE :: Word16 -> ByteString
@@ -181,6 +208,21 @@ word16ToBE w =
         [ fromIntegral (w `shiftR` 8) .&. 0xFF
         , fromIntegral w .&. 0xFF
         ]
+
+word64BE :: Word64 -> ByteString
+word64BE w =
+    BS.pack
+        [ fromIntegral (w `shiftR` n) .&. 0xFF
+        | n <- [56, 48, 40, 32, 24, 16, 8, 0]
+        ]
+
+word64FromBE :: ByteString -> Word64
+word64FromBE =
+    foldr (.|.) 0
+        . zipWith
+            (\s b -> fromIntegral b `shiftL` s)
+            [56, 48, 40, 32, 24, 16, 8, 0]
+        . BS.unpack
 
 word16FromBE :: ByteString -> Maybe Word16
 word16FromBE bs

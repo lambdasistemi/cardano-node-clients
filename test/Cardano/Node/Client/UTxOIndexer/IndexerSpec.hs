@@ -1,15 +1,14 @@
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.IndexerSpec
-Description : Apply / snapshot round-trip against the in-memory backend
+Description : Apply / snapshot / rollback round-trip
 License     : Apache-2.0
 
-Exercises the indexer's apply / snapshot path end-to-end
-through the @kv-transactions@ in-memory backend: open an
-indexer, apply 'UtxoCreate' / 'UtxoSpend' ops, and verify
-@snapshotAt@ returns exactly the surviving UTxOs at each
-queried address — sorted, with the right values, and
-bounded to that address (no bleed across the prefix-scan
-boundary).
+Exercises the indexer's apply / snapshot / rollback path
+end-to-end through the @kv-transactions@ in-memory
+backend: open an indexer, apply 'UtxoCreate' /
+'UtxoSpend' ops at multiple slots, roll back to a target
+slot, and verify @snapshotAt@ reflects the state at the
+target slot.
 -}
 module Cardano.Node.Client.UTxOIndexer.IndexerSpec (spec) where
 
@@ -20,6 +19,7 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
+    SlotNo (..),
     TxIn (..),
     TxOut (..),
  )
@@ -28,7 +28,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 
 spec :: Spec
 spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
-    describe "applyOps + snapshotAt" $ do
+    describe "applyAtSlot + snapshotAt" $ do
         it "snapshots an empty address as an empty list" $
             withInMemoryIndexer $ \h -> do
                 xs <- snapshotAt h (mkAddr 0xAA 29)
@@ -39,7 +39,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 let addr = mkAddr 0xAA 29
                     txin = TxIn (BS.replicate 32 0x11) 0
                     txout = TxOut "value-bytes-0"
-                applyOps h [UtxoCreate txin addr txout]
+                applyAtSlot h (SlotNo 1) [UtxoCreate txin addr txout]
                 xs <- snapshotAt h addr
                 xs `shouldBe` [(txin, txout)]
 
@@ -51,8 +51,9 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                             (TxIn (BS.replicate 32 tid) ix)
                             addr
                             (TxOut payload)
-                applyOps
+                applyAtSlot
                     h
+                    (SlotNo 1)
                     [ mkRow 0x33 5 "c"
                     , mkRow 0x11 0 "a"
                     , mkRow 0x22 0 "b"
@@ -69,8 +70,9 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 let a1 = mkAddr 0xAA 29
                     a2 = mkAddr 0xBB 29
                     txin = TxIn (BS.replicate 32 0x10) 0
-                applyOps
+                applyAtSlot
                     h
+                    (SlotNo 1)
                     [ UtxoCreate txin a1 (TxOut "for-a1")
                     , UtxoCreate txin a2 (TxOut "for-a2")
                     ]
@@ -80,15 +82,13 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 xs2 `shouldBe` [(txin, TxOut "for-a2")]
 
         it "scopes scans across mixed address lengths" $
-            -- Length-prefixed AddressIndex key means a
-            -- 29-byte and a 60-byte address with the same
-            -- body bytes still live in disjoint buckets.
             withInMemoryIndexer $ \h -> do
                 let a29 = mkAddr 0xCC 29
                     a60 = mkAddr 0xCC 60
                     txin = TxIn (BS.replicate 32 0x44) 0
-                applyOps
+                applyAtSlot
                     h
+                    (SlotNo 1)
                     [ UtxoCreate txin a29 (TxOut "29")
                     , UtxoCreate txin a60 (TxOut "60")
                     ]
@@ -98,19 +98,17 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 xs60 `shouldBe` [(txin, TxOut "60")]
 
         it "spends the right entry and leaves siblings alone" $
-            -- UtxoSpend takes only a TxIn; the indexer
-            -- resolves its address via TxInCol before
-            -- deleting from AddressIndex.
             withInMemoryIndexer $ \h -> do
                 let addr = mkAddr 0xAA 29
                     txin1 = TxIn (BS.replicate 32 0x11) 0
                     txin2 = TxIn (BS.replicate 32 0x22) 0
-                applyOps
+                applyAtSlot
                     h
+                    (SlotNo 1)
                     [ UtxoCreate txin1 addr (TxOut "v1")
                     , UtxoCreate txin2 addr (TxOut "v2")
                     ]
-                applyOps h [UtxoSpend txin1]
+                applyAtSlot h (SlotNo 2) [UtxoSpend txin1]
                 xs <- snapshotAt h addr
                 xs `shouldBe` [(txin2, TxOut "v2")]
 
@@ -119,10 +117,77 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 let addr = mkAddr 0xAA 29
                     txin1 = TxIn (BS.replicate 32 0x11) 0
                     txin2 = TxIn (BS.replicate 32 0x99) 0
-                applyOps h [UtxoCreate txin1 addr (TxOut "v")]
-                applyOps h [UtxoSpend txin2] -- not in index
+                applyAtSlot
+                    h
+                    (SlotNo 1)
+                    [UtxoCreate txin1 addr (TxOut "v")]
+                applyAtSlot h (SlotNo 2) [UtxoSpend txin2]
                 xs <- snapshotAt h addr
                 xs `shouldBe` [(txin1, TxOut "v")]
+
+    describe "rollbackTo" $ do
+        it "is a no-op when no slots exist above target" $
+            withInMemoryIndexer $ \h -> do
+                rollbackTo h (SlotNo 100)
+                xs <- snapshotAt h (mkAddr 0xAA 29)
+                xs `shouldBe` []
+
+        it "undoes a single-slot create" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    txin = TxIn (BS.replicate 32 0x11) 0
+                applyAtSlot
+                    h
+                    (SlotNo 5)
+                    [UtxoCreate txin addr (TxOut "v")]
+                rollbackTo h (SlotNo 4)
+                xs <- snapshotAt h addr
+                xs `shouldBe` []
+
+        it "preserves slots at-or-below the target" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                applyAtSlot h (SlotNo 1) [mk 0x01]
+                applyAtSlot h (SlotNo 2) [mk 0x02]
+                applyAtSlot h (SlotNo 3) [mk 0x03]
+                applyAtSlot h (SlotNo 4) [mk 0x04]
+                rollbackTo h (SlotNo 2)
+                xs <- snapshotAt h addr
+                fmap (txInId . fst) xs
+                    `shouldBe` [ BS.replicate 32 0x01
+                               , BS.replicate 32 0x02
+                               ]
+
+        it "restores a spent UTxO" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    txin = TxIn (BS.replicate 32 0x11) 0
+                applyAtSlot
+                    h
+                    (SlotNo 1)
+                    [UtxoCreate txin addr (TxOut "v")]
+                applyAtSlot h (SlotNo 2) [UtxoSpend txin]
+                rollbackTo h (SlotNo 1)
+                xs <- snapshotAt h addr
+                xs `shouldBe` [(txin, TxOut "v")]
+
+        it "is idempotent at the same target" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    txin = TxIn (BS.replicate 32 0x11) 0
+                applyAtSlot
+                    h
+                    (SlotNo 5)
+                    [UtxoCreate txin addr (TxOut "v")]
+                rollbackTo h (SlotNo 3)
+                rollbackTo h (SlotNo 3)
+                xs <- snapshotAt h addr
+                xs `shouldBe` []
 
 {- | Build a synthetic 'Address' of the given length with
 a fixed body byte. Lets tests construct Shelley-shaped
