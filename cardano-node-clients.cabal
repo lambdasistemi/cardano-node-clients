@@ -57,6 +57,7 @@ library
     Cardano.Node.Client.Submitter
     Cardano.Node.Client.TxBuild
     Cardano.Node.Client.Types
+    Cardano.Node.Client.UTxOIndexer.BlockExtract
     Data.List.SampleFibonacci
 
   build-depends:
@@ -64,15 +65,19 @@ library
     , base
     , bytestring
     , cardano-binary
+    , cardano-crypto-class
     , cardano-diffusion
     , cardano-diffusion:protocols
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
+    , cardano-ledger-binary
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
+    , cardano-ledger-read
+    , cardano-node-clients:utxo-indexer-lib
     , cardano-prelude
     , cardano-slotting
     , cardano-strict-containers
