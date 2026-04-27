@@ -24,11 +24,13 @@ import Cardano.Node.Client.UTxOIndexer.Server (
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
+    BlockHash (..),
     SlotNo (..),
     TxIn (..),
     TxOut (..),
  )
 import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (bracket, try)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
@@ -74,7 +76,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Server" $ do
             let addr = Address (BS.replicate 29 0xAA)
                 txin = TxIn (BS.replicate 32 0x11) 0
                 txout = TxOut "value-bytes-0"
-            applyAtSlot idx (SlotNo 1) [UtxoCreate txin addr txout]
+            applyAtSlot idx (SlotNo 1) testBlockHash [UtxoCreate txin addr txout]
             withSystemTempDirectory "indexer-server" $ \dir -> do
                 let sockPath = dir <> "/sock"
                 tid <-
@@ -105,6 +107,66 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Server" $ do
                 `shouldSatisfy` ( \case
                                     Just (Aeson.Object o) ->
                                         KM.member (Key.fromText "error") o
+                                    _ -> False
+                                )
+
+    it "await fires when the awaited TxIn is later created" $
+        withInMemoryIndexer $ \idx -> do
+            let addr = Address (BS.replicate 29 0xAA)
+                txin = TxIn (BS.replicate 32 0x77) 0
+                txout = TxOut "value-await"
+            withSystemTempDirectory "indexer-server" $ \dir -> do
+                let sockPath = dir <> "/sock"
+                tid <-
+                    forkIO
+                        (runServer sockPath idx (pure ready1))
+                waitForFile sockPath
+                -- Kick off the await client in a background
+                -- thread; meanwhile, apply the create.
+                respMVar <- newEmptyMVar
+                _ <-
+                    forkIO $ do
+                        let req =
+                                "{\"await\":\""
+                                    <> hexStr (BS.replicate 32 0x77)
+                                    <> "#0\"}\n"
+                        r <-
+                            request
+                                sockPath
+                                ( BS.pack
+                                    (map (fromIntegral . fromEnum) req)
+                                )
+                        putMVar respMVar r
+                threadDelay 50_000
+                applyAtSlot
+                    idx
+                    (SlotNo 7)
+                    (BlockHash (BS.replicate 32 0xBB))
+                    [UtxoCreate txin addr txout]
+                resp <- takeMVar respMVar
+                killThread tid
+                _ <- removeIfPresent sockPath
+                case Aeson.decodeStrict' resp of
+                    Just (Aeson.Object o) -> do
+                        KM.lookup (Key.fromText "slot") o
+                            `shouldBe` Just (Aeson.Number 7)
+                    _ -> fail ("unexpected: " <> show resp)
+
+    it "await with a 1-second timeout returns timeout when nothing arrives" $
+        withTestServer ready1 $ \sockPath -> do
+            let req =
+                    "{\"await\":\""
+                        <> hexStr (BS.replicate 32 0x99)
+                        <> "#0\",\"timeout_seconds\":1}\n"
+            resp <-
+                request
+                    sockPath
+                    (BS.pack (map (fromIntegral . fromEnum) req))
+            Aeson.decodeStrict' resp
+                `shouldSatisfy` ( \case
+                                    Just (Aeson.Object o) ->
+                                        KM.lookup (Key.fromText "timeout") o
+                                            == Just (Aeson.Bool True)
                                     _ -> False
                                 )
 
@@ -187,6 +249,12 @@ request sockPath payload =
 
 hex :: BS.ByteString -> Text.Text
 hex = Text.decodeUtf8 . Base16.encode
+
+hexStr :: BS.ByteString -> String
+hexStr = Text.unpack . hex
+
+testBlockHash :: BlockHash
+testBlockHash = BlockHash (BS.replicate 32 0)
 
 decodeReady ::
     BS.ByteString ->

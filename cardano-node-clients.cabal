@@ -157,13 +157,16 @@ library utxo-indexer-lib
     Cardano.Node.Client.UTxOIndexer.Types
 
   build-depends:
+    , async
     , base
     , bytestring
+    , containers
     , dependent-map
     , dependent-sum
     , lens
     , rocksdb-kv-transactions:kv-transactions
     , some
+    , stm
 
 executable utxo-indexer
   import:           warnings

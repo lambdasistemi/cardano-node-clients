@@ -19,6 +19,7 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
+    BlockHash (..),
     SlotNo (..),
     TxIn (..),
     TxOut (..),
@@ -39,7 +40,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 let addr = mkAddr 0xAA 29
                     txin = TxIn (BS.replicate 32 0x11) 0
                     txout = TxOut "value-bytes-0"
-                applyAtSlot h (SlotNo 1) [UtxoCreate txin addr txout]
+                applyAtSlot h (SlotNo 1) testBlockHash [UtxoCreate txin addr txout]
                 xs <- snapshotAt h addr
                 xs `shouldBe` [(txin, txout)]
 
@@ -54,6 +55,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 1)
+                    testBlockHash
                     [ mkRow 0x33 5 "c"
                     , mkRow 0x11 0 "a"
                     , mkRow 0x22 0 "b"
@@ -73,6 +75,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 1)
+                    testBlockHash
                     [ UtxoCreate txin a1 (TxOut "for-a1")
                     , UtxoCreate txin a2 (TxOut "for-a2")
                     ]
@@ -89,6 +92,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 1)
+                    testBlockHash
                     [ UtxoCreate txin a29 (TxOut "29")
                     , UtxoCreate txin a60 (TxOut "60")
                     ]
@@ -105,10 +109,11 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 1)
+                    testBlockHash
                     [ UtxoCreate txin1 addr (TxOut "v1")
                     , UtxoCreate txin2 addr (TxOut "v2")
                     ]
-                applyAtSlot h (SlotNo 2) [UtxoSpend txin1]
+                applyAtSlot h (SlotNo 2) testBlockHash [UtxoSpend txin1]
                 xs <- snapshotAt h addr
                 xs `shouldBe` [(txin2, TxOut "v2")]
 
@@ -120,8 +125,9 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 1)
+                    testBlockHash
                     [UtxoCreate txin1 addr (TxOut "v")]
-                applyAtSlot h (SlotNo 2) [UtxoSpend txin2]
+                applyAtSlot h (SlotNo 2) testBlockHash [UtxoSpend txin2]
                 xs <- snapshotAt h addr
                 xs `shouldBe` [(txin1, TxOut "v")]
 
@@ -139,6 +145,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 5)
+                    testBlockHash
                     [UtxoCreate txin addr (TxOut "v")]
                 rollbackTo h (SlotNo 4)
                 xs <- snapshotAt h addr
@@ -152,10 +159,10 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                             (TxIn (BS.replicate 32 tid) 0)
                             addr
                             (TxOut (BS.singleton tid))
-                applyAtSlot h (SlotNo 1) [mk 0x01]
-                applyAtSlot h (SlotNo 2) [mk 0x02]
-                applyAtSlot h (SlotNo 3) [mk 0x03]
-                applyAtSlot h (SlotNo 4) [mk 0x04]
+                applyAtSlot h (SlotNo 1) testBlockHash [mk 0x01]
+                applyAtSlot h (SlotNo 2) testBlockHash [mk 0x02]
+                applyAtSlot h (SlotNo 3) testBlockHash [mk 0x03]
+                applyAtSlot h (SlotNo 4) testBlockHash [mk 0x04]
                 rollbackTo h (SlotNo 2)
                 xs <- snapshotAt h addr
                 fmap (txInId . fst) xs
@@ -170,8 +177,9 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 1)
+                    testBlockHash
                     [UtxoCreate txin addr (TxOut "v")]
-                applyAtSlot h (SlotNo 2) [UtxoSpend txin]
+                applyAtSlot h (SlotNo 2) testBlockHash [UtxoSpend txin]
                 rollbackTo h (SlotNo 1)
                 xs <- snapshotAt h addr
                 xs `shouldBe` [(txin, TxOut "v")]
@@ -183,6 +191,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 applyAtSlot
                     h
                     (SlotNo 5)
+                    testBlockHash
                     [UtxoCreate txin addr (TxOut "v")]
                 rollbackTo h (SlotNo 3)
                 rollbackTo h (SlotNo 3)
@@ -196,3 +205,9 @@ pulling ledger types into the indexer's test deps.
 -}
 mkAddr :: Int -> Int -> Address
 mkAddr body len = Address (BS.replicate len (fromIntegral body))
+
+{- | A constant 32-byte block hash for tests where the
+block hash isn't load-bearing.
+-}
+testBlockHash :: BlockHash
+testBlockHash = BlockHash (BS.replicate 32 0)
