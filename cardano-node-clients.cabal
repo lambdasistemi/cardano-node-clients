@@ -237,8 +237,10 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.MultiAssetChangeSpec
     Cardano.Node.Client.E2E.ProviderSpec
     Cardano.Node.Client.E2E.TxBuildSpec
+    Cardano.Node.Client.E2E.UTxOIndexerSpec
 
   build-depends:
+    , aeson
     , async
     , base
     , base16-bytestring
@@ -259,9 +261,14 @@ test-suite e2e-tests
     , chain-follower
     , containers
     , contra-tracer
+    , directory
+    , filepath
     , hspec
     , lens
     , microlens
+    , network
     , ouroboros-network:api
     , rocksdb-kv-transactions:kv-transactions
     , stm
+    , temporary
+    , text
