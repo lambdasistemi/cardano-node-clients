@@ -56,6 +56,14 @@ library
     Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
     Cardano.Node.Client.TxBuild
+    Cardano.Node.Client.TxGenerator.Build
+    Cardano.Node.Client.TxGenerator.Fanout
+    Cardano.Node.Client.TxGenerator.Persist
+    Cardano.Node.Client.TxGenerator.Population
+    Cardano.Node.Client.TxGenerator.Selection
+    Cardano.Node.Client.TxGenerator.Server
+    Cardano.Node.Client.TxGenerator.Snapshot
+    Cardano.Node.Client.TxGenerator.Types
     Cardano.Node.Client.Types
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
@@ -184,6 +192,16 @@ executable utxo-indexer
     , base
     , cardano-node-clients
     , cardano-node-clients:utxo-indexer-lib
+
+executable cardano-tx-generator
+  import:           warnings
+  hs-source-dirs:   app/cardano-tx-generator
+  main-is:          Main.hs
+  default-language: GHC2021
+  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    , base
+    , cardano-node-clients
 
 test-suite unit-tests
   import:           warnings
