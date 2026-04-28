@@ -95,7 +95,8 @@ import Database.KV.Cursor (
     prevEntry,
     seekKey,
  )
-import Database.KV.Database (KV, mkColumns)
+import Data.Dependent.Map (DMap)
+import Database.KV.Database (Column, KV, mkColumns)
 import Database.KV.InMemory (mkInMemoryDatabase)
 import Database.KV.Transaction (
     DSum ((:=>)),
@@ -157,22 +158,48 @@ data IndexerHandle = IndexerHandle
 
 {- | Open an in-memory indexer, run the action with the
 handle, and clean up on exit.
+
+A fresh in-memory database starts empty, but we still
+seed the rollback-log counter via 'countRollbackEntries'
+to keep this constructor's wiring identical to the
+RocksDB one (so any future on-disk shape that reuses
+'mkInMemoryDatabase' for tests reads correctly).
 -}
 withInMemoryIndexer :: (IndexerHandle -> IO a) -> IO a
 withInMemoryIndexer action = do
+    db <- mkInMemoryDatabase indexerColumns
+    runner <- newRunTransaction db
+    initialCount <- runTransaction runner countRollbackEntries
+    waitersVar <- newTVarIO Map.empty
+    observedVar <- newTVarIO Map.empty
+    countVar <- newTVarIO initialCount
+    action (mkHandle runner waitersVar observedVar countVar)
+
+-- | Shared column definitions (same for in-memory and
+-- RocksDB backends).
+indexerColumns :: DMap Cols (Column Int)
+indexerColumns =
     let codecs =
             fromList
                 [ TxInCol :=> txInColCodecs
                 , AddressIndex :=> addressIndexCodecs
                 , RollbackCol :=> rollbackCodecs
                 ]
-        columns = mkColumns [0 :: Int ..] codecs
-    db <- mkInMemoryDatabase columns
-    runner <- newRunTransaction db
-    waitersVar <- newTVarIO Map.empty
-    observedVar <- newTVarIO Map.empty
-    countVar <- newTVarIO (0 :: Int)
-    action (mkHandle runner waitersVar observedVar countVar)
+     in mkColumns [0 :: Int ..] codecs
+
+{- | One-shot scan of 'RollbackCol' returning the entry
+count. O(n) in the column size — called once at startup
+and never again; the in-memory counter handles steady
+state.
+-}
+countRollbackEntries ::
+    Transaction IO Int Cols Op Int
+countRollbackEntries =
+    iterating RollbackCol $
+        firstEntry >>= go 0
+  where
+    go !n Nothing = pure n
+    go !n (Just _) = nextEntry >>= go (n + 1)
 
 -- Internal -------------------------------------------------------
 
