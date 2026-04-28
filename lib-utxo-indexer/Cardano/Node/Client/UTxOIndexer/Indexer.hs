@@ -50,6 +50,9 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     -- * Operations
     UtxoOp (..),
 
+    -- * Replay conflict
+    ApplyConflict (..),
+
     -- * Await observations
     AwaitObservation (..),
 ) where
@@ -71,6 +74,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
  )
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
+import Control.Exception (Exception, throwIO)
 import Control.Concurrent.STM (
     STM,
     TMVar,
@@ -120,6 +124,28 @@ import Database.RocksDB (
     withDBCF,
  )
 
+{- | Thrown by 'applyAtSlot' when 'RollbackCol' already
+has an entry at the requested slot whose 'BlockHash'
+differs from the one the caller is trying to apply.
+
+This means the daemon is being driven with a chain that
+diverges from the one already persisted on disk. State
+is left untouched; resolving the conflict by finding an
+older intersection or rebuilding from Origin is the
+recoverability story (#86), not the storage-only #85.
+
+A same-slot, /same/-hash apply is the silent replay
+guard: it returns @()@ without updating any state.
+-}
+data ApplyConflict = ApplyConflict
+    { acSlot :: !SlotNo
+    , acExistingBlockHash :: !BlockHash
+    , acAttemptedBlockHash :: !BlockHash
+    }
+    deriving stock (Eq, Show)
+
+instance Exception ApplyConflict
+
 {- | An observed @TxIn@ apparition: the slot and block
 hash the daemon was at when it processed the
 creating block, plus the @TxOut@ inserted.
@@ -135,12 +161,21 @@ data AwaitObservation = AwaitObservation
 the indexer state.
 -}
 data IndexerHandle = IndexerHandle
-    { applyAtSlot :: SlotNo -> BlockHash -> [UtxoOp] -> IO ()
+    { applyAtSlot ::
+        SlotNo -> BlockHash -> [UtxoOp] -> IO ()
     -- ^ Atomically apply a batch of create/spend
     -- operations and store the inverse list under the
     -- given slot in 'RollbackCol'. After the
     -- transaction commits, fire any 'awaitTxIn'
     -- waiters whose 'TxIn' was just created.
+    --
+    -- Replay-aware: if 'RollbackCol' already has an
+    -- entry at @slot@ with the /same/ 'BlockHash' the
+    -- call is a silent no-op — state, counter, and
+    -- waiters are all left untouched. With a /different/
+    -- 'BlockHash' an 'ApplyConflict' is thrown;
+    -- 'applyAtSlot' never silently overwrites a
+    -- previously-applied row.
     , rollbackTo :: SlotNo -> IO ()
     -- ^ Roll the index back to the given slot by
     -- replaying inverse-op lists for every slot
@@ -284,15 +319,25 @@ mkHandle
     countVar =
         IndexerHandle
             { applyAtSlot = \slot bh ops -> do
-                runTransaction (applyAndLog slot bh ops)
-                atomically $ do
-                    modifyTVar' countVar (+ 1)
-                    fireWaiters
-                        waitersVar
-                        observedVar
-                        slot
-                        bh
-                        ops
+                outcome <- runTransaction (applyAndLog slot bh ops)
+                case outcome of
+                    Applied ->
+                        atomically $ do
+                            modifyTVar' countVar (+ 1)
+                            fireWaiters
+                                waitersVar
+                                observedVar
+                                slot
+                                bh
+                                ops
+                    AlreadyApplied -> pure ()
+                    Conflict existing _attempted ->
+                        throwIO
+                            ApplyConflict
+                                { acSlot = slot
+                                , acExistingBlockHash = existing
+                                , acAttemptedBlockHash = bh
+                                }
             , rollbackTo = \slot -> do
                 deleted <- runTransaction (rollbackToSlot slot)
                 atomically $ do
@@ -317,10 +362,52 @@ mkHandle
             , awaitTxIn = doAwait waitersVar observedVar
             }
 
-{- | Within one transaction: for each op compute its
-inverse against the current state, apply the op, and
-finally store the reversed list of inverses under
-@slot@ in 'RollbackCol'.
+{- | Internal: outcome of the apply transaction. Private
+to this module — the public API surfaces 'Applied' /
+'AlreadyApplied' as an @IO ()@ (with conflict throwing
+'ApplyConflict').
+-}
+data ApplyResult
+    = Applied
+    | AlreadyApplied
+    | Conflict !BlockHash !BlockHash
+
+{- | Within one transaction: decide whether @slot@ has
+already been applied.
+
+The watermark is 'RollbackCol''s @lastEntry@ — the most
+recent applied @(slot, blockHash)@ pair. We rely on
+this rather than @query RollbackCol slot@ alone because
+finality pruning ('pruneRollbacks') drops the rollback
+rows of older finalized slots; their @(slot,
+blockHash)@ pair is gone from the column even though
+the slot is firmly applied.
+
+Decision tree:
+
+* @slot > tipSlot@ (or column empty) — fresh apply.
+  Compute inverses, apply each op, store the reversed
+  inverse list under @slot@, return 'Applied'.
+* @slot ≤ tipSlot@ — the slot is in the past. We have
+  two cases:
+    * 'RollbackCol' still has a row for @slot@: compare
+      hashes (same → 'AlreadyApplied', differs →
+      'Conflict').
+    * Pruned out — return 'AlreadyApplied'. We cannot
+      detect a hash conflict at a slot whose history
+      we no longer have, but we know the slot was
+      applied (by virtue of being below the tip), so
+      replay-from-Origin must skip it. Detecting fork
+      conflicts past the security parameter is out of
+      scope here (it would require keeping every
+      historical @(slot, hash)@ forever).
+
+Without this watermark check the previous implementation
+had a soft-corruption bug: replay-from-Origin against a
+populated, partially-pruned DB would re-apply early
+slots whose rollback row had been pruned but skip later
+slots whose row survived, resurrecting any UTxO that was
+created early and later spent.
 
 Computing the inverse before applying is essential —
 @query@ inside the same transaction sees buffered
@@ -331,11 +418,34 @@ applyAndLog ::
     SlotNo ->
     BlockHash ->
     [UtxoOp] ->
-    Transaction IO cf Cols op ()
+    Transaction IO cf Cols op ApplyResult
 applyAndLog slot bh ops = do
-    inverses <- traverse step ops
-    insert RollbackCol slot (bh, reverse inverses)
+    mTip <-
+        iterating RollbackCol $
+            fmap toTip <$> lastEntry
+    case mTip of
+        Nothing -> applyFresh
+        Just (tipSlot, _)
+            | slot > tipSlot -> applyFresh
+            | otherwise -> do
+                existing <- query RollbackCol slot
+                case existing of
+                    Nothing ->
+                        -- Pruned: we can't compare hashes,
+                        -- but the slot is below the tip so
+                        -- it has been applied.
+                        pure AlreadyApplied
+                    Just (existingBh, _)
+                        | existingBh == bh -> pure AlreadyApplied
+                        | otherwise ->
+                            pure (Conflict existingBh bh)
   where
+    toTip Entry{entryKey, entryValue = (b, _)} =
+        (entryKey, b)
+    applyFresh = do
+        inverses <- traverse step ops
+        insert RollbackCol slot (bh, reverse inverses)
+        pure Applied
     step op = do
         inv <- inverseOf op
         applyOne op
