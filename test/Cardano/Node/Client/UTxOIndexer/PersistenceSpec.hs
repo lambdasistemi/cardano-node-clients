@@ -12,6 +12,7 @@ module Cardano.Node.Client.UTxOIndexer.PersistenceSpec (spec) where
 
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     ApplyConflict (..),
+    AwaitObservation (..),
     IndexerHandle (..),
     UtxoOp (..),
     withRocksDBIndexer,
@@ -25,6 +26,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
  )
 import Control.Exception (try)
 import Data.ByteString qualified as BS
+import Data.Word (Word64)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (
@@ -128,9 +130,10 @@ spec =
                         , (SlotNo 2, testBlockHash, [mk 0x02])
                         , (SlotNo 3, testBlockHash, [mk 0x03])
                         ]
-                    apply h = mapM_
-                        (\(s, b, o) -> applyAtSlot h s b o)
-                        blocks
+                    apply h =
+                        mapM_
+                            (\(s, b, o) -> applyAtSlot h s b o)
+                            blocks
                 withRocksDBIndexer dbPath $ \h -> apply h
                 -- Reopen and replay the entire stream — every call
                 -- should be a no-op.
@@ -190,6 +193,52 @@ spec =
                     apply h spend
                     snapshotAt h addr >>= (`shouldBe` [])
 
+        it "awaitTxIn returns immediately for an indexed TxIn after reopen" $
+            -- The in-process @observedVar@ is empty after reopen.
+            -- Persistent 'ObservationCol' must fill the gap so
+            -- 'awaitTxIn' on an already-indexed unspent TxIn
+            -- returns immediately rather than timing out.
+            withTempDB $ \dbPath -> do
+                let addr = Address (BS.replicate 29 0xAA)
+                    txin = TxIn (BS.replicate 32 0x77) 0
+                    txout = TxOut "value-await"
+                    bh = BlockHash (BS.replicate 32 0xBB)
+                withRocksDBIndexer dbPath $ \h ->
+                    applyAtSlot
+                        h
+                        (SlotNo 7)
+                        bh
+                        [UtxoCreate txin addr txout]
+                withRocksDBIndexer dbPath $ \h -> do
+                    -- 1-second timeout: if the fast path is broken,
+                    -- this returns Nothing; if it works, the call
+                    -- returns immediately with the observation.
+                    obs <- awaitTxIn h txin (Just 1)
+                    obs `shouldBe` Just (mkObservation 7 bh txout)
+
+        it "awaitTxIn after spend across reopen returns Nothing on timeout" $
+            -- A TxIn that's been spent should not have a persistent
+            -- observation — the spend deleted it. After reopen,
+            -- 'awaitTxIn' falls back to the slow path and times out.
+            withTempDB $ \dbPath -> do
+                let addr = Address (BS.replicate 29 0xAA)
+                    txin = TxIn (BS.replicate 32 0x88) 0
+                    bh = BlockHash (BS.replicate 32 0xBB)
+                withRocksDBIndexer dbPath $ \h -> do
+                    applyAtSlot
+                        h
+                        (SlotNo 1)
+                        bh
+                        [UtxoCreate txin addr (TxOut "v")]
+                    applyAtSlot
+                        h
+                        (SlotNo 2)
+                        (BlockHash (BS.replicate 32 0xCC))
+                        [UtxoSpend txin]
+                withRocksDBIndexer dbPath $ \h -> do
+                    obs <- awaitTxIn h txin (Just 1)
+                    obs `shouldBe` Nothing
+
         it "same slot + different blockhash is rejected" $
             -- Two different blocks claiming the same slot is the
             -- "I'm on a different fork than what's persisted"
@@ -213,7 +262,7 @@ spec =
                                 h
                                 (SlotNo 5)
                                 bh2
-                                [UtxoCreate
+                                [ UtxoCreate
                                     txin
                                     addr
                                     (TxOut "v2")
@@ -236,3 +285,12 @@ withTempDB action =
 
 testBlockHash :: BlockHash
 testBlockHash = BlockHash (BS.replicate 32 0)
+
+mkObservation ::
+    Word64 -> BlockHash -> TxOut -> AwaitObservation
+mkObservation slot bh txOut =
+    AwaitObservation
+        { aoSlot = SlotNo slot
+        , aoBlockHash = bh
+        , aoTxOut = txOut
+        }

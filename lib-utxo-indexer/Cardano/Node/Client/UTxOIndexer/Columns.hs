@@ -41,6 +41,7 @@ module Cardano.Node.Client.UTxOIndexer.Columns (
     -- * Codecs
     txInColCodecs,
     addressIndexCodecs,
+    observationColCodecs,
     rollbackCodecs,
 
     -- * Inverse-op list encoding
@@ -96,11 +97,21 @@ data Cols c where
     -- this entry — recorded so a future startup can
     -- recover the resume @Point@ from the latest entry.
     RollbackCol :: Cols (KV SlotNo (BlockHash, [UtxoOp]))
+    -- | Observation index: every live (i.e. created and
+    -- not yet spent) 'TxIn' carries the @('SlotNo',
+    -- 'BlockHash')@ of the block that created it. Used
+    -- by 'awaitTxIn' to answer "has this TxIn been
+    -- observed?" across process restart — the in-process
+    -- @Observed@ TVar is empty after reopen, but this
+    -- column persists, so the fast path reconstructs
+    -- the observation from on-disk state.
+    ObservationCol :: Cols (KV TxIn (SlotNo, BlockHash))
 
 instance GEq Cols where
     geq TxInCol TxInCol = Just Refl
     geq AddressIndex AddressIndex = Just Refl
     geq RollbackCol RollbackCol = Just Refl
+    geq ObservationCol ObservationCol = Just Refl
     geq _ _ = Nothing
 
 instance GCompare Cols where
@@ -108,8 +119,11 @@ instance GCompare Cols where
     gcompare TxInCol _ = GLT
     gcompare _ TxInCol = GGT
     gcompare AddressIndex AddressIndex = GEQ
-    gcompare AddressIndex RollbackCol = GLT
-    gcompare RollbackCol AddressIndex = GGT
+    gcompare AddressIndex _ = GLT
+    gcompare _ AddressIndex = GGT
+    gcompare ObservationCol ObservationCol = GEQ
+    gcompare ObservationCol RollbackCol = GLT
+    gcompare RollbackCol ObservationCol = GGT
     gcompare RollbackCol RollbackCol = GEQ
 
 -- | Codecs for 'TxInCol'.
@@ -126,6 +140,17 @@ addressIndexCodecs =
     Codecs
         { keyCodec = addrKeyPrism
         , valueCodec = txOutPrism
+        }
+
+{- | Codecs for the observation column. The value is
+@slotBytes(8 BE) || blockHashLen(4 BE) || blockHash@.
+-}
+observationColCodecs ::
+    Codecs (KV TxIn (SlotNo, BlockHash))
+observationColCodecs =
+    Codecs
+        { keyCodec = txInPrism
+        , valueCodec = observationPrism
         }
 
 {- | Codecs for the rollback-log column. The on-disk
@@ -183,6 +208,22 @@ rollbackEntryPrism = prism' encode decode
         (bhBs, rest) <- readLenPrefixed bs0
         ops <- decodeOps rest
         Just (BlockHash bhBs, ops)
+
+{- | Codec for the @('SlotNo', 'BlockHash')@ observation
+entry: @slotBytes(8 BE) || blockHashLen(4 BE) || blockHash@.
+-}
+observationPrism :: Prism' ByteString (SlotNo, BlockHash)
+observationPrism = prism' encode decode
+  where
+    encode (slot, BlockHash bh) =
+        slotToBytes slot <> lenPrefixed bh
+    decode bs0 = do
+        (slotBs, rest0) <- splitFixed 8 bs0
+        slot <- slotFromBytes slotBs
+        (bhBs, rest1) <- readLenPrefixed rest0
+        if BS.null rest1
+            then Just (slot, BlockHash bhBs)
+            else Nothing
 
 -- Inverse-op list binary encoding ---------------------------------
 --
