@@ -97,6 +97,7 @@ library
     , contra-tracer
     , directory
     , dns
+    , filepath
     , iproute
     , microlens
     , network
@@ -213,6 +214,7 @@ test-suite unit-tests
     Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.TxBuildGoldenSpec
     Cardano.Node.Client.TxBuildSpec
+    Cardano.Node.Client.TxGenerator.PersistSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
@@ -221,6 +223,7 @@ test-suite unit-tests
 
   build-depends:
     , aeson
+    , async
     , base
     , base16-bytestring
     , bytestring
