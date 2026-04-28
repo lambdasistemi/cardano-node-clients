@@ -77,13 +77,6 @@ import ChainFollower.Rollbacks.Store qualified as Rollbacks
 import ChainFollower.Rollbacks.Types (
     RollbackPoint (..),
  )
-import Data.IORef (
-    IORef,
-    newIORef,
-    readIORef,
-    writeIORef,
- )
-import Data.List.SampleFibonacci (sampleAtFibonacciIntervals)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (
@@ -105,6 +98,13 @@ import Data.ByteString qualified as BS
 import Data.Default.Class (def)
 import Data.Dependent.Map (DMap)
 import Data.Foldable (traverse_)
+import Data.IORef (
+    IORef,
+    newIORef,
+    readIORef,
+    writeIORef,
+ )
+import Data.List.SampleFibonacci (sampleAtFibonacciIntervals)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Database.KV.Cursor (
