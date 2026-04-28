@@ -273,6 +273,7 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.TxBuildSpec
     Cardano.Node.Client.E2E.TxGeneratorReadySpec
     Cardano.Node.Client.E2E.TxGeneratorRefillSpec
+    Cardano.Node.Client.E2E.TxGeneratorTransactSpec
     Cardano.Node.Client.E2E.UTxOIndexerSpec
 
   build-depends:
@@ -305,6 +306,7 @@ test-suite e2e-tests
     , network
     , ouroboros-network:api
     , rocksdb-kv-transactions:kv-transactions
+    , scientific
     , stm
     , temporary
     , text
