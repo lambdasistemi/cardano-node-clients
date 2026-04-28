@@ -1,24 +1,36 @@
 {- |
 Module      : Cardano.Node.Client.N2C.Connection
-Description : N2C connection with LSQ + LTxS
+Description : N2C connection helpers (LSQ + LTxS, optionally + ChainSync)
 License     : Apache-2.0
 
-Establishes a node-to-client (N2C) connection via
-Unix socket, multiplexing two mini-protocols:
-LocalStateQuery (num 7) for UTxO and protocol
-parameter queries, and LocalTxSubmission (num 6)
-for signed transaction submission. The connection
-blocks until closed — run in a background thread.
+Establishes a node-to-client (N2C) connection via Unix
+socket. Two helpers:
+
+* 'runNodeClient' multiplexes two mini-protocols on one
+  mux session: LocalTxSubmission (num 6) and
+  LocalStateQuery (num 7).
+
+* 'runNodeClientFull' adds ChainSync (num 5) to the same
+  session — a single physical connection that carries all
+  three protocols. Use this for any process that needs
+  more than one of {ChainSync, LSQ, LTxS} (for example,
+  the cardano-tx-generator daemon at
+  @app/cardano-tx-generator/@).
+
+Both helpers block until the connection is closed — run
+in a background thread.
 -}
 module Cardano.Node.Client.N2C.Connection (
     -- * Connection
     runNodeClient,
+    runNodeClientFull,
 
     -- * Channel creation
     newLSQChannel,
     newLTxSChannel,
 ) where
 
+import Cardano.Chain.Slotting (EpochSlots)
 import Cardano.Network.NodeToClient (
     NodeToClientVersion (..),
     NodeToClientVersionData (..),
@@ -30,8 +42,12 @@ import Cardano.Network.Protocol.LocalStateQuery.Codec (
     Some (..),
     codecLocalStateQuery,
  )
+import Cardano.Node.Client.N2C.ChainSync (
+    N2CChainSyncApplication,
+ )
 import Cardano.Node.Client.N2C.Codecs (
     ccfg,
+    codecChainSyncN2C,
     n2cVersion,
  )
 import Cardano.Node.Client.N2C.LocalStateQuery (
@@ -95,6 +111,7 @@ import Ouroboros.Network.Mux (
     ),
     mkMiniProtocolCbFromPeer,
  )
+import Ouroboros.Network.Protocol.ChainSync.Client qualified as ChainSync
 import Ouroboros.Network.Protocol.Handshake.Version (
     simpleSingletonVersions,
  )
@@ -163,6 +180,163 @@ mkN2CApp lsqCh ltxsCh =
     OuroborosApplication
         { getOuroborosApplication =
             [ -- LocalTxSubmission (num 6)
+              MiniProtocol
+                { miniProtocolNum =
+                    MiniProtocolNum 6
+                , miniProtocolStart = StartOnDemand
+                , miniProtocolLimits = maxLimits
+                , miniProtocolRun =
+                    InitiatorProtocolOnly $
+                        mkMiniProtocolCbFromPeer $
+                            const
+                                ( nullTracer
+                                , ltxsCodec
+                                , LTxS.localTxSubmissionClientPeer $
+                                    mkLocalTxSubmissionClient
+                                        ltxsCh
+                                )
+                }
+            , -- LocalStateQuery (num 7)
+              MiniProtocol
+                { miniProtocolNum =
+                    MiniProtocolNum 7
+                , miniProtocolStart = StartOnDemand
+                , miniProtocolLimits = maxLimits
+                , miniProtocolRun =
+                    InitiatorProtocolOnly $
+                        MiniProtocolCb $
+                            \_ctx channel ->
+                                Stateful.runPeer
+                                    nullTracer
+                                    lsqCodec
+                                    channel
+                                    StateIdle
+                                    $ LSQ.localStateQueryClientPeer
+                                    $ mkLocalStateQueryClient
+                                        lsqCh
+                }
+            ]
+        }
+  where
+    ltxsCodec =
+        LTxSCodec.codecLocalTxSubmission
+            (encodeNodeToClient @Block ccfg n2cVersion)
+            (decodeNodeToClient @Block ccfg n2cVersion)
+            (encodeNodeToClient @Block ccfg n2cVersion)
+            (decodeNodeToClient @Block ccfg n2cVersion)
+    lsqCodec =
+        codecLocalStateQuery
+            NodeToClientV_20
+            (encodePoint (encodeRawHash (Proxy @Block)))
+            (decodePoint (decodeRawHash (Proxy @Block)))
+            ( queryEncodeNodeToClient
+                ccfg
+                qv
+                n2cVersion
+                . SomeSecond
+            )
+            ( (\(SomeSecond q) -> Some q)
+                <$> queryDecodeNodeToClient
+                    ccfg
+                    qv
+                    n2cVersion
+            )
+            (encodeResult ccfg n2cVersion)
+            (decodeResult ccfg n2cVersion)
+    qv =
+        nodeToClientVersionToQueryVersion
+            NodeToClientV_20
+
+{- | Connect to a Cardano node via Unix socket and run
+ChainSync + LocalStateQuery + LocalTxSubmission clients
+on a single mux session.
+
+Equivalent to 'runNodeClient' plus a third mini-protocol
+for ChainSync (num 5). Use this for any consumer that
+needs more than one of the three protocols at once — for
+example, the cardano-tx-generator daemon, which feeds an
+in-process address-to-UTxO indexer from chain-sync,
+queries protocol parameters via LSQ at startup, and
+submits transactions via LTxS, all on one physical
+connection.
+
+The chain-sync application is built by the caller via
+'Cardano.Node.Client.N2C.ChainSync.mkChainSyncN2C' (or
+equivalent) and passed in here. This module owns only the
+connection wiring; the chain-sync follower lives with its
+caller.
+
+Blocks until the connection is closed or an error occurs.
+Run in a background thread with
+'Control.Concurrent.Async.async'.
+-}
+runNodeClientFull ::
+    -- | Network magic
+    NetworkMagic ->
+    -- | Byron epoch slots (for the chain-sync codec)
+    EpochSlots ->
+    -- | Path to the node Unix socket
+    FilePath ->
+    -- | ChainSync application
+    N2CChainSyncApplication ->
+    -- | Channel for LocalStateQuery requests
+    LSQChannel ->
+    -- | Channel for LocalTxSubmission requests
+    LTxSChannel ->
+    IO (Either SomeException ())
+runNodeClientFull magic epochSlots socketPath chainSyncApp lsqCh ltxsCh =
+    withIOManager $ \ioManager ->
+        connectTo
+            (localSnocket ioManager)
+            nullNetworkConnectTracers
+            ( simpleSingletonVersions
+                NodeToClientV_20
+                NodeToClientVersionData
+                    { networkMagic = magic
+                    , query = False
+                    }
+                $ const
+                $ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh
+            )
+            socketPath
+
+{- | Build the N2C application with ChainSync (num 5),
+LocalTxSubmission (num 6), and LocalStateQuery (num 7) on
+the same 'OuroborosApplication'. The handshake at
+'NodeToClientV_20' admits all three together.
+-}
+mkN2CFullApp ::
+    EpochSlots ->
+    N2CChainSyncApplication ->
+    LSQChannel ->
+    LTxSChannel ->
+    OuroborosApplicationWithMinimalCtx
+        Mx.InitiatorMode
+        LocalAddress
+        LazyByteString
+        IO
+        ()
+        Void
+mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh =
+    OuroborosApplication
+        { getOuroborosApplication =
+            [ -- ChainSync (num 5)
+              MiniProtocol
+                { miniProtocolNum =
+                    MiniProtocolNum 5
+                , miniProtocolStart = StartOnDemand
+                , miniProtocolLimits = maxLimits
+                , miniProtocolRun =
+                    InitiatorProtocolOnly $
+                        mkMiniProtocolCbFromPeer $
+                            const
+                                ( nullTracer
+                                , codecChainSyncN2C epochSlots
+                                , ChainSync.chainSyncClientPeer
+                                    chainSyncApp
+                                )
+                }
+            , -- LocalTxSubmission (num 6)
               MiniProtocol
                 { miniProtocolNum =
                     MiniProtocolNum 6
