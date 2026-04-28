@@ -140,6 +140,7 @@ runE2E = do
                         , dcByronEpochSlots = 42
                         , dcReadyThresholdSlots = 60
                         , dcSecurityParamK = 2160
+                        , dcDbPath = Nothing
                         }
             withAsync (runDaemon cfg) $ \daemonThread -> do
                 waitForFile daemonSock 600

@@ -35,6 +35,7 @@ import Cardano.Node.Client.UTxOIndexer.BlockExtract (extractBlock)
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     withInMemoryIndexer,
+    withRocksDBIndexer,
  )
 import Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
@@ -81,18 +82,24 @@ data DaemonConfig = DaemonConfig
     -- ^ Cardano security parameter @k@ — the
     -- rollback-log entry count is capped at this many,
     -- and older entries are dropped after each apply.
+    , dcDbPath :: Maybe FilePath
+    -- ^ When 'Just', open the indexer against a RocksDB
+    -- database at this path; state survives process
+    -- restart. When 'Nothing', use the volatile
+    -- in-memory backend (intended for tests).
     }
     deriving stock (Show)
 
-{- | Open an in-memory indexer, start the NDJSON server
-and the chain-sync follower, and block. Returns when
-either side exits (chain-sync disconnect, server crash,
-etc.) — the caller is expected to supervise.
+{- | Open the indexer (RocksDB if @dcDbPath@ is set,
+in-memory otherwise), start the NDJSON server and the
+chain-sync follower, and block. Returns when either side
+exits (chain-sync disconnect, server crash, etc.) — the
+caller is expected to supervise.
 -}
 runDaemon :: DaemonConfig -> IO ()
 runDaemon cfg = do
     readyVar <- newTVarIO initialReady
-    withInMemoryIndexer $ \idx -> do
+    withIndexer (dcDbPath cfg) $ \idx -> do
         let getReady = readTVarIO readyVar
             chainAction =
                 runChainSyncN2C
@@ -115,6 +122,8 @@ runDaemon cfg = do
             , rsProcessedSlot = Nothing
             , rsSlotsBehind = Nothing
             }
+    withIndexer Nothing = withInMemoryIndexer
+    withIndexer (Just path) = withRocksDBIndexer path
 
 mkIntersector ::
     DaemonConfig ->
