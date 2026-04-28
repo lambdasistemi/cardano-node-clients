@@ -19,15 +19,16 @@ Three columns:
   @lenByte || address || txId || ix@ so a cursor seek to
   @lenByte || address@ yields every UTxO at that address
   with its full 'TxOut' inline (no second-stage lookup).
-* 'RollbackCol' :: @KV SlotNo (BlockHash, [UtxoOp])@ —
-  slot-tagged inverse-op log used to undo apply-block
-  writes on a chain-sync rollback. Keyed by 'SlotNo'
-  (8-byte BE) so cursor ordering matches numeric slot
-  ordering. The 'BlockHash' is the hash of the block
-  whose application produced the inverse list — recorded
-  here so a future restart-recoverability story can read
-  the latest entry to derive the resume @Point@ without
-  a separate tip column.
+* 'RollbackCol' :: @KV SlotNo ('RollbackPoint' 'UtxoOp'
+  'BlockHash')@ — slot-tagged inverse-op log used to
+  undo apply-block writes on a chain-sync rollback.
+  Keyed by 'SlotNo' (8-byte BE) so cursor ordering
+  matches numeric slot ordering. The value uses
+  @chain-follower@'s canonical 'RollbackPoint' shape —
+  @rpInverses@ holds the reverse-ordered op list to
+  replay, @rpMeta@ holds the block hash so a startup
+  can read the latest entry to derive the resume
+  @Point@ without a separate tip column.
 
 Both the in-memory and RocksDB backends share these
 column definitions verbatim — the column choice happens
@@ -64,6 +65,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     txInFromBytes,
     txInToBytes,
  )
+import ChainFollower.Rollbacks.Types (RollbackPoint (..))
 import Control.Lens (Prism', prism')
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.ByteString (ByteString)
@@ -90,13 +92,13 @@ data Cols c where
     -- pairs directly.
     AddressIndex :: Cols (KV AddrKey TxOut)
     -- | Rollback log: 'SlotNo' →
-    -- @('BlockHash', [inverse ops])@. The list is in the
-    -- order to apply on rollback (i.e. already reversed
-    -- relative to the original apply order). The
-    -- 'BlockHash' is the hash of the block that produced
-    -- this entry — recorded so a future startup can
-    -- recover the resume @Point@ from the latest entry.
-    RollbackCol :: Cols (KV SlotNo (BlockHash, [UtxoOp]))
+    -- @'RollbackPoint' 'UtxoOp' 'BlockHash'@. Uses
+    -- @chain-follower@'s canonical shape: @rpInverses@
+    -- is the reverse-ordered op list (already in apply
+    -- order on rollback), @rpMeta@ holds the block hash
+    -- so a future startup can recover the resume
+    -- @Point@ from the latest entry.
+    RollbackCol :: Cols (KV SlotNo (RollbackPoint UtxoOp BlockHash))
     -- | Observation index: every live (i.e. created and
     -- not yet spent) 'TxIn' carries the @('SlotNo',
     -- 'BlockHash')@ of the block that created it. Used
@@ -155,11 +157,12 @@ observationColCodecs =
 
 {- | Codecs for the rollback-log column. The on-disk
 value is @blockHashLen(4 BE) || blockHash || ops@ where
-@ops@ uses the stable hand-rolled form (see 'encodeOps')
-so a future RocksDB swap can read entries written by the
-in-memory backend.
+@ops@ uses the stable hand-rolled form (see 'encodeOps').
+Decoded into @chain-follower@'s 'RollbackPoint' shape so
+the @Rollbacks.*@ library functions accept it directly.
 -}
-rollbackCodecs :: Codecs (KV SlotNo (BlockHash, [UtxoOp]))
+rollbackCodecs ::
+    Codecs (KV SlotNo (RollbackPoint UtxoOp BlockHash))
 rollbackCodecs =
     Codecs
         { keyCodec = slotPrism
@@ -196,18 +199,34 @@ txOutPrism = prism' unTxOut (Just . TxOut)
 slotPrism :: Prism' ByteString SlotNo
 slotPrism = prism' slotToBytes slotFromBytes
 
-{- | Codec for the @(BlockHash, [UtxoOp])@ rollback
-entry: @blockHashLen(4 BE) || blockHash || encodeOps@.
+{- | Codec for the rollback entry. On-disk shape stays
+@blockHashLen(4 BE) || blockHash || encodeOps@; we just
+wrap/unwrap @chain-follower@'s 'RollbackPoint'. The
+'BlockHash' lives in @rpMeta@ as @Just bh@ — the indexer
+always records a hash, so we never produce or accept
+@Nothing@ on disk.
 -}
-rollbackEntryPrism :: Prism' ByteString (BlockHash, [UtxoOp])
+rollbackEntryPrism ::
+    Prism' ByteString (RollbackPoint UtxoOp BlockHash)
 rollbackEntryPrism = prism' encode decode
   where
-    encode (BlockHash bh, ops) =
-        lenPrefixed bh <> encodeOps ops
+    encode RollbackPoint{rpInverses, rpMeta} =
+        case rpMeta of
+            Just (BlockHash bh) ->
+                lenPrefixed bh <> encodeOps rpInverses
+            Nothing ->
+                error
+                    "rollbackEntryPrism: encountered \
+                    \RollbackPoint with rpMeta = Nothing; \
+                    \indexer always records a block hash."
     decode bs0 = do
         (bhBs, rest) <- readLenPrefixed bs0
         ops <- decodeOps rest
-        Just (BlockHash bhBs, ops)
+        Just
+            RollbackPoint
+                { rpInverses = ops
+                , rpMeta = Just (BlockHash bhBs)
+                }
 
 {- | Codec for the @('SlotNo', 'BlockHash')@ observation
 entry: @slotBytes(8 BE) || blockHashLen(4 BE) || blockHash@.
