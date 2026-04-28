@@ -3,7 +3,7 @@
 **Feature Branch**: `034-cardano-tx-generator`
 **Created**: 2026-04-28
 **Status**: Draft
-**Input**: User description: "Long-running Cardano transaction-generator daemon driven by the Antithesis composer; creates monotonic UTxO and address pressure on a node by submitting fan-out transactions to a growing population of HD-derived addresses; deterministic given a seed; uses the in-tree TxBuild DSL to build transactions, the in-tree address-to-UTxO indexer library to track UTxOs, and a single node-to-client (N2C) connection to the relay for both chain-sync and local-tx-submission."
+**Input**: User description: "Long-running Cardano transaction-generator daemon driven by the Antithesis composer; creates monotonic UTxO and address pressure on a node by submitting fan-out transactions to a growing population of deterministically-derived addresses; deterministic given a seed; uses the in-tree TxBuild DSL to build transactions, the in-tree address-to-UTxO indexer library to track UTxOs, and a single node-to-client (N2C) connection to the relay for both chain-sync and local-tx-submission."
 
 ## User Scenarios & Testing *(mandatory)*
 
