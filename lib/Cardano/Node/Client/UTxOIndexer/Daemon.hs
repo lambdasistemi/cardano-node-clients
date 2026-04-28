@@ -152,6 +152,13 @@ mkFollower cfg readyVar idx = self
             { rollForward = \fetched tip -> do
                 let (slot, ops) = extractBlock (fetchedBlock fetched)
                     bh = pointToBlockHash (fetchedPoint fetched)
+                -- 'applyAtSlot' is replay-aware: same slot
+                -- + same blockhash is a silent no-op; same
+                -- slot + different blockhash throws
+                -- 'ApplyConflict'. Phase A surfaces that
+                -- crash to the caller; phase B (#86) replaces
+                -- it with a rollback to an older retained
+                -- point.
                 applyAtSlot idx slot bh ops
                 _ <- pruneRollbacks idx (dcSecurityParamK cfg)
                 updateReady cfg readyVar slot tip
