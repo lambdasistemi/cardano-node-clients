@@ -10,6 +10,7 @@ import Cardano.Node.Client.TxGenerator.PersistSpec qualified as TxGeneratorPersi
 import Cardano.Node.Client.TxGenerator.PopulationSpec qualified as TxGeneratorPopulationSpec
 import Cardano.Node.Client.TxGenerator.SelectionSpec qualified as TxGeneratorSelectionSpec
 import Cardano.Node.Client.TxGenerator.ServerSpec qualified as TxGeneratorServerSpec
+import Cardano.Node.Client.TxGenerator.SnapshotSpec qualified as TxGeneratorSnapshotSpec
 import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.PersistenceSpec qualified as UTxOIndexerPersistenceSpec
 import Cardano.Node.Client.UTxOIndexer.ServerSpec qualified as UTxOIndexerServerSpec
@@ -31,3 +32,4 @@ main = hspec $ do
     TxGeneratorPopulationSpec.spec
     TxGeneratorSelectionSpec.spec
     TxGeneratorServerSpec.spec
+    TxGeneratorSnapshotSpec.spec

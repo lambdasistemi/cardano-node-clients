@@ -220,6 +220,7 @@ test-suite unit-tests
     Cardano.Node.Client.TxGenerator.PopulationSpec
     Cardano.Node.Client.TxGenerator.SelectionSpec
     Cardano.Node.Client.TxGenerator.ServerSpec
+    Cardano.Node.Client.TxGenerator.SnapshotSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec

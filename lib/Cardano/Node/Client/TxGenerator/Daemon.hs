@@ -103,6 +103,10 @@ import Cardano.Node.Client.TxGenerator.Server (
     ServerHooks (..),
     runServer,
  )
+import Cardano.Node.Client.TxGenerator.Snapshot (
+    collectPopulationValues,
+    percentiles,
+ )
 import Cardano.Node.Client.TxGenerator.Types (
     FailureReason (..),
     ReadyResponse (..),
@@ -273,6 +277,9 @@ runDaemon cfg = do
                         (nextHDIndexPath (dcStateDir cfg))
                         readyVar
                         lastTxIdVar
+                        idx
+                        net
+                        masterSeed
                 doRefill =
                     runRefillArm
                         cfg
@@ -754,20 +761,34 @@ snapshotResponseFrom ::
     FilePath ->
     TVar ReadyState ->
     TVar (Maybe Text) ->
+    IndexerHandle ->
+    Network ->
+    ByteString ->
     IO SnapshotResponse
-snapshotResponseFrom indexPath readyVar lastTxIdVar = do
-    nextIdx <- readNextHDIndex indexPath
-    rs <- readTVarIO readyVar
-    lastTx <- readTVarIO lastTxIdVar
-    pure
-        SnapshotResponse
-            { snapPopulationSize = nextIdx
-            , snapP10Lovelace = Nothing
-            , snapP50Lovelace = Nothing
-            , snapP90Lovelace = Nothing
-            , snapTipSlot = rsTipSlot rs
-            , snapLastTxId = lastTx
-            }
+snapshotResponseFrom
+    indexPath
+    readyVar
+    lastTxIdVar
+    idx
+    net
+    masterSeed = do
+        nextIdx <- readNextHDIndex indexPath
+        rs <- readTVarIO readyVar
+        lastTx <- readTVarIO lastTxIdVar
+        values <- collectPopulationValues idx net masterSeed nextIdx
+        let (p10, p50, p90) = case percentiles values of
+                Nothing -> (Nothing, Nothing, Nothing)
+                Just (Coin a, Coin b, Coin c) ->
+                    (Just a, Just b, Just c)
+        pure
+            SnapshotResponse
+                { snapPopulationSize = nextIdx
+                , snapP10Lovelace = p10
+                , snapP50Lovelace = p50
+                , snapP90Lovelace = p90
+                , snapTipSlot = rsTipSlot rs
+                , snapLastTxId = lastTx
+                }
 
 -- ----------------------------------------------------------------------
 -- Helpers
