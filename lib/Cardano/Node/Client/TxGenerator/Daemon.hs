@@ -76,7 +76,14 @@ import Cardano.Node.Client.Submitter (
     SubmitResult (..),
     Submitter (..),
  )
-import Cardano.Node.Client.TxGenerator.Build (refillTx)
+import Cardano.Node.Client.TxGenerator.Build (
+    refillTx,
+    transactTx,
+ )
+import Cardano.Node.Client.TxGenerator.Fanout (
+    Destination (..),
+    pickDestinations,
+ )
 import Cardano.Node.Client.TxGenerator.Persist (
     loadOrCreateSeed,
     nextHDIndexPath,
@@ -85,8 +92,12 @@ import Cardano.Node.Client.TxGenerator.Persist (
  )
 import Cardano.Node.Client.TxGenerator.Population (
     deriveAddr,
+    deriveSignKey,
     enterpriseAddrFromSignKey,
     mkSignKey,
+ )
+import Cardano.Node.Client.TxGenerator.Selection (
+    pickSourceIndex,
  )
 import Cardano.Node.Client.TxGenerator.Server (
     ServerHooks (..),
@@ -98,7 +109,8 @@ import Cardano.Node.Client.TxGenerator.Types (
     RefillRequest,
     RefillResponse (..),
     SnapshotResponse (..),
-    TransactResponse (TransactFail),
+    TransactRequest (..),
+    TransactResponse (..),
  )
 import Cardano.Node.Client.UTxOIndexer.BlockExtract (extractBlock)
 import Cardano.Node.Client.UTxOIndexer.Indexer (
@@ -148,6 +160,8 @@ import Ouroboros.Network.Block qualified as Network
 import Ouroboros.Network.Magic (NetworkMagic (..))
 import Ouroboros.Network.Point qualified as Network.Point
 import System.Directory (createDirectoryIfMissing)
+import System.Random (mkStdGen)
+import System.Random qualified
 
 -- | Daemon runtime configuration.
 data DaemonConfig = DaemonConfig
@@ -273,12 +287,22 @@ runDaemon cfg = do
                         nextIdxMVar
                         lastTxIdVar
                         faucetKnownVar
+                doTransact =
+                    runTransactArm
+                        cfg
+                        pp
+                        idx
+                        provider
+                        submitter
+                        net
+                        masterSeed
+                        nextIdxMVar
+                        lastTxIdVar
                 hooks =
                     ServerHooks
                         { hooksReady = getReady
                         , hooksSnapshot = getSnapshot
-                        , hooksTransact = \_ ->
-                            pure (TransactFail IndexNotReady)
+                        , hooksTransact = doTransact
                         , hooksRefill = doRefill
                         }
             runServer (dcControlSocket cfg) hooks
@@ -432,6 +456,283 @@ buildSignSubmit
                                 , rfOkAwaited = awaited
                                 }
                             )
+
+-- ----------------------------------------------------------------------
+-- Transact arm (User Story 1 / T011)
+-- ----------------------------------------------------------------------
+
+{- | Defensive minimum-UTxO floor used for fanout value
+sampling. Conway's actual minimum is computed from
+@ppCoinsPerUTxOByte * size@; 1.5 ADA is comfortably above
+that for an enterprise-address output. The TxBuild
+balancer surfaces 'MinUtxoViolation' if a destination
+slips below the era's floor.
+-}
+defaultMinUtxo :: Coin
+defaultMinUtxo = Coin 1_500_000
+
+{- | Defensive fee reserve subtracted from the source
+UTxO value before the fanout. The TxBuild balancer
+computes the actual fee; this reserve only exists to
+keep @available@ below "value left for distribution"
+so the change output stays above 'defaultMinUtxo'.
+-}
+defaultFeeReserve :: Coin
+defaultFeeReserve = Coin 5_000_000
+
+{- | Run one transact: take the next-HD-index lock,
+sample a viable source HD index from the request seed
+via 'pickSourceIndex', sample K destinations + values
+via 'pickDestinations', materialize destination
+addresses, build the tx, sign with the source's key,
+submit, await the change UTxO via the indexer, persist
+the bumped next-HD-index, and return the wire response.
+
+Any pre-submit failure (no-pickable-source, build
+failure, submit-rejected) leaves the next-HD-index
+unchanged.
+-}
+runTransactArm ::
+    DaemonConfig ->
+    PParams ConwayEra ->
+    IndexerHandle ->
+    Provider IO ->
+    Submitter IO ->
+    Network ->
+    ByteString ->
+    MVar Word64 ->
+    TVar (Maybe Text) ->
+    TransactRequest ->
+    IO TransactResponse
+runTransactArm
+    cfg
+    pp
+    idx
+    provider
+    submitter
+    net
+    masterSeed
+    nextIdxMVar
+    lastTxIdVar
+    req =
+        modifyMVar nextIdxMVar $ \currentIdx ->
+            if currentIdx == 0
+                then
+                    pure
+                        ( currentIdx
+                        , TransactFail NoPickableSource
+                        )
+                else do
+                    let seed = txReqSeed req
+                        kWord = txReqFanout req
+                        kInt = fromIntegral kWord :: Word64
+                        gen0 = mkStdGen (fromIntegral seed)
+                        floorLovelace =
+                            kInt
+                                * fromIntegral
+                                    (unCoin defaultMinUtxo)
+                                + fromIntegral
+                                    (unCoin defaultFeeReserve)
+                                + fromIntegral
+                                    (unCoin defaultMinUtxo)
+                        viable srcIdx = do
+                            let addr =
+                                    deriveAddr net masterSeed srcIdx
+                            utxos <- queryUTxOs provider addr
+                            pure $ case utxos of
+                                [] -> False
+                                xs ->
+                                    let bestVal =
+                                            maximum
+                                                ( fmap
+                                                    ( \(_, o) ->
+                                                        unCoin
+                                                            (o ^. coinTxOutL)
+                                                    )
+                                                    xs
+                                                )
+                                     in bestVal
+                                            >= toInteger floorLovelace
+                    pickResult <-
+                        pickSourceIndex
+                            viable
+                            currentIdx
+                            (defaultMaxPickRetries cfg)
+                            gen0
+                    case pickResult of
+                        Nothing ->
+                            pure
+                                ( currentIdx
+                                , TransactFail NoPickableSource
+                                )
+                        Just (srcIdx, gen1) ->
+                            transactWithSource
+                                cfg
+                                pp
+                                idx
+                                provider
+                                submitter
+                                net
+                                masterSeed
+                                lastTxIdVar
+                                req
+                                currentIdx
+                                srcIdx
+                                gen1
+
+defaultMaxPickRetries :: DaemonConfig -> Word32
+defaultMaxPickRetries _ = 16
+
+transactWithSource ::
+    DaemonConfig ->
+    PParams ConwayEra ->
+    IndexerHandle ->
+    Provider IO ->
+    Submitter IO ->
+    Network ->
+    ByteString ->
+    TVar (Maybe Text) ->
+    TransactRequest ->
+    Word64 ->
+    Word64 ->
+    System.Random.StdGen ->
+    IO (Word64, TransactResponse)
+transactWithSource
+    cfg
+    pp
+    idx
+    provider
+    submitter
+    net
+    masterSeed
+    lastTxIdVar
+    req
+    currentIdx
+    srcIdx
+    gen1 = do
+        let srcSKey = deriveSignKey masterSeed srcIdx
+            srcAddr = deriveAddr net masterSeed srcIdx
+        utxos <- queryUTxOs provider srcAddr
+        case utxos of
+            [] ->
+                pure
+                    ( currentIdx
+                    , TransactFail NoPickableSource
+                    )
+            xs -> do
+                let (srcIn, srcOut) = pickHighestValue xs
+                    srcVal = srcOut ^. coinTxOutL
+                    available =
+                        Coin
+                            ( unCoin srcVal
+                                - unCoin defaultFeeReserve
+                                - unCoin defaultMinUtxo
+                            )
+                    (dests, newNextIdx, _gen2) =
+                        pickDestinations
+                            currentIdx
+                            (txReqFanout req)
+                            (txReqProbFresh req)
+                            available
+                            defaultMinUtxo
+                            gen1
+                    destAddrs =
+                        fmap
+                            ( \d ->
+                                ( deriveAddr
+                                    net
+                                    masterSeed
+                                    (destIndex d)
+                                , destValue d
+                                )
+                            )
+                            dests
+                buildResult <-
+                    transactTx
+                        pp
+                        (srcIn, srcOut)
+                        destAddrs
+                        srcAddr
+                case buildResult of
+                    Left err ->
+                        pure
+                            ( currentIdx
+                            , TransactFail (SubmitRejected err)
+                            )
+                    Right tx -> do
+                        let signed = addKeyWitness srcSKey tx
+                        result <- submitTx submitter signed
+                        case result of
+                            Rejected reason -> do
+                                let reasonText =
+                                        Text.decodeUtf8With
+                                            (\_ _ -> Just '\xFFFD')
+                                            reason
+                                pure
+                                    ( currentIdx
+                                    , TransactFail
+                                        (SubmitRejected reasonText)
+                                    )
+                            Submitted txId -> do
+                                -- The change output is at
+                                -- index K (after the K
+                                -- explicit destinations).
+                                let changeIxn =
+                                        ledgerToIndexerTxIn
+                                            txId
+                                            ( fromIntegral
+                                                ( txReqFanout req
+                                                ) ::
+                                                Word16
+                                            )
+                                    timeoutS =
+                                        Just
+                                            (dcAwaitTimeoutSeconds cfg)
+                                obs <-
+                                    awaitTxIn
+                                        idx
+                                        changeIxn
+                                        timeoutS
+                                let awaited =
+                                        isJust
+                                            ( obs ::
+                                                Maybe AwaitObservation
+                                            )
+                                    txHex = txIdToHex txId
+                                    freshCount =
+                                        fromIntegral
+                                            ( length
+                                                ( filter
+                                                    destFresh
+                                                    dests
+                                                )
+                                            )
+                                writeNextHDIndex
+                                    ( nextHDIndexPath
+                                        (dcStateDir cfg)
+                                    )
+                                    newNextIdx
+                                atomically
+                                    ( writeTVar
+                                        lastTxIdVar
+                                        (Just txHex)
+                                    )
+                                pure
+                                    ( newNextIdx
+                                    , TransactOk
+                                        { txOkTxId = txHex
+                                        , txOkSrc = srcIdx
+                                        , txOkDsts =
+                                            fmap destIndex dests
+                                        , txOkValuesLovelace =
+                                            fmap
+                                                (unCoin . destValue)
+                                                dests
+                                        , txOkFreshCount =
+                                            freshCount
+                                        , txOkAwaited = awaited
+                                        }
+                                    )
 
 -- ----------------------------------------------------------------------
 -- Server hooks

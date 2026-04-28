@@ -21,6 +21,11 @@ runner; signing / submission live with the caller in
 module Cardano.Node.Client.TxGenerator.Build (
     -- * Refill arm (T008)
     refillTx,
+
+    -- * Transact arm (T011)
+    transactTx,
+
+    -- * Result
     BuildResult,
 ) where
 
@@ -107,4 +112,49 @@ refillTx pp faucetUtxo freshAddr amount changeAddr = do
     pure $ case result of
         Left err ->
             Left (Text.pack (show err))
+        Right tx -> Right tx
+
+{- | Build the unsigned tx for one transact: spend the
+chosen source UTxO, send each per-destination value to
+its address, and let the balancer route the residue back
+to @changeAddr@ (= source) as the change output. The
+change output sits at index @length destinations@ in the
+balanced tx — that is the 'TxIn' the daemon awaits via
+the embedded indexer.
+
+No scripts are involved; the ExUnits evaluator is the
+constant-empty function.
+-}
+transactTx ::
+    -- | protocol parameters
+    PParams ConwayEra ->
+    -- | source UTxO
+    (TxIn, TxOut ConwayEra) ->
+    -- | K destinations (addr, lovelace)
+    [(Addr, Coin)] ->
+    -- | change address (= source)
+    Addr ->
+    IO BuildResult
+transactTx pp srcUtxo destinations changeAddr = do
+    let prog :: TxBuild NoQ NoErr ()
+        prog = do
+            _ <- spend (fst srcUtxo)
+            mapM_
+                ( \(addr, amount) -> do
+                    _ <- payTo addr (inject amount)
+                    pure ()
+                )
+                destinations
+        evalNoScripts _ = pure Map.empty
+    result <-
+        build
+            pp
+            interpretNoQ
+            evalNoScripts
+            [srcUtxo]
+            []
+            changeAddr
+            prog
+    pure $ case result of
+        Left err -> Left (Text.pack (show err))
         Right tx -> Right tx
