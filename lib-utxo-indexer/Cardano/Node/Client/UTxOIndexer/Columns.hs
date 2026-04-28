@@ -19,10 +19,15 @@ Three columns:
   @lenByte || address || txId || ix@ so a cursor seek to
   @lenByte || address@ yields every UTxO at that address
   with its full 'TxOut' inline (no second-stage lookup).
-* 'RollbackCol' :: @KV SlotNo [UtxoOp]@ — slot-tagged
-  inverse-op log used to undo apply-block writes on a
-  chain-sync rollback. Keyed by 'SlotNo' (8-byte BE) so
-  cursor ordering matches numeric slot ordering.
+* 'RollbackCol' :: @KV SlotNo (BlockHash, [UtxoOp])@ —
+  slot-tagged inverse-op log used to undo apply-block
+  writes on a chain-sync rollback. Keyed by 'SlotNo'
+  (8-byte BE) so cursor ordering matches numeric slot
+  ordering. The 'BlockHash' is the hash of the block
+  whose application produced the inverse list — recorded
+  here so a future restart-recoverability story can read
+  the latest entry to derive the resume @Point@ without
+  a separate tip column.
 
 A future RocksDB swap is a one-line backend choice via
 @mkInMemoryDatabase@ → @mkRocksDBDatabase@; nothing in
@@ -46,6 +51,7 @@ import Cardano.Node.Client.UTxOIndexer.IndexerOp (UtxoOp (..))
 import Cardano.Node.Client.UTxOIndexer.Types (
     AddrKey,
     Address (..),
+    BlockHash (..),
     SlotNo,
     TxIn,
     TxOut (..),
@@ -81,11 +87,14 @@ data Cols c where
     -- prefix-scan by address yields @(TxIn, TxOut)@
     -- pairs directly.
     AddressIndex :: Cols (KV AddrKey TxOut)
-    -- | Rollback log: 'SlotNo' → list of inverse ops to
-    -- undo writes applied at that slot. The list is in
-    -- the order to apply on rollback (i.e. already
-    -- reversed relative to the original apply order).
-    RollbackCol :: Cols (KV SlotNo [UtxoOp])
+    -- | Rollback log: 'SlotNo' →
+    -- @('BlockHash', [inverse ops])@. The list is in the
+    -- order to apply on rollback (i.e. already reversed
+    -- relative to the original apply order). The
+    -- 'BlockHash' is the hash of the block that produced
+    -- this entry — recorded so a future startup can
+    -- recover the resume @Point@ from the latest entry.
+    RollbackCol :: Cols (KV SlotNo (BlockHash, [UtxoOp]))
 
 instance GEq Cols where
     geq TxInCol TxInCol = Just Refl
@@ -118,16 +127,17 @@ addressIndexCodecs =
         , valueCodec = txOutPrism
         }
 
-{- | Codecs for the rollback-log column. The op list uses
-a stable hand-rolled binary form (see 'encodeOps') so a
-future RocksDB swap can read entries written by the
+{- | Codecs for the rollback-log column. The on-disk
+value is @blockHashLen(4 BE) || blockHash || ops@ where
+@ops@ uses the stable hand-rolled form (see 'encodeOps')
+so a future RocksDB swap can read entries written by the
 in-memory backend.
 -}
-rollbackCodecs :: Codecs (KV SlotNo [UtxoOp])
+rollbackCodecs :: Codecs (KV SlotNo (BlockHash, [UtxoOp]))
 rollbackCodecs =
     Codecs
         { keyCodec = slotPrism
-        , valueCodec = opsPrism
+        , valueCodec = rollbackEntryPrism
         }
 
 -- Internal --------------------------------------------------------
@@ -160,8 +170,18 @@ txOutPrism = prism' unTxOut (Just . TxOut)
 slotPrism :: Prism' ByteString SlotNo
 slotPrism = prism' slotToBytes slotFromBytes
 
-opsPrism :: Prism' ByteString [UtxoOp]
-opsPrism = prism' encodeOps decodeOps
+{- | Codec for the @(BlockHash, [UtxoOp])@ rollback
+entry: @blockHashLen(4 BE) || blockHash || encodeOps@.
+-}
+rollbackEntryPrism :: Prism' ByteString (BlockHash, [UtxoOp])
+rollbackEntryPrism = prism' encode decode
+  where
+    encode (BlockHash bh, ops) =
+        lenPrefixed bh <> encodeOps ops
+    decode bs0 = do
+        (bhBs, rest) <- readLenPrefixed bs0
+        ops <- decodeOps rest
+        Just (BlockHash bhBs, ops)
 
 -- Inverse-op list binary encoding ---------------------------------
 --
