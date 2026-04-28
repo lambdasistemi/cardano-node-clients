@@ -205,7 +205,7 @@ mkHandle
     countVar =
         IndexerHandle
             { applyAtSlot = \slot bh ops -> do
-                runTransaction (applyAndLog slot ops)
+                runTransaction (applyAndLog slot bh ops)
                 atomically $ do
                     modifyTVar' countVar (+ 1)
                     fireWaiters
@@ -250,11 +250,12 @@ its inverse cannot be recovered from a later @query@.
 -}
 applyAndLog ::
     SlotNo ->
+    BlockHash ->
     [UtxoOp] ->
     Transaction IO Int Cols Op ()
-applyAndLog slot ops = do
+applyAndLog slot bh ops = do
     inverses <- traverse step ops
-    insert RollbackCol slot (reverse inverses)
+    insert RollbackCol slot (bh, reverse inverses)
   where
     step op = do
         inv <- inverseOf op
@@ -364,17 +365,20 @@ rollbackToSlot target = do
 
 {- | Cursor program: from 'lastEntry' walk backwards,
 collecting @(slot, invs)@ pairs while @slot > target@.
-Returns them in descending-slot order.
+Returns them in descending-slot order. The 'BlockHash'
+component of each entry is discarded — only the inverse
+list is needed to undo state, the hash is metadata for
+the resume-point story.
 -}
 collectGreaterThan ::
     (Monad m) =>
     SlotNo ->
-    Cursor m (KV SlotNo [UtxoOp]) [(SlotNo, [UtxoOp])]
+    Cursor m (KV SlotNo (BlockHash, [UtxoOp])) [(SlotNo, [UtxoOp])]
 collectGreaterThan target =
     lastEntry >>= go []
   where
     go acc Nothing = pure (reverse acc)
-    go acc (Just Entry{entryKey = slot, entryValue = invs})
+    go acc (Just Entry{entryKey = slot, entryValue = (_bh, invs)})
         | slot > target =
             prevEntry >>= go ((slot, invs) : acc)
         | otherwise = pure (reverse acc)
@@ -406,7 +410,7 @@ collecting up to @n@ keys.
 collectFirstNKeys ::
     (Monad m) =>
     Int ->
-    Cursor m (KV SlotNo [UtxoOp]) [SlotNo]
+    Cursor m (KV SlotNo (BlockHash, [UtxoOp])) [SlotNo]
 collectFirstNKeys n0 =
     firstEntry >>= go [] n0
   where
