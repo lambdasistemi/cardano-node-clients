@@ -77,6 +77,10 @@ data DaemonConfig = DaemonConfig
     , dcNetworkMagic :: Word32
     , dcByronEpochSlots :: Word64
     , dcReadyThresholdSlots :: Word64
+    , dcSecurityParamK :: Int
+    -- ^ Cardano security parameter @k@ — the
+    -- rollback-log entry count is capped at this many,
+    -- and older entries are dropped after each apply.
     }
     deriving stock (Show)
 
@@ -140,6 +144,7 @@ mkFollower cfg readyVar idx = self
                 let (slot, ops) = extractBlock (fetchedBlock fetched)
                     bh = pointToBlockHash (fetchedPoint fetched)
                 applyAtSlot idx slot bh ops
+                _ <- pruneRollbacks idx (dcSecurityParamK cfg)
                 updateReady cfg readyVar slot tip
                 pure self
             , rollBackward = \point -> do

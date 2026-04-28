@@ -198,6 +198,108 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
                 xs <- snapshotAt h addr
                 xs `shouldBe` []
 
+    describe "pruneRollbacks (count-based finality cull)" $ do
+        it "is a no-op on an empty rollback log" $
+            withInMemoryIndexer $ \h -> do
+                deleted <- pruneRollbacks h 100
+                deleted `shouldBe` 0
+
+        it "is a no-op while count <= maxKeep" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                applyAtSlot h (SlotNo 1) testBlockHash [mk 0x01]
+                applyAtSlot h (SlotNo 2) testBlockHash [mk 0x02]
+                applyAtSlot h (SlotNo 3) testBlockHash [mk 0x03]
+                deleted <- pruneRollbacks h 3
+                deleted `shouldBe` 0
+
+        it "drops the oldest entries down to maxKeep" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                applyAtSlot h (SlotNo 1) testBlockHash [mk 0x01]
+                applyAtSlot h (SlotNo 2) testBlockHash [mk 0x02]
+                applyAtSlot h (SlotNo 3) testBlockHash [mk 0x03]
+                applyAtSlot h (SlotNo 4) testBlockHash [mk 0x04]
+                applyAtSlot h (SlotNo 5) testBlockHash [mk 0x05]
+                deleted <- pruneRollbacks h 2
+                deleted `shouldBe` 3
+                -- Surviving rollback entries cover slots 4..5
+                -- only — anything older is now unreachable, so a
+                -- rollback to slot 0 only undoes the last two.
+                rollbackTo h (SlotNo 0)
+                xs <- snapshotAt h addr
+                fmap (txInId . fst) xs
+                    `shouldBe` [ BS.replicate 32 0x01
+                               , BS.replicate 32 0x02
+                               , BS.replicate 32 0x03
+                               ]
+
+        it "is idempotent (second call deletes nothing)" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                applyAtSlot h (SlotNo 1) testBlockHash [mk 0x01]
+                applyAtSlot h (SlotNo 2) testBlockHash [mk 0x02]
+                applyAtSlot h (SlotNo 3) testBlockHash [mk 0x03]
+                first <- pruneRollbacks h 1
+                second <- pruneRollbacks h 1
+                first `shouldBe` 2
+                second `shouldBe` 0
+
+        it "leaves the address index untouched" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                applyAtSlot h (SlotNo 1) testBlockHash [mk 0x01]
+                applyAtSlot h (SlotNo 2) testBlockHash [mk 0x02]
+                applyAtSlot h (SlotNo 3) testBlockHash [mk 0x03]
+                _ <- pruneRollbacks h 1
+                xs <- snapshotAt h addr
+                fmap (txInId . fst) xs
+                    `shouldBe` [ BS.replicate 32 0x01
+                               , BS.replicate 32 0x02
+                               , BS.replicate 32 0x03
+                               ]
+
+        it "stays consistent across rollback + prune" $
+            withInMemoryIndexer $ \h -> do
+                let addr = mkAddr 0xAA 29
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                applyAtSlot h (SlotNo 1) testBlockHash [mk 0x01]
+                applyAtSlot h (SlotNo 2) testBlockHash [mk 0x02]
+                applyAtSlot h (SlotNo 3) testBlockHash [mk 0x03]
+                rollbackTo h (SlotNo 1)
+                applyAtSlot h (SlotNo 2) testBlockHash [mk 0x12]
+                applyAtSlot h (SlotNo 3) testBlockHash [mk 0x13]
+                applyAtSlot h (SlotNo 4) testBlockHash [mk 0x14]
+                -- Three apply + one rollback removed two from the
+                -- log; a fourth-keep prune now sees count = 4
+                -- and is a no-op.
+                deleted <- pruneRollbacks h 4
+                deleted `shouldBe` 0
+
 {- | Build a synthetic 'Address' of the given length with
 a fixed body byte. Lets tests construct Shelley-shaped
 (29-byte) and Byron-shaped (60-byte) addresses without
