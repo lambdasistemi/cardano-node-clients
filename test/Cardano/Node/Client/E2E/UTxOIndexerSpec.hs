@@ -139,6 +139,7 @@ runE2E = do
                         , dcNetworkMagic = 42
                         , dcByronEpochSlots = 42
                         , dcReadyThresholdSlots = 60
+                        , dcSecurityParamK = 2160
                         }
             withAsync (runDaemon cfg) $ \daemonThread -> do
                 waitForFile daemonSock 600

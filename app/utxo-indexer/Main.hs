@@ -28,6 +28,14 @@ import Text.Read (readMaybe)
 defaultReadyThreshold :: Word
 defaultReadyThreshold = 60
 
+{- | Default Cardano security parameter @k@ — the
+rollback log is capped at this many of the most-recent
+entries (per-block, not per-slot). Mainnet/preprod/
+preview all use 2160; devnets typically override.
+-}
+defaultSecurityParamK :: Word
+defaultSecurityParamK = 2160
+
 {- | Parse a single @--key value@ pair from the argument
 list. Returns the value and the remaining args.
 -}
@@ -52,12 +60,16 @@ parseConfig args0 = do
     let (readyS, args5) =
             fromMaybe (show defaultReadyThreshold, args4) $
                 takeFlag "--ready-threshold-slots" args4
-    case args5 of
+        (kS, args6) =
+            fromMaybe (show defaultSecurityParamK, args5) $
+                takeFlag "--security-param-k" args5
+    case args6 of
         [] -> pure ()
         extra -> dieUsage $ "Unexpected args: " <> show extra
     magic <- requireWord "--network-magic" magicS
     slots <- requireWord "--byron-epoch-slots" slotsS
     ready <- requireWord "--ready-threshold-slots" readyS
+    k <- requireWord "--security-param-k" kS
     pure
         DaemonConfig
             { dcRelaySocket = relay
@@ -65,6 +77,7 @@ parseConfig args0 = do
             , dcNetworkMagic = fromIntegral (magic :: Word)
             , dcByronEpochSlots = fromIntegral (slots :: Word)
             , dcReadyThresholdSlots = fromIntegral (ready :: Word)
+            , dcSecurityParamK = fromIntegral (k :: Word)
             }
   where
     requireFlag key args =
@@ -89,7 +102,8 @@ dieUsage msg = do
     hPutStrLn stderr "  --listen PATH \\"
     hPutStrLn stderr "  --network-magic INT \\"
     hPutStrLn stderr "  --byron-epoch-slots INT \\"
-    hPutStrLn stderr "  [--ready-threshold-slots INT]"
+    hPutStrLn stderr "  [--ready-threshold-slots INT] \\"
+    hPutStrLn stderr "  [--security-param-k INT]"
     exitFailure
 
 -- | Entry point. Parse args, log config, run the daemon.

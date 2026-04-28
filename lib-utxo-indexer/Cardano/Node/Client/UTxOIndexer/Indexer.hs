@@ -17,10 +17,22 @@ exposes the operations the rest of the daemon needs:
   observed 'TxIn' gets rolled back stay closed (the
   observation has already been reported); awaiters still
   pending stay pending.
+* 'pruneRollbacks' caps the rollback log at the most
+  recent @maxKeep@ entries — the oldest are dropped. This
+  is the count-based finality cull (Cardano's @k@-deep
+  rule applies per /block/, not per slot, so a count-based
+  bound is what consumers actually want).
 * 'snapshotAt' prefix-scans every UTxO at a given address
   using a 'Cursor'.
 * 'awaitTxIn' blocks until a given 'TxIn' is observed in
   the index (or the optional timeout fires).
+
+A 'TVar' tracks the current rollback-log entry count so
+the prune step does not re-scan the column on every
+block. The counter is in-process state — for the
+in-memory backend that is fine (counter and DB live and
+die together); a future RocksDB swap will need to seed
+it from a one-shot scan at startup.
 
 A future RocksDB swap is a one-line change:
 'mkInMemoryDatabase' becomes 'mkRocksDBDatabase' from
@@ -77,6 +89,7 @@ import Data.Map.Strict qualified as Map
 import Database.KV.Cursor (
     Cursor,
     Entry (..),
+    firstEntry,
     lastEntry,
     nextEntry,
     prevEntry,
@@ -121,6 +134,15 @@ data IndexerHandle = IndexerHandle
     -- ^ Roll the index back to the given slot by
     -- replaying inverse-op lists for every slot
     -- @> target@, in descending slot order.
+    , pruneRollbacks :: Int -> IO Int
+    -- ^ Keep at most @maxKeep@ rollback-log entries
+    -- (the most-recent ones); drop the oldest. Returns
+    -- the number of entries deleted. Idempotent.
+    --
+    -- Implements the count-based finality cull: a block
+    -- is final once @k@ later blocks have been applied,
+    -- so the inverse-op list keyed at any of the
+    -- now-irrelevant earlier blocks is dead weight.
     , snapshotAt :: Address -> IO [(TxIn, TxOut)]
     -- ^ Snapshot every UTxO currently at the given
     -- address, in ascending @TxIn@ order.
@@ -149,7 +171,8 @@ withInMemoryIndexer action = do
     runner <- newRunTransaction db
     waitersVar <- newTVarIO Map.empty
     observedVar <- newTVarIO Map.empty
-    action (mkHandle runner waitersVar observedVar)
+    countVar <- newTVarIO (0 :: Int)
+    action (mkHandle runner waitersVar observedVar countVar)
 
 -- Internal -------------------------------------------------------
 
@@ -173,25 +196,47 @@ mkHandle ::
     RunTransaction IO Int Cols Op ->
     Waiters ->
     Observed ->
+    TVar Int ->
     IndexerHandle
-mkHandle RunTransaction{runTransaction} waitersVar observedVar =
-    IndexerHandle
-        { applyAtSlot = \slot bh ops -> do
-            runTransaction (applyAndLog slot ops)
-            atomically $
-                fireWaiters
-                    waitersVar
-                    observedVar
-                    slot
-                    bh
-                    ops
-        , rollbackTo = \slot -> do
-            runTransaction (rollbackToSlot slot)
-            atomically (pruneObservedAfter observedVar slot)
-        , snapshotAt =
-            runTransaction . iterating AddressIndex . scanAddress
-        , awaitTxIn = doAwait waitersVar observedVar
-        }
+mkHandle
+    RunTransaction{runTransaction}
+    waitersVar
+    observedVar
+    countVar =
+        IndexerHandle
+            { applyAtSlot = \slot bh ops -> do
+                runTransaction (applyAndLog slot ops)
+                atomically $ do
+                    modifyTVar' countVar (+ 1)
+                    fireWaiters
+                        waitersVar
+                        observedVar
+                        slot
+                        bh
+                        ops
+            , rollbackTo = \slot -> do
+                deleted <- runTransaction (rollbackToSlot slot)
+                atomically $ do
+                    modifyTVar' countVar (subtract deleted)
+                    pruneObservedAfter observedVar slot
+            , pruneRollbacks = \maxKeep -> do
+                count <- readTVarIO countVar
+                let excess = count - maxKeep
+                if excess <= 0
+                    then pure 0
+                    else do
+                        deleted <-
+                            runTransaction
+                                (pruneOldest excess)
+                        atomically $
+                            modifyTVar'
+                                countVar
+                                (subtract deleted)
+                        pure deleted
+            , snapshotAt =
+                runTransaction . iterating AddressIndex . scanAddress
+            , awaitTxIn = doAwait waitersVar observedVar
+            }
 
 {- | Within one transaction: for each op compute its
 inverse against the current state, apply the op, and
@@ -299,15 +344,19 @@ down via 'lastEntry'/'prevEntry', collecting entries
 @> target@, then in a second pass replays each
 inverse-op list and deletes the corresponding rollback
 entry — both inside the same transaction.
+
+Returns the number of rollback-log entries removed so
+the in-memory entry counter stays in sync.
 -}
 rollbackToSlot ::
     SlotNo ->
-    Transaction IO Int Cols Op ()
+    Transaction IO Int Cols Op Int
 rollbackToSlot target = do
     entries <-
         iterating RollbackCol $
             collectGreaterThan target
     traverse_ undoSlot entries
+    pure (length entries)
   where
     undoSlot (slot, invs) = do
         traverse_ applyOne invs
@@ -328,6 +377,44 @@ collectGreaterThan target =
     go acc (Just Entry{entryKey = slot, entryValue = invs})
         | slot > target =
             prevEntry >>= go ((slot, invs) : acc)
+        | otherwise = pure (reverse acc)
+
+{- | Drop the @excess@ oldest rollback-log entries.
+Walks 'RollbackCol' from 'firstEntry' forward up to
+@excess@ steps and deletes each visited key. Returns
+the number of entries actually deleted (≤ @excess@;
+fewer if the column has fewer than @excess@ entries).
+
+Caller maintains the entry count externally — this
+function does not re-scan the column to size it.
+-}
+pruneOldest ::
+    Int ->
+    Transaction IO Int Cols Op Int
+pruneOldest excess
+    | excess <= 0 = pure 0
+    | otherwise = do
+        keys <-
+            iterating RollbackCol $
+                collectFirstNKeys excess
+        traverse_ (delete RollbackCol) keys
+        pure (length keys)
+
+{- | Cursor program: from 'firstEntry' walk forward,
+collecting up to @n@ keys.
+-}
+collectFirstNKeys ::
+    (Monad m) =>
+    Int ->
+    Cursor m (KV SlotNo [UtxoOp]) [SlotNo]
+collectFirstNKeys n0 =
+    firstEntry >>= go [] n0
+  where
+    go acc 0 _ = pure (reverse acc)
+    go acc _ Nothing = pure (reverse acc)
+    go acc n (Just Entry{entryKey})
+        | n > 0 =
+            nextEntry >>= go (entryKey : acc) (n - 1)
         | otherwise = pure (reverse acc)
 
 -- | Inverse of a single op against current state.
