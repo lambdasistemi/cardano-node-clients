@@ -6,6 +6,7 @@ import Cardano.Node.Client.E2E.BalanceSpec qualified as BalanceSpec
 import Cardano.Node.Client.E2E.ChainPopulatorSpec qualified as ChainPopulatorSpec
 import Cardano.Node.Client.E2E.ChainSyncSpec qualified as ChainSyncSpec
 import Cardano.Node.Client.E2E.MultiAssetChangeSpec qualified as MultiAssetChangeSpec
+import Cardano.Node.Client.E2E.N2CFullSpec qualified as N2CFullSpec
 import Cardano.Node.Client.E2E.ProviderSpec qualified as ProviderSpec
 import Cardano.Node.Client.E2E.TxBuildSpec qualified as TxBuildSpec
 import Cardano.Node.Client.E2E.UTxOIndexerSpec qualified as UTxOIndexerSpec
@@ -17,5 +18,6 @@ main = hspec $ do
     TxBuildSpec.spec
     MultiAssetChangeSpec.spec
     ChainSyncSpec.spec
+    N2CFullSpec.spec
     ChainPopulatorSpec.spec
     UTxOIndexerSpec.spec

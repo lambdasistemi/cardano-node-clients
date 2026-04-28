@@ -259,6 +259,7 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
     Cardano.Node.Client.E2E.MultiAssetChangeSpec
+    Cardano.Node.Client.E2E.N2CFullSpec
     Cardano.Node.Client.E2E.ProviderSpec
     Cardano.Node.Client.E2E.TxBuildSpec
     Cardano.Node.Client.E2E.UTxOIndexerSpec
