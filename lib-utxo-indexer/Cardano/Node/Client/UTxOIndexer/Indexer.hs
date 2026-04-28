@@ -29,15 +29,17 @@ exposes the operations the rest of the daemon needs:
 
 A 'TVar' tracks the current rollback-log entry count so
 the prune step does not re-scan the column on every
-block. The counter is in-process state — for the
-in-memory backend that is fine (counter and DB live and
-die together); a future RocksDB swap will need to seed
-it from a one-shot scan at startup.
+block. The counter is in-process state, but it is seeded
+from a one-shot scan of 'RollbackCol' on startup so it
+stays in sync with whatever the on-disk RocksDB store
+contains across restarts.
 
-A future RocksDB swap is a one-line change:
-'mkInMemoryDatabase' becomes 'mkRocksDBDatabase' from
-@rocksdb-kv-transactions@; nothing else in this module
-moves.
+Two backends are wired in: 'withInMemoryIndexer' for
+tests / ephemeral runs and 'withRocksDBIndexer' for the
+durable on-disk store. They share all of the apply /
+rollback / prune / snapshot / await machinery —
+'kv-transactions' makes the choice a one-line backend
+swap.
 -}
 module Cardano.Node.Client.UTxOIndexer.Indexer (
     -- * Indexer handle
@@ -84,6 +86,8 @@ import Control.Concurrent.STM (
     writeTVar,
  )
 import Data.ByteString qualified as BS
+import Data.Default.Class (def)
+import Data.Dependent.Map (DMap)
 import Data.Foldable (traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -96,7 +100,6 @@ import Database.KV.Cursor (
     prevEntry,
     seekKey,
  )
-import Data.Dependent.Map (DMap)
 import Database.KV.Database (Codecs, KV, mkColumns)
 import Database.KV.InMemory (mkInMemoryDatabase)
 import Database.KV.RocksDB (mkRocksDBDatabase)
@@ -111,7 +114,6 @@ import Database.KV.Transaction (
     newRunTransaction,
     query,
  )
-import Data.Default.Class (def)
 import Database.RocksDB (
     Config (..),
     columnFamilies,

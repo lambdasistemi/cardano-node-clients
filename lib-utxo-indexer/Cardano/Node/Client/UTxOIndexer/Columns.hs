@@ -29,9 +29,10 @@ Three columns:
   the latest entry to derive the resume @Point@ without
   a separate tip column.
 
-A future RocksDB swap is a one-line backend choice via
-@mkInMemoryDatabase@ → @mkRocksDBDatabase@; nothing in
-this module changes.
+Both the in-memory and RocksDB backends share these
+column definitions verbatim — the column choice happens
+at the 'Database.KV.InMemory' /
+'Database.KV.RocksDB' boundary, not here.
 -}
 module Cardano.Node.Client.UTxOIndexer.Columns (
     -- * Column GADT

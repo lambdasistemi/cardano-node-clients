@@ -63,7 +63,10 @@ parseConfig args0 = do
         (kS, args6) =
             fromMaybe (show defaultSecurityParamK, args5) $
                 takeFlag "--security-param-k" args5
-    case args6 of
+        (mDbPath, args7) = case takeFlag "--db-path" args6 of
+            Just (p, rest) -> (Just p, rest)
+            Nothing -> (Nothing, args6)
+    case args7 of
         [] -> pure ()
         extra -> dieUsage $ "Unexpected args: " <> show extra
     magic <- requireWord "--network-magic" magicS
@@ -78,6 +81,7 @@ parseConfig args0 = do
             , dcByronEpochSlots = fromIntegral (slots :: Word)
             , dcReadyThresholdSlots = fromIntegral (ready :: Word)
             , dcSecurityParamK = fromIntegral (k :: Word)
+            , dcDbPath = mDbPath
             }
   where
     requireFlag key args =
@@ -103,7 +107,8 @@ dieUsage msg = do
     hPutStrLn stderr "  --network-magic INT \\"
     hPutStrLn stderr "  --byron-epoch-slots INT \\"
     hPutStrLn stderr "  [--ready-threshold-slots INT] \\"
-    hPutStrLn stderr "  [--security-param-k INT]"
+    hPutStrLn stderr "  [--security-param-k INT] \\"
+    hPutStrLn stderr "  [--db-path PATH]"
     exitFailure
 
 -- | Entry point. Parse args, log config, run the daemon.
