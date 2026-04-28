@@ -215,6 +215,7 @@ test-suite unit-tests
     Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.TxBuildGoldenSpec
     Cardano.Node.Client.TxBuildSpec
+    Cardano.Node.Client.TxGenerator.FanoutSpec
     Cardano.Node.Client.TxGenerator.PersistSpec
     Cardano.Node.Client.TxGenerator.PopulationSpec
     Cardano.Node.Client.TxGenerator.SelectionSpec
