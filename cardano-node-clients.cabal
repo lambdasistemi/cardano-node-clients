@@ -163,9 +163,12 @@ library utxo-indexer-lib
     , base
     , bytestring
     , containers
+    , data-default-class
     , dependent-map
     , dependent-sum
     , lens
+    , rocksdb-haskell-jprupp
+    , rocksdb-kv-transactions
     , rocksdb-kv-transactions:kv-transactions
     , some
     , stm

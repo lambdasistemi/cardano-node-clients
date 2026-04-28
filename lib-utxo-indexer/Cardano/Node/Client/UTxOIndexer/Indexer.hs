@@ -43,6 +43,7 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     -- * Indexer handle
     IndexerHandle (..),
     withInMemoryIndexer,
+    withRocksDBIndexer,
 
     -- * Operations
     UtxoOp (..),
@@ -96,8 +97,9 @@ import Database.KV.Cursor (
     seekKey,
  )
 import Data.Dependent.Map (DMap)
-import Database.KV.Database (Column, KV, mkColumns)
+import Database.KV.Database (Codecs, KV, mkColumns)
 import Database.KV.InMemory (mkInMemoryDatabase)
+import Database.KV.RocksDB (mkRocksDBDatabase)
 import Database.KV.Transaction (
     DSum ((:=>)),
     RunTransaction (..),
@@ -108,6 +110,12 @@ import Database.KV.Transaction (
     iterating,
     newRunTransaction,
     query,
+ )
+import Data.Default.Class (def)
+import Database.RocksDB (
+    Config (..),
+    columnFamilies,
+    withDBCF,
  )
 
 {- | An observed @TxIn@ apparition: the slot and block
@@ -162,30 +170,73 @@ handle, and clean up on exit.
 A fresh in-memory database starts empty, but we still
 seed the rollback-log counter via 'countRollbackEntries'
 to keep this constructor's wiring identical to the
-RocksDB one (so any future on-disk shape that reuses
-'mkInMemoryDatabase' for tests reads correctly).
+RocksDB one.
 -}
 withInMemoryIndexer :: (IndexerHandle -> IO a) -> IO a
 withInMemoryIndexer action = do
-    db <- mkInMemoryDatabase indexerColumns
+    db <- mkInMemoryDatabase (mkColumns [0 :: Int ..] indexerCodecs)
     runner <- newRunTransaction db
-    initialCount <- runTransaction runner countRollbackEntries
+    bootHandle runner action
+
+{- | Open a RocksDB-backed indexer at @path@ (creating
+the directory tree if missing) and run the action with
+the handle. The on-disk store survives process restart;
+on reopen, the rollback-log entry counter is re-derived
+by a one-shot scan of 'RollbackCol'.
+
+Three column families are created:
+
+* @utxo-indexer.txin@        — the @TxInCol@ table
+* @utxo-indexer.address@     — the @AddressIndex@ table
+* @utxo-indexer.rollback@    — the @RollbackCol@ log
+
+The order matters: 'mkColumns' threads the
+@'columnFamilies' db@ list through the typed-column
+@DMap@ in the same lex order the GADT iterates, so
+the names are paired with the right typed selector.
+-}
+withRocksDBIndexer ::
+    FilePath -> (IndexerHandle -> IO a) -> IO a
+withRocksDBIndexer path action =
+    withDBCF
+        path
+        def{createIfMissing = True}
+        [ ("utxo-indexer.txin", def)
+        , ("utxo-indexer.address", def)
+        , ("utxo-indexer.rollback", def)
+        ]
+        $ \rdb -> do
+            let database =
+                    mkRocksDBDatabase
+                        rdb
+                        (mkColumns (columnFamilies rdb) indexerCodecs)
+            runner <- newRunTransaction database
+            bootHandle runner action
+
+{- | Final stage shared by both constructors: derive the
+initial rollback-log counter from the database, set up
+the await-state TVars, and hand the constructed handle
+to the caller's action.
+-}
+bootHandle ::
+    RunTransaction IO cf Cols op ->
+    (IndexerHandle -> IO a) ->
+    IO a
+bootHandle runner@RunTransaction{runTransaction} action = do
+    initialCount <- runTransaction countRollbackEntries
     waitersVar <- newTVarIO Map.empty
     observedVar <- newTVarIO Map.empty
     countVar <- newTVarIO initialCount
     action (mkHandle runner waitersVar observedVar countVar)
 
--- | Shared column definitions (same for in-memory and
--- RocksDB backends).
-indexerColumns :: DMap Cols (Column Int)
-indexerColumns =
-    let codecs =
-            fromList
-                [ TxInCol :=> txInColCodecs
-                , AddressIndex :=> addressIndexCodecs
-                , RollbackCol :=> rollbackCodecs
-                ]
-     in mkColumns [0 :: Int ..] codecs
+-- | Shared codec definitions for the indexer columns.
+indexerCodecs :: DMap Cols Codecs
+indexerCodecs =
+    fromList
+        [ TxInCol :=> txInColCodecs
+        , AddressIndex :=> addressIndexCodecs
+        , RollbackCol :=> rollbackCodecs
+        ]
 
 {- | One-shot scan of 'RollbackCol' returning the entry
 count. O(n) in the column size — called once at startup
@@ -193,7 +244,7 @@ and never again; the in-memory counter handles steady
 state.
 -}
 countRollbackEntries ::
-    Transaction IO Int Cols Op Int
+    Transaction IO cf Cols op Int
 countRollbackEntries =
     iterating RollbackCol $
         firstEntry >>= go 0
@@ -202,8 +253,6 @@ countRollbackEntries =
     go !n (Just _) = nextEntry >>= go (n + 1)
 
 -- Internal -------------------------------------------------------
-
-type Op = (Int, BS.ByteString, Maybe BS.ByteString)
 
 {- | Map from a TxIn awaited by some caller to the
 list of empty TMVars waiting on it. Each TMVar gets
@@ -220,7 +269,8 @@ spend / rollback.
 type Observed = TVar (Map TxIn AwaitObservation)
 
 mkHandle ::
-    RunTransaction IO Int Cols Op ->
+    forall cf op.
+    RunTransaction IO cf Cols op ->
     Waiters ->
     Observed ->
     TVar Int ->
@@ -279,7 +329,7 @@ applyAndLog ::
     SlotNo ->
     BlockHash ->
     [UtxoOp] ->
-    Transaction IO Int Cols Op ()
+    Transaction IO cf Cols op ()
 applyAndLog slot bh ops = do
     inverses <- traverse step ops
     insert RollbackCol slot (bh, reverse inverses)
@@ -378,7 +428,7 @@ the in-memory entry counter stays in sync.
 -}
 rollbackToSlot ::
     SlotNo ->
-    Transaction IO Int Cols Op Int
+    Transaction IO cf Cols op Int
 rollbackToSlot target = do
     entries <-
         iterating RollbackCol $
@@ -421,7 +471,7 @@ function does not re-scan the column to size it.
 -}
 pruneOldest ::
     Int ->
-    Transaction IO Int Cols Op Int
+    Transaction IO cf Cols op Int
 pruneOldest excess
     | excess <= 0 = pure 0
     | otherwise = do
@@ -451,7 +501,7 @@ collectFirstNKeys n0 =
 -- | Inverse of a single op against current state.
 inverseOf ::
     UtxoOp ->
-    Transaction IO Int Cols Op UtxoOp
+    Transaction IO cf Cols op UtxoOp
 inverseOf op = do
     let txIn = opTxIn op
     mAddr <- query TxInCol txIn
@@ -469,7 +519,7 @@ opTxIn (UtxoSpend t) = t
 
 applyOne ::
     UtxoOp ->
-    Transaction IO Int Cols Op ()
+    Transaction IO cf Cols op ()
 applyOne (UtxoCreate txIn addr txOut) = do
     insert TxInCol txIn addr
     insert AddressIndex (AddrKey addr txIn) txOut
