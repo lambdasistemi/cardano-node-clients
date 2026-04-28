@@ -12,6 +12,15 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 - **TxBuild** -- Conway-era transaction builder DSL with `Peek`, `Ctx`, and `Valid`
 - **N2C** -- LocalStateQuery + LocalTxSubmission over Unix socket
 
+## Executables
+
+- [`utxo-indexer`](app/utxo-indexer/) -- in-memory address->UTxO indexer
+  daemon exposing NDJSON snapshot/await over a Unix socket.
+- [`cardano-tx-generator`](app/cardano-tx-generator/) -- Antithesis-driven
+  fan-out daemon that creates monotonic UTxO and address pressure on a
+  node by driving deterministic transactions through a growing
+  population of derived addresses.
+
 ## Testing
 
 - Unit tests cover `balanceTx`, `balanceFeeLoop`, and the `TxBuild`
