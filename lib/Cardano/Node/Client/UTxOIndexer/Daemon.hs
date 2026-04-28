@@ -100,7 +100,11 @@ runDaemon :: DaemonConfig -> IO ()
 runDaemon cfg = do
     readyVar <- newTVarIO initialReady
     withIndexer (dcDbPath cfg) $ \idx -> do
-        let getReady = readTVarIO readyVar
+        bootMode <- detectBootMode idx
+        let resumePoints = case bootMode of
+                ColdBoot -> [Network.Point Network.Point.Origin]
+                WarmBoot ps -> fmap toHeaderPoint ps
+            getReady = readTVarIO readyVar
             chainAction =
                 runChainSyncN2C
                     (EpochSlots (dcByronEpochSlots cfg))
@@ -109,8 +113,8 @@ runDaemon cfg = do
                     ( mkChainSyncN2C
                         nullTracer
                         nullTracer
-                        (mkIntersector cfg readyVar idx)
-                        [Network.Point Network.Point.Origin]
+                        (mkIntersector bootMode cfg readyVar idx)
+                        resumePoints
                     )
             serverAction = runServer (dcListenSocket cfg) idx getReady
         concurrently_ (void chainAction) serverAction
@@ -125,20 +129,98 @@ runDaemon cfg = do
     withIndexer Nothing = withInMemoryIndexer
     withIndexer (Just path) = withRocksDBIndexer path
 
+{- | Boot classification: cold (no retained rollback
+points — fresh DB or in-memory) vs. warm (one or more
+retained points from a prior run).
+
+The two are treated differently on @intersectNotFound@:
+cold boots retry with @[Origin]@ (transient races during
+node startup are normal), warm boots fail closed (their
+saved chain has diverged from the node beyond the
+security parameter k, and origin-replay over the
+populated DB would mix histories).
+-}
+data BootMode
+    = ColdBoot
+    | WarmBoot ![(SlotNo, BlockHash)]
+
+detectBootMode :: IndexerHandle -> IO BootMode
+detectBootMode idx = do
+    pairs <- getResumePoints idx
+    pure $ case pairs of
+        [] -> ColdBoot
+        ps -> WarmBoot ps
+
+{- | Convert a stored @(slot, blockhash)@ pair into a
+'HeaderPoint' chain-sync can negotiate against.
+-}
+toHeaderPoint :: (SlotNo, BlockHash) -> HeaderPoint
+toHeaderPoint (SlotNo s, BlockHash bh) =
+    Network.Point
+        ( Network.Point.At
+            ( Network.Point.Block
+                (Network.SlotNo s)
+                (OneEraHash (SBS.toShort bh))
+            )
+        )
+
 mkIntersector ::
+    BootMode ->
     DaemonConfig ->
     TVar ReadyStatus ->
     IndexerHandle ->
     Intersector HeaderPoint Network.SlotNo Fetched
-mkIntersector cfg readyVar idx =
-    Intersector
-        { intersectFound = \_pt -> pure (mkFollower cfg readyVar idx)
-        , intersectNotFound =
-            pure
-                ( mkIntersector cfg readyVar idx
-                , [Network.Point Network.Point.Origin]
-                )
-        }
+mkIntersector bootMode cfg readyVar idx = self
+  where
+    self =
+        Intersector
+            { intersectFound = \point -> do
+                -- Roll persistent state back to the
+                -- intersected slot before following. No-op
+                -- when the newest saved point intersects
+                -- (rollbackTo's RollbackCol walk finds nothing
+                -- strictly past the target); required when an
+                -- older retained point intersected because of
+                -- an offline rollback.
+                rollbackTo idx (slotOfPoint point)
+                pure (mkFollower cfg readyVar idx)
+            , intersectNotFound = case bootMode of
+                ColdBoot ->
+                    -- Cold-boot races during node startup are
+                    -- normal; retry with [Origin]. Origin
+                    -- always intersects once the node's chain
+                    -- is loaded.
+                    pure (self, [Network.Point Network.Point.Origin])
+                WarmBoot _ ->
+                    -- Amended #86: never origin-replay over a
+                    -- populated DB — that mixes chain histories.
+                    -- Fail closed; manual recovery is wiping
+                    -- --db-path. A future flag could opt into
+                    -- automatic 'Rollbacks.armageddonCleanup'-
+                    -- driven rebuild.
+                    error
+                        "utxo-indexer: chain-sync found no \
+                        \intersection against any retained \
+                        \rollback-log point. The saved chain \
+                        \has diverged from the node beyond \
+                        \the security parameter k. Wipe \
+                        \--db-path to rebuild from Origin, \
+                        \or restart against a node whose \
+                        \chain still includes one of the \
+                        \saved points."
+            }
+
+{- | Convert a chain-sync 'HeaderPoint' to the indexer's
+'SlotNo'. Origin maps to @SlotNo 0@; that's only used in
+the unusual case where chain-sync intersects at Origin
+itself, in which case 'rollbackTo' on @SlotNo 0@ is a
+no-op against an already-cold DB.
+-}
+slotOfPoint :: HeaderPoint -> SlotNo
+slotOfPoint p =
+    case Network.pointSlot p of
+        Network.Point.Origin -> SlotNo 0
+        Network.Point.At s -> SlotNo (Network.unSlotNo s)
 
 mkFollower ::
     DaemonConfig ->
