@@ -40,6 +40,77 @@ import Test.Hspec (
 spec :: Spec
 spec =
     describe "Cardano.Node.Client.UTxOIndexer (RocksDB)" $ do
+        it "getResumePoints on a cold RocksDB returns []" $
+            withTempDB $ \dbPath ->
+                withRocksDBIndexer dbPath $ \h -> do
+                    pts <- getResumePoints h
+                    pts `shouldBe` []
+
+        it "getResumePoints returns retained slots newest-first" $
+            -- Three entries fit entirely under the Fibonacci
+            -- sample (intervals 0,1,1 cover them all), so the
+            -- result is just the full reverse — newest first.
+            withTempDB $ \dbPath -> do
+                let addr = Address (BS.replicate 29 0xAA)
+                    bh1 = BlockHash (BS.replicate 32 0x11)
+                    bh2 = BlockHash (BS.replicate 32 0x22)
+                    bh3 = BlockHash (BS.replicate 32 0x33)
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                withRocksDBIndexer dbPath $ \h -> do
+                    applyAtSlot h (SlotNo 1) bh1 [mk 0x01]
+                    applyAtSlot h (SlotNo 2) bh2 [mk 0x02]
+                    applyAtSlot h (SlotNo 3) bh3 [mk 0x03]
+                withRocksDBIndexer dbPath $ \h -> do
+                    pts <- getResumePoints h
+                    pts
+                        `shouldBe` [ (SlotNo 3, bh3)
+                                   , (SlotNo 2, bh2)
+                                   , (SlotNo 1, bh1)
+                                   ]
+
+        it "getResumePoints thins large logs at Fibonacci offsets" $
+            -- With 10 entries the sampler keeps offsets
+            -- 0, 1, 2, 4, 7 from newest (slots 10, 9, 8, 6, 3)
+            -- AND the oldest retained slot (1) — the
+            -- "last-element-always-included" property of
+            -- 'sampleAtFibonacciIntervals'. The oldest
+            -- checkpoint is the deepest intersection candidate
+            -- chain-sync has, so dropping it would silently
+            -- weaken the warm-boot recoverability story.
+            withTempDB $ \dbPath -> do
+                let addr = Address (BS.replicate 29 0xAA)
+                    mk tid =
+                        UtxoCreate
+                            (TxIn (BS.replicate 32 tid) 0)
+                            addr
+                            (TxOut (BS.singleton tid))
+                    bh n =
+                        BlockHash (BS.replicate 32 (fromIntegral n))
+                withRocksDBIndexer dbPath $ \h ->
+                    mapM_
+                        ( \n ->
+                            applyAtSlot
+                                h
+                                (SlotNo (fromIntegral n))
+                                (bh n)
+                                [mk (fromIntegral n)]
+                        )
+                        [1 .. 10 :: Int]
+                withRocksDBIndexer dbPath $ \h -> do
+                    pts <- getResumePoints h
+                    fmap fst pts
+                        `shouldBe` [ SlotNo 10
+                                   , SlotNo 9
+                                   , SlotNo 8
+                                   , SlotNo 6
+                                   , SlotNo 3
+                                   , SlotNo 1
+                                   ]
+
         it "address index survives close + reopen" $
             withTempDB $ \dbPath -> do
                 let addr = Address (BS.replicate 29 0xAA)

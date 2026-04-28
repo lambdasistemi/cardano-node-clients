@@ -60,7 +60,6 @@ library
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
     Cardano.Node.Client.UTxOIndexer.Server
-    Data.List.SampleFibonacci
 
   build-depends:
     , aeson
@@ -157,6 +156,7 @@ library utxo-indexer-lib
     Cardano.Node.Client.UTxOIndexer.Indexer
     Cardano.Node.Client.UTxOIndexer.IndexerOp
     Cardano.Node.Client.UTxOIndexer.Types
+    Data.List.SampleFibonacci
 
   build-depends:
     , async

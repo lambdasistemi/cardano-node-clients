@@ -77,6 +77,13 @@ import ChainFollower.Rollbacks.Store qualified as Rollbacks
 import ChainFollower.Rollbacks.Types (
     RollbackPoint (..),
  )
+import Data.IORef (
+    IORef,
+    newIORef,
+    readIORef,
+    writeIORef,
+ )
+import Data.List.SampleFibonacci (sampleAtFibonacciIntervals)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (
@@ -207,6 +214,22 @@ data IndexerHandle = IndexerHandle
     -- timeout. If @txIn@ is already in the index when
     -- called, returns immediately with the
     -- last-observed observation.
+    , getResumePoints :: IO [(SlotNo, BlockHash)]
+    -- ^ Read 'RollbackCol' newest-to-oldest, thin the
+    -- result at Fibonacci intervals (via
+    -- 'Cardano.Node.Client.SampleList.sampleList'), and
+    -- return the resulting chain-sync resume candidates.
+    -- Returns @[]@ when the column is empty (cold boot —
+    -- caller should treat that as "resume from Origin").
+    --
+    -- Newest-first matters because chain-sync picks the
+    -- first candidate on the node's current chain. If an
+    -- offline rollback dropped our latest saved point
+    -- from the node's chain, the next-older retained
+    -- point is the correct resume target. Fibonacci
+    -- thinning keeps the candidate list log-sized in
+    -- @k@ instead of linear: dense near the tip, sparse
+    -- deep in the past.
     }
 
 {- | Open an in-memory indexer, run the action with the
@@ -368,6 +391,18 @@ mkHandle
                 runTransaction . iterating AddressIndex . scanAddress
             , awaitTxIn =
                 doAwait runTransaction waitersVar observedVar
+            , getResumePoints = do
+                history <-
+                    runTransaction
+                        (Rollbacks.queryHistory RollbackCol)
+                let pairs =
+                        reverse
+                            [ (slot, bh)
+                            | (slot, RollbackPoint{rpMeta = Just bh}) <-
+                                history
+                            ]
+                ref <- newIORef pairs
+                sampleAtFibonacciIntervals (popFront ref)
             }
 
 {- | Internal: outcome of the apply transaction. Private
@@ -718,3 +753,17 @@ scanAddress addr =
         | addrKeyAddress k == addr =
             nextEntry >>= go ((addrKeyTxIn k, v) : acc)
         | otherwise = pure (reverse acc)
+
+{- | Stream a mutable list reference one element at a
+time, returning 'Nothing' when exhausted. Used to feed
+'sampleAtFibonacciIntervals' from a pure list — the
+library function expects an @m (Maybe a)@ stream.
+-}
+popFront :: IORef [a] -> IO (Maybe a)
+popFront ref = do
+    xs <- readIORef ref
+    case xs of
+        [] -> pure Nothing
+        (y : ys) -> do
+            writeIORef ref ys
+            pure (Just y)
