@@ -10,6 +10,7 @@ import Cardano.Node.Client.E2E.N2CFullSpec qualified as N2CFullSpec
 import Cardano.Node.Client.E2E.ProviderSpec qualified as ProviderSpec
 import Cardano.Node.Client.E2E.TxBuildSpec qualified as TxBuildSpec
 import Cardano.Node.Client.E2E.TxGeneratorReadySpec qualified as TxGeneratorReadySpec
+import Cardano.Node.Client.E2E.TxGeneratorRefillSpec qualified as TxGeneratorRefillSpec
 import Cardano.Node.Client.E2E.UTxOIndexerSpec qualified as UTxOIndexerSpec
 
 main :: IO ()
@@ -23,3 +24,4 @@ main = hspec $ do
     ChainPopulatorSpec.spec
     UTxOIndexerSpec.spec
     TxGeneratorReadySpec.spec
+    TxGeneratorRefillSpec.spec

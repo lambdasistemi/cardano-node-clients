@@ -34,6 +34,10 @@ module Cardano.Node.Client.TxGenerator.Population (
     deriveSignKey,
     deriveAddr,
 
+    -- * Faucet helpers (raw 32-byte seed)
+    mkSignKey,
+    enterpriseAddrFromSignKey,
+
     -- * Internals (exposed for tests)
     deriveSeedAt,
 ) where
@@ -94,7 +98,16 @@ index @i@.
 deriveSignKey ::
     ByteString -> Word64 -> SignKeyDSIGN Ed25519DSIGN
 deriveSignKey masterSeed i =
-    genKeyDSIGN (mkSeedFromBytes (deriveSeedAt masterSeed i))
+    mkSignKey (deriveSeedAt masterSeed i)
+
+{- | Construct an Ed25519 signing key directly from 32
+raw seed bytes. Used by the daemon's startup to load the
+faucet's signing key from its on-disk file. Bytes shorter
+than 32 are padded with zeroes by 'mkSeedFromBytes'; the
+caller should validate the length.
+-}
+mkSignKey :: ByteString -> SignKeyDSIGN Ed25519DSIGN
+mkSignKey = genKeyDSIGN . mkSeedFromBytes
 
 {- | The payment-only enterprise address at population
 index @i@ on the given 'Network'. No stake credential.
@@ -102,8 +115,17 @@ index @i@ on the given 'Network'. No stake credential.
 deriveAddr ::
     Network -> ByteString -> Word64 -> Addr
 deriveAddr net masterSeed i =
+    enterpriseAddrFromSignKey net (deriveSignKey masterSeed i)
+
+{- | The payment-only enterprise address that owns the
+given Ed25519 signing key on the given 'Network'. Used
+both for the population (via 'deriveAddr') and for the
+faucet (whose key is loaded directly from disk).
+-}
+enterpriseAddrFromSignKey ::
+    Network -> SignKeyDSIGN Ed25519DSIGN -> Addr
+enterpriseAddrFromSignKey net sk =
     Addr net (KeyHashObj kh) StakeRefNull
   where
     kh :: KeyHash Payment
     kh = hashKey (VKey (deriveVerKeyDSIGN sk))
-    sk = deriveSignKey masterSeed i

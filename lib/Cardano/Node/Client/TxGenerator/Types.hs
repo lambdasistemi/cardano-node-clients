@@ -23,6 +23,7 @@ module Cardano.Node.Client.TxGenerator.Types (
     ReadyResponse (..),
     SnapshotResponse (..),
     TransactResponse (..),
+    RefillResponse (..),
     FailureReason (..),
 
     -- * Failure-reason wire form
@@ -87,7 +88,7 @@ data SnapshotResponse = SnapshotResponse
     }
     deriving stock (Eq, Show)
 
--- | Wire body of the @transact@ / @refill@ response.
+-- | Wire body of the @transact@ response.
 data TransactResponse
     = TransactOk
         { txOkTxId :: !Text
@@ -99,6 +100,18 @@ data TransactResponse
         , txOkAwaited :: !Bool
         }
     | TransactFail !FailureReason
+    deriving stock (Eq, Show)
+
+-- | Wire body of the @refill@ response.
+data RefillResponse
+    = RefillOk
+        { rfOkTxId :: !Text
+        -- ^ hex-encoded
+        , rfOkFreshIndex :: !Word64
+        , rfOkValueLovelace :: !Integer
+        , rfOkAwaited :: !Bool
+        }
+    | RefillFail !FailureReason
     deriving stock (Eq, Show)
 
 {- | Discriminable failure categories per
@@ -219,6 +232,27 @@ instance ToJSON TransactResponse where
                 , "awaited" .= txOkAwaited
                 ]
     toJSON (TransactFail r) =
+        object
+            [ "ok" .= False
+            , "reason" .= failureReasonText r
+            ]
+
+instance ToJSON RefillResponse where
+    toJSON
+        RefillOk
+            { rfOkTxId
+            , rfOkFreshIndex
+            , rfOkValueLovelace
+            , rfOkAwaited
+            } =
+            object
+                [ "ok" .= True
+                , "txId" .= rfOkTxId
+                , "fresh_index" .= rfOkFreshIndex
+                , "value_lovelace" .= rfOkValueLovelace
+                , "awaited" .= rfOkAwaited
+                ]
+    toJSON (RefillFail r) =
         object
             [ "ok" .= False
             , "reason" .= failureReasonText r

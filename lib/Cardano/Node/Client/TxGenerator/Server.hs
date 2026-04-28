@@ -35,6 +35,7 @@ import Cardano.Node.Client.TxGenerator.Types (
     FailureReason (IndexNotReady),
     ReadyResponse,
     RefillRequest,
+    RefillResponse (RefillFail),
     Request (..),
     SnapshotResponse,
     TransactRequest,
@@ -82,7 +83,7 @@ data ServerHooks = ServerHooks
     { hooksReady :: IO ReadyResponse
     , hooksSnapshot :: IO SnapshotResponse
     , hooksTransact :: TransactRequest -> IO TransactResponse
-    , hooksRefill :: RefillRequest -> IO TransactResponse
+    , hooksRefill :: RefillRequest -> IO RefillResponse
     }
 
 {- | Build a 'ServerHooks' whose @transact@ and @refill@
@@ -102,7 +103,7 @@ stubHooks ready snap =
         , hooksTransact = \_ ->
             pure (TransactFail IndexNotReady)
         , hooksRefill = \_ ->
-            pure (TransactFail IndexNotReady)
+            pure (RefillFail IndexNotReady)
         }
 
 {- | Run the NDJSON server on @socketPath@ until killed

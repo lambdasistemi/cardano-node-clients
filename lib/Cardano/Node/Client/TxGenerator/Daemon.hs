@@ -1,3 +1,4 @@
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
@@ -8,31 +9,23 @@ License     : Apache-2.0
 Composes the four pieces the daemon needs:
 
 * the in-memory address-to-UTxO indexer from
-  @utxo-indexer-lib@ (the @withInMemoryIndexer@ /
-  @withRocksDBIndexer@ surface),
+  @utxo-indexer-lib@,
 
 * a single N2C connection to the relay via
   'Cardano.Node.Client.N2C.Connection.runNodeClientFull'
   carrying ChainSync (feeds the indexer), LSQ (one-shot
-  PParams query at startup), and LTxS (used by future
-  transact / refill arms),
+  PParams query at startup, plus faucet UTxO selection
+  on the rare refill path), and LTxS (transaction
+  submission),
 
 * the NDJSON control wire from
   'Cardano.Node.Client.TxGenerator.Server',
 
 * the on-disk state from
-  'Cardano.Node.Client.TxGenerator.Persist' (@master.seed@
-  + @next-hd-index@).
+  'Cardano.Node.Client.TxGenerator.Persist'.
 
-The chain-sync follower glue (@Intersector@ / @Follower@)
-mirrors the merged indexer's @Daemon.hs@ pattern,
-re-implemented here so the indexer's internals stay
-private.
-
-T007 ships only the @ready@ / @snapshot@ readonly hooks
-real; @transact@ and @refill@ are stubbed at the server
-level (see 'Cardano.Node.Client.TxGenerator.Server.stubHooks')
-until T008 / T011.
+T008 wires the @refill@ arm end-to-end (User Story 2).
+@transact@ stays stubbed until T011.
 -}
 module Cardano.Node.Client.TxGenerator.Daemon (
     DaemonConfig (..),
@@ -40,6 +33,32 @@ module Cardano.Node.Client.TxGenerator.Daemon (
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots (..))
+import Cardano.Crypto.DSIGN (
+    DSIGNAlgorithm (deriveVerKeyDSIGN),
+    Ed25519DSIGN,
+    SignKeyDSIGN,
+ )
+import Cardano.Crypto.Hash.Class (hashToBytes)
+import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Api.PParams (PParams)
+import Cardano.Ledger.Api.Tx (
+    addrTxWitsL,
+    txIdTx,
+    witsTxL,
+ )
+import Cardano.Ledger.Api.Tx.Out (coinTxOutL)
+import Cardano.Ledger.BaseTypes (Network (Mainnet, Testnet))
+import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Core (TxOut, extractHash)
+import Cardano.Ledger.Keys (
+    VKey (..),
+    WitVKey (..),
+    asWitness,
+    signedDSIGN,
+ )
+import Cardano.Ledger.TxIn (TxId (..), TxIn)
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.N2C.ChainSync (
     Fetched (..),
     HeaderPoint,
@@ -50,35 +69,57 @@ import Cardano.Node.Client.N2C.Connection (
     newLTxSChannel,
     runNodeClientFull,
  )
+import Cardano.Node.Client.N2C.Provider (mkN2CProvider)
+import Cardano.Node.Client.N2C.Submitter (mkN2CSubmitter)
+import Cardano.Node.Client.Provider (Provider (..))
+import Cardano.Node.Client.Submitter (
+    SubmitResult (..),
+    Submitter (..),
+ )
+import Cardano.Node.Client.TxGenerator.Build (refillTx)
 import Cardano.Node.Client.TxGenerator.Persist (
     loadOrCreateSeed,
     nextHDIndexPath,
     readNextHDIndex,
+    writeNextHDIndex,
+ )
+import Cardano.Node.Client.TxGenerator.Population (
+    deriveAddr,
+    enterpriseAddrFromSignKey,
+    mkSignKey,
  )
 import Cardano.Node.Client.TxGenerator.Server (
+    ServerHooks (..),
     runServer,
-    stubHooks,
  )
 import Cardano.Node.Client.TxGenerator.Types (
+    FailureReason (..),
     ReadyResponse (..),
+    RefillRequest,
+    RefillResponse (..),
     SnapshotResponse (..),
+    TransactResponse (TransactFail),
  )
 import Cardano.Node.Client.UTxOIndexer.BlockExtract (extractBlock)
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    AwaitObservation,
     IndexerHandle (..),
     withInMemoryIndexer,
     withRocksDBIndexer,
  )
-import Cardano.Node.Client.UTxOIndexer.Types (
-    BlockHash (..),
-    SlotNo (..),
- )
+import Cardano.Node.Client.UTxOIndexer.Types qualified as Idx
 import ChainFollower (
     Follower (..),
     Intersector (..),
     ProgressOrRewind (..),
  )
-import Control.Concurrent.Async (concurrently_)
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (withAsync)
+import Control.Concurrent.MVar (
+    MVar,
+    modifyMVar,
+    newMVar,
+ )
 import Control.Concurrent.STM (
     TVar,
     atomically,
@@ -88,9 +129,18 @@ import Control.Concurrent.STM (
  )
 import Control.Monad (void)
 import Control.Tracer (nullTracer)
+import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Short qualified as SBS
-import Data.Word (Word32, Word64)
+import Data.Function (on)
+import Data.List (maximumBy)
+import Data.Maybe (isJust)
+import Data.Set qualified as Set
+import Data.Text (Text)
+import Data.Text.Encoding qualified as Text
+import Data.Word (Word16, Word32, Word64)
+import Lens.Micro ((%~), (&), (^.))
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
     OneEraHash (..),
  )
@@ -115,10 +165,7 @@ data DaemonConfig = DaemonConfig
     }
     deriving stock (Show)
 
-{- | Mirrors the indexer's per-run readiness state. Filled
-in by the chain-sync follower; read by the @ready@
-endpoint.
--}
+-- | Mirrors the indexer's per-run readiness state.
 data ReadyState = ReadyState
     { rsReady :: !Bool
     , rsTipSlot :: !(Maybe Word64)
@@ -134,32 +181,39 @@ initialReady =
         , rsProcessedSlot = Nothing
         }
 
-{- | Boot classification: cold (no retained rollback
-points) vs. warm (retained from a prior run). Mirrors
-the indexer daemon's 'BootMode'.
--}
 data BootMode
     = ColdBoot
-    | WarmBoot ![(SlotNo, BlockHash)]
+    | WarmBoot ![(Idx.SlotNo, Idx.BlockHash)]
+
+{- | Default refill amount (lovelace) per @refill@ trigger:
+5 000 ADA. Sized to support several K=8 fan-outs at the
+protocol minimum-UTxO threshold without immediate
+re-refill pressure.
+-}
+defaultRefillLovelace :: Coin
+defaultRefillLovelace = Coin 5_000_000_000
 
 {- | Open the indexer (in-memory if @dcDbPath@ is
 'Nothing', RocksDB otherwise), open one N2C connection
-to the relay carrying chain-sync + LSQ + LTxS, mount the
-control wire on @dcControlSocket@, and block until the
-chain-sync side or the server exits.
+to the relay carrying chain-sync + LSQ + LTxS, query
+protocol parameters once at startup, mount the control
+wire on @dcControlSocket@, and block until the chain-sync
+side or the server exits.
 -}
 runDaemon :: DaemonConfig -> IO ()
 runDaemon cfg = do
     createDirectoryIfMissing True (dcStateDir cfg)
-    -- Master seed (created on first run, idempotent
-    -- thereafter). We don't use it on the tx path in
-    -- T007; this is just sanity that the file exists
-    -- and is well-formed.
-    _masterSeed <- loadOrCreateSeed (dcMasterSeedFile cfg)
-    -- Faucet skey is loaded but not yet consumed by T007.
-    _faucetKeyBytes <- BS.readFile (dcFaucetSKeyFile cfg)
+    masterSeed <- loadOrCreateSeed (dcMasterSeedFile cfg)
+    faucetKeyBytes <- BS.readFile (dcFaucetSKeyFile cfg)
+    let faucetSKey = mkSignKey (BS.take 32 faucetKeyBytes)
+        net = networkFromMagic (dcNetworkMagic cfg)
+        faucetAddr = enterpriseAddrFromSignKey net faucetSKey
+    initialIdx <- readNextHDIndex (nextHDIndexPath (dcStateDir cfg))
+    nextIdxMVar <- newMVar initialIdx
     withIndexer (dcDbPath cfg) $ \idx -> do
         readyVar <- newTVarIO initialReady
+        lastTxIdVar <- newTVarIO Nothing
+        faucetKnownVar <- newTVarIO False
         lsqCh <- newLSQChannel 16
         ltxsCh <- newLTxSChannel 16
         bootMode <- detectBootMode idx
@@ -181,61 +235,303 @@ runDaemon cfg = do
                     chainSyncApp
                     lsqCh
                     ltxsCh
-        let getReady = readyResponseFrom readyVar
-            getSnapshot =
-                snapshotResponseFrom
-                    (nextHDIndexPath (dcStateDir cfg))
-                    readyVar
-            hooks = stubHooks getReady getSnapshot
-            serverAction = runServer (dcControlSocket cfg) hooks
-        -- One physical N2C connection (chain-sync feeds the
-        -- indexer; LSQ + LTxS are open and idle for T008+
-        -- to consume); run it concurrently with the server.
-        concurrently_ (void nodeAction) serverAction
+        withAsync (void nodeAction) $ \_nodeT -> do
+            -- Brief settle for the mux handshake.
+            threadDelay 3_000_000
+            let provider = mkN2CProvider lsqCh
+                submitter = mkN2CSubmitter ltxsCh
+            pp <- queryProtocolParams provider
+            -- Probe the faucet once at startup so the
+            -- @ready@ probe can flip @faucetUtxosKnown@
+            -- without waiting for the first @refill@
+            -- trigger. Subsequent refills update this flag
+            -- per their LSQ response.
+            initialFaucetUtxos <- queryUTxOs provider faucetAddr
+            atomically
+                ( writeTVar
+                    faucetKnownVar
+                    (not (null initialFaucetUtxos))
+                )
+            let getReady =
+                    readyResponseFrom readyVar faucetKnownVar
+                getSnapshot =
+                    snapshotResponseFrom
+                        (nextHDIndexPath (dcStateDir cfg))
+                        readyVar
+                        lastTxIdVar
+                doRefill =
+                    runRefillArm
+                        cfg
+                        pp
+                        idx
+                        provider
+                        submitter
+                        net
+                        masterSeed
+                        faucetSKey
+                        faucetAddr
+                        nextIdxMVar
+                        lastTxIdVar
+                        faucetKnownVar
+                hooks =
+                    ServerHooks
+                        { hooksReady = getReady
+                        , hooksSnapshot = getSnapshot
+                        , hooksTransact = \_ ->
+                            pure (TransactFail IndexNotReady)
+                        , hooksRefill = doRefill
+                        }
+            runServer (dcControlSocket cfg) hooks
   where
     withIndexer Nothing = withInMemoryIndexer
     withIndexer (Just path) = withRocksDBIndexer path
 
 -- ----------------------------------------------------------------------
+-- Refill arm (User Story 2 / T008)
+-- ----------------------------------------------------------------------
+
+{- | Run one refill: take the next-HD-index lock, query
+LSQ for the faucet's UTxOs, pick the highest-value one,
+build the refill tx, sign with the faucet key, submit,
+await the new UTxO at the fresh address via the indexer,
+bump and persist the next-HD-index. Releases the lock
+on every code path; never increments the index without a
+confirmed submit.
+-}
+runRefillArm ::
+    DaemonConfig ->
+    PParams ConwayEra ->
+    IndexerHandle ->
+    Provider IO ->
+    Submitter IO ->
+    Network ->
+    ByteString ->
+    SignKeyDSIGN Ed25519DSIGN ->
+    Addr ->
+    MVar Word64 ->
+    TVar (Maybe Text) ->
+    TVar Bool ->
+    RefillRequest ->
+    IO RefillResponse
+runRefillArm
+    cfg
+    pp
+    idx
+    provider
+    submitter
+    net
+    masterSeed
+    faucetSKey
+    faucetAddr
+    nextIdxMVar
+    lastTxIdVar
+    faucetKnownVar
+    _req =
+        modifyMVar nextIdxMVar $ \currentIdx -> do
+            utxos <- queryUTxOs provider faucetAddr
+            case utxos of
+                [] -> do
+                    atomically (writeTVar faucetKnownVar False)
+                    pure (currentIdx, RefillFail FaucetNotKnown)
+                _ -> do
+                    atomically (writeTVar faucetKnownVar True)
+                    let (faucetIn, faucetOut) =
+                            pickHighestValue utxos
+                        freshAddr =
+                            deriveAddr net masterSeed currentIdx
+                        amount = defaultRefillLovelace
+                    if faucetOut ^. coinTxOutL <= amount
+                        then
+                            pure
+                                ( currentIdx
+                                , RefillFail FaucetExhausted
+                                )
+                        else
+                            buildSignSubmit
+                                cfg
+                                pp
+                                idx
+                                submitter
+                                faucetSKey
+                                faucetAddr
+                                (faucetIn, faucetOut)
+                                freshAddr
+                                amount
+                                currentIdx
+                                lastTxIdVar
+
+buildSignSubmit ::
+    DaemonConfig ->
+    PParams ConwayEra ->
+    IndexerHandle ->
+    Submitter IO ->
+    SignKeyDSIGN Ed25519DSIGN ->
+    Addr ->
+    (TxIn, TxOut ConwayEra) ->
+    Addr ->
+    Coin ->
+    Word64 ->
+    TVar (Maybe Text) ->
+    IO (Word64, RefillResponse)
+buildSignSubmit
+    cfg
+    pp
+    idx
+    submitter
+    faucetSKey
+    faucetAddr
+    faucetUtxo
+    freshAddr
+    amount
+    currentIdx
+    lastTxIdVar = do
+        buildResult <-
+            refillTx pp faucetUtxo freshAddr amount faucetAddr
+        case buildResult of
+            Left err ->
+                pure
+                    ( currentIdx
+                    , RefillFail (SubmitRejected err)
+                    )
+            Right tx -> do
+                let signed = addKeyWitness faucetSKey tx
+                result <- submitTx submitter signed
+                case result of
+                    Rejected reason -> do
+                        let reasonText =
+                                Text.decodeUtf8With
+                                    (\_ _ -> Just '\xFFFD')
+                                    reason
+                        pure
+                            ( currentIdx
+                            , RefillFail
+                                (SubmitRejected reasonText)
+                            )
+                    Submitted txId -> do
+                        let freshIxn =
+                                ledgerToIndexerTxIn txId 0
+                            timeoutS =
+                                Just (dcAwaitTimeoutSeconds cfg)
+                        obs <- awaitTxIn idx freshIxn timeoutS
+                        let awaited = isJust (obs :: Maybe AwaitObservation)
+                            txHex = txIdToHex txId
+                        writeNextHDIndex
+                            (nextHDIndexPath (dcStateDir cfg))
+                            (currentIdx + 1)
+                        atomically
+                            ( writeTVar
+                                lastTxIdVar
+                                (Just txHex)
+                            )
+                        pure
+                            ( currentIdx + 1
+                            , RefillOk
+                                { rfOkTxId = txHex
+                                , rfOkFreshIndex = currentIdx
+                                , rfOkValueLovelace = unCoin amount
+                                , rfOkAwaited = awaited
+                                }
+                            )
+
+-- ----------------------------------------------------------------------
 -- Server hooks
 -- ----------------------------------------------------------------------
 
-readyResponseFrom :: TVar ReadyState -> IO ReadyResponse
-readyResponseFrom readyVar = do
+readyResponseFrom ::
+    TVar ReadyState -> TVar Bool -> IO ReadyResponse
+readyResponseFrom readyVar faucetKnownVar = do
     rs <- readTVarIO readyVar
+    fk <- readTVarIO faucetKnownVar
     pure
         ReadyResponse
-            { readyReady = rsReady rs
+            { readyReady = rsReady rs && fk
             , readyIndexReady = rsReady rs
-            , -- T007: faucet UTxOs are not yet checked;
-              -- T008 wires this.
-              readyFaucetUtxosKnown = False
+            , readyFaucetUtxosKnown = fk
             }
 
 snapshotResponseFrom ::
     FilePath ->
     TVar ReadyState ->
+    TVar (Maybe Text) ->
     IO SnapshotResponse
-snapshotResponseFrom indexPath readyVar = do
+snapshotResponseFrom indexPath readyVar lastTxIdVar = do
     nextIdx <- readNextHDIndex indexPath
     rs <- readTVarIO readyVar
+    lastTx <- readTVarIO lastTxIdVar
     pure
         SnapshotResponse
             { snapPopulationSize = nextIdx
-            , -- v1: percentile aggregation lands in T013;
-              -- T007's snapshot reports population +
-              -- index tip + lastTxId only.
-              snapP10Lovelace = Nothing
+            , snapP10Lovelace = Nothing
             , snapP50Lovelace = Nothing
             , snapP90Lovelace = Nothing
             , snapTipSlot = rsTipSlot rs
-            , -- T007 doesn't track lastTxId yet; T011 wires
-              -- it.
-              snapLastTxId = Nothing
+            , snapLastTxId = lastTx
             }
 
 -- ----------------------------------------------------------------------
--- Chain-sync follower glue
+-- Helpers
+-- ----------------------------------------------------------------------
+
+-- | Map the Cardano network magic to the ledger 'Network'.
+networkFromMagic :: Word32 -> Network
+networkFromMagic 764824073 = Mainnet
+networkFromMagic _ = Testnet
+
+-- | Pick the UTxO with the largest ADA value.
+pickHighestValue ::
+    [(TxIn, TxOut ConwayEra)] ->
+    (TxIn, TxOut ConwayEra)
+pickHighestValue =
+    maximumBy
+        ( compare
+            `on` (\(_, o) -> o ^. coinTxOutL)
+        )
+
+{- | Convert a ledger 'TxId' + output index to the
+indexer's 'Idx.TxIn'.
+-}
+ledgerToIndexerTxIn ::
+    TxId -> Word16 -> Idx.TxIn
+ledgerToIndexerTxIn (TxId h) ix =
+    Idx.TxIn
+        { Idx.txInId = hashToBytes (extractHash h)
+        , Idx.txInIx = ix
+        }
+
+-- | Hex-encode a ledger 'TxId'.
+txIdToHex :: TxId -> Text
+txIdToHex (TxId h) =
+    Text.decodeUtf8 (Base16.encode (hashToBytes (extractHash h)))
+
+{- | Attach a key witness to a transaction body. Mirrors
+the helper in
+'Cardano.Node.Client.E2E.Setup.addKeyWitness' (kept
+private here so the main library does not depend on the
+@devnet@ test library).
+-}
+addKeyWitness ::
+    SignKeyDSIGN Ed25519DSIGN ->
+    ConwayTx ->
+    ConwayTx
+addKeyWitness sk tx =
+    tx & witsTxL . addrTxWitsL %~ Set.union wits
+  where
+    wits =
+        Set.singleton
+            ( WitVKey
+                (asWitness (VKey (deriveVerKeyDSIGN sk)))
+                ( signedDSIGN
+                    sk
+                    ( extractHash
+                        ( case txIdTx tx of
+                            TxId h -> h
+                        )
+                    )
+                )
+            )
+
+-- ----------------------------------------------------------------------
+-- Chain-sync follower glue (mirrors UTxOIndexer.Daemon)
 -- ----------------------------------------------------------------------
 
 detectBootMode :: IndexerHandle -> IO BootMode
@@ -245,8 +541,8 @@ detectBootMode idx = do
         [] -> ColdBoot
         ps -> WarmBoot ps
 
-toHeaderPoint :: (SlotNo, BlockHash) -> HeaderPoint
-toHeaderPoint (SlotNo s, BlockHash bh) =
+toHeaderPoint :: (Idx.SlotNo, Idx.BlockHash) -> HeaderPoint
+toHeaderPoint (Idx.SlotNo s, Idx.BlockHash bh) =
     Network.Point
         ( Network.Point.At
             ( Network.Point.Block
@@ -283,11 +579,12 @@ mkIntersector bootMode cfg readyVar idx = self
                         \default) to rebuild from Origin."
             }
 
-slotOfPoint :: HeaderPoint -> SlotNo
+slotOfPoint :: HeaderPoint -> Idx.SlotNo
 slotOfPoint p =
     case Network.pointSlot p of
-        Network.Point.Origin -> SlotNo 0
-        Network.Point.At s -> SlotNo (Network.unSlotNo s)
+        Network.Point.Origin -> Idx.SlotNo 0
+        Network.Point.At s ->
+            Idx.SlotNo (Network.unSlotNo s)
 
 mkFollower ::
     DaemonConfig ->
@@ -299,7 +596,8 @@ mkFollower cfg readyVar idx = self
     self =
         Follower
             { rollForward = \fetched tip -> do
-                let (slot, ops) = extractBlock (fetchedBlock fetched)
+                let (slot, ops) =
+                        extractBlock (fetchedBlock fetched)
                     bh = pointToBlockHash (fetchedPoint fetched)
                 applyAtSlot idx slot bh ops
                 _ <- pruneRollbacks idx (dcSecurityParamK cfg)
@@ -307,29 +605,30 @@ mkFollower cfg readyVar idx = self
                 pure self
             , rollBackward = \point -> do
                 let slot = case Network.pointSlot point of
-                        Network.Point.Origin -> SlotNo 0
+                        Network.Point.Origin -> Idx.SlotNo 0
                         Network.Point.At s ->
-                            SlotNo (Network.unSlotNo s)
+                            Idx.SlotNo (Network.unSlotNo s)
                 rollbackTo idx slot
                 pure (Progress self)
             }
 
-pointToBlockHash :: HeaderPoint -> BlockHash
+pointToBlockHash :: HeaderPoint -> Idx.BlockHash
 pointToBlockHash p =
     case p of
         Network.Point Network.Point.Origin ->
-            BlockHash mempty
+            Idx.BlockHash mempty
         Network.Point
             (Network.Point.At (Network.Point.Block _ h)) ->
-                BlockHash (SBS.fromShort (getOneEraHash h))
+                Idx.BlockHash
+                    (SBS.fromShort (getOneEraHash h))
 
 updateReady ::
     DaemonConfig ->
     TVar ReadyState ->
-    SlotNo ->
+    Idx.SlotNo ->
     Network.SlotNo ->
     IO ()
-updateReady cfg readyVar (SlotNo processed) tipNet =
+updateReady cfg readyVar (Idx.SlotNo processed) tipNet =
     let tip = Network.unSlotNo tipNet
         behind =
             if tip > processed
