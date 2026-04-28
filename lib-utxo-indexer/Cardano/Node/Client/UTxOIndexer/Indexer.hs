@@ -73,6 +73,10 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     TxIn (..),
     TxOut,
  )
+import ChainFollower.Rollbacks.Store qualified as Rollbacks
+import ChainFollower.Rollbacks.Types (
+    RollbackPoint (..),
+ )
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (
@@ -351,18 +355,15 @@ mkHandle
                     pruneObservedAfter observedVar slot
             , pruneRollbacks = \maxKeep -> do
                 count <- readTVarIO countVar
-                let excess = count - maxKeep
-                if excess <= 0
-                    then pure 0
-                    else do
-                        deleted <-
-                            runTransaction
-                                (pruneOldest excess)
-                        atomically $
-                            modifyTVar'
-                                countVar
-                                (subtract deleted)
-                        pure deleted
+                deleted <-
+                    runTransaction $
+                        Rollbacks.pruneExcess
+                            RollbackCol
+                            count
+                            maxKeep
+                atomically $
+                    modifyTVar' countVar (subtract deleted)
+                pure deleted
             , snapshotAt =
                 runTransaction . iterating AddressIndex . scanAddress
             , awaitTxIn =
@@ -427,12 +428,10 @@ applyAndLog ::
     [UtxoOp] ->
     Transaction IO cf Cols op ApplyResult
 applyAndLog slot bh ops = do
-    mTip <-
-        iterating RollbackCol $
-            fmap toTip <$> lastEntry
-    case mTip of
+    mTipSlot <- Rollbacks.queryTip RollbackCol
+    case mTipSlot of
         Nothing -> applyFresh
-        Just (tipSlot, _)
+        Just tipSlot
             | slot > tipSlot -> applyFresh
             | otherwise -> do
                 existing <- query RollbackCol slot
@@ -442,16 +441,27 @@ applyAndLog slot bh ops = do
                         -- but the slot is below the tip so
                         -- it has been applied.
                         pure AlreadyApplied
-                    Just (existingBh, _)
+                    Just RollbackPoint{rpMeta = Just existingBh}
                         | existingBh == bh -> pure AlreadyApplied
                         | otherwise ->
                             pure (Conflict existingBh bh)
+                    Just RollbackPoint{rpMeta = Nothing} ->
+                        -- Indexer always records rpMeta = Just bh;
+                        -- a Nothing here is a corruption / schema
+                        -- drift signal, not a normal state.
+                        error
+                            "applyAndLog: RollbackPoint with rpMeta \
+                            \= Nothing — schema drift"
   where
-    toTip Entry{entryKey, entryValue = (b, _)} =
-        (entryKey, b)
     applyFresh = do
         inverses <- traverse step ops
-        insert RollbackCol slot (bh, reverse inverses)
+        Rollbacks.storeRollbackPoint
+            RollbackCol
+            slot
+            RollbackPoint
+                { rpInverses = reverse inverses
+                , rpMeta = Just bh
+                }
         pure Applied
     step op = do
         inv <- inverseOf op
@@ -625,53 +635,23 @@ collectGreaterThan ::
     SlotNo ->
     Cursor
         m
-        (KV SlotNo (BlockHash, [UtxoOp]))
+        (KV SlotNo (RollbackPoint UtxoOp BlockHash))
         [(SlotNo, BlockHash, [UtxoOp])]
 collectGreaterThan target =
     lastEntry >>= go []
   where
     go acc Nothing = pure (reverse acc)
-    go acc (Just Entry{entryKey = slot, entryValue = (bh, invs)})
+    go acc (Just Entry{entryKey = slot, entryValue = rp})
         | slot > target =
-            prevEntry >>= go ((slot, bh, invs) : acc)
-        | otherwise = pure (reverse acc)
-
-{- | Drop the @excess@ oldest rollback-log entries.
-Walks 'RollbackCol' from 'firstEntry' forward up to
-@excess@ steps and deletes each visited key. Returns
-the number of entries actually deleted (≤ @excess@;
-fewer if the column has fewer than @excess@ entries).
-
-Caller maintains the entry count externally — this
-function does not re-scan the column to size it.
--}
-pruneOldest ::
-    Int ->
-    Transaction IO cf Cols op Int
-pruneOldest excess
-    | excess <= 0 = pure 0
-    | otherwise = do
-        keys <-
-            iterating RollbackCol $
-                collectFirstNKeys excess
-        traverse_ (delete RollbackCol) keys
-        pure (length keys)
-
-{- | Cursor program: from 'firstEntry' walk forward,
-collecting up to @n@ keys.
--}
-collectFirstNKeys ::
-    (Monad m) =>
-    Int ->
-    Cursor m (KV SlotNo (BlockHash, [UtxoOp])) [SlotNo]
-collectFirstNKeys n0 =
-    firstEntry >>= go [] n0
-  where
-    go acc 0 _ = pure (reverse acc)
-    go acc _ Nothing = pure (reverse acc)
-    go acc n (Just Entry{entryKey})
-        | n > 0 =
-            nextEntry >>= go (entryKey : acc) (n - 1)
+            let bh = case rpMeta rp of
+                    Just b -> b
+                    Nothing ->
+                        error
+                            "collectGreaterThan: \
+                            \RollbackPoint with rpMeta \
+                            \= Nothing — schema drift"
+                invs = rpInverses rp
+             in prevEntry >>= go ((slot, bh, invs) : acc)
         | otherwise = pure (reverse acc)
 
 -- | Inverse of a single op against current state.

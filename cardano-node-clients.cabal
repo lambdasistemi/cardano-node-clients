@@ -162,6 +162,7 @@ library utxo-indexer-lib
     , async
     , base
     , bytestring
+    , chain-follower
     , containers
     , data-default-class
     , dependent-map
