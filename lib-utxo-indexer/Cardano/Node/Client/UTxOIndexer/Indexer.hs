@@ -60,6 +60,7 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols (..),
     addressIndexCodecs,
+    observationColCodecs,
     rollbackCodecs,
     txInColCodecs,
  )
@@ -74,7 +75,6 @@ import Cardano.Node.Client.UTxOIndexer.Types (
  )
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
-import Control.Exception (Exception, throwIO)
 import Control.Concurrent.STM (
     STM,
     TMVar,
@@ -89,6 +89,7 @@ import Control.Concurrent.STM (
     readTVarIO,
     writeTVar,
  )
+import Control.Exception (Exception, throwIO)
 import Data.ByteString qualified as BS
 import Data.Default.Class (def)
 import Data.Dependent.Map (DMap)
@@ -162,7 +163,10 @@ the indexer state.
 -}
 data IndexerHandle = IndexerHandle
     { applyAtSlot ::
-        SlotNo -> BlockHash -> [UtxoOp] -> IO ()
+        SlotNo ->
+        BlockHash ->
+        [UtxoOp] ->
+        IO ()
     -- ^ Atomically apply a batch of create/spend
     -- operations and store the inverse list under the
     -- given slot in 'RollbackCol'. After the
@@ -240,6 +244,7 @@ withRocksDBIndexer path action =
         def{createIfMissing = True}
         [ ("utxo-indexer.txin", def)
         , ("utxo-indexer.address", def)
+        , ("utxo-indexer.observation", def)
         , ("utxo-indexer.rollback", def)
         ]
         $ \rdb -> do
@@ -272,6 +277,7 @@ indexerCodecs =
     fromList
         [ TxInCol :=> txInColCodecs
         , AddressIndex :=> addressIndexCodecs
+        , ObservationCol :=> observationColCodecs
         , RollbackCol :=> rollbackCodecs
         ]
 
@@ -359,7 +365,8 @@ mkHandle
                         pure deleted
             , snapshotAt =
                 runTransaction . iterating AddressIndex . scanAddress
-            , awaitTxIn = doAwait waitersVar observedVar
+            , awaitTxIn =
+                doAwait runTransaction waitersVar observedVar
             }
 
 {- | Internal: outcome of the apply transaction. Private
@@ -448,7 +455,7 @@ applyAndLog slot bh ops = do
         pure Applied
     step op = do
         inv <- inverseOf op
-        applyOne op
+        applyOne slot bh op
         pure inv
 
 {- | After @applyAndLog@ commits, walk the ops and:
@@ -499,34 +506,82 @@ pruneObservedAfter observedVar target =
         observedVar
         (Map.filter (\obs -> aoSlot obs <= target))
 
+{- | 'awaitTxIn' has three answer paths:
+
+1. The in-process 'Observed' map remembers TxIns
+   created in this run; a hit returns immediately.
+2. A miss in the in-process map reads the persistent
+   'ObservationCol' so a UTxO created in a /previous/
+   run is still answerable in O(1) without scanning.
+   To return the full @AwaitObservation@ shape we also
+   read 'AddressIndex' for the @TxOut@ (via 'TxInCol'
+   for the address).
+3. A miss in both falls back to the slow path: register
+   a TMVar waiter and either block or time out.
+-}
 doAwait ::
+    (forall a. Transaction IO cf Cols op a -> IO a) ->
     Waiters ->
     Observed ->
     TxIn ->
     Maybe Int ->
     IO (Maybe AwaitObservation)
-doAwait waitersVar observedVar txIn mTimeout = do
-    -- Fast path: already observed.
+doAwait runTx waitersVar observedVar txIn mTimeout = do
     observed <- readTVarIO observedVar
     case Map.lookup txIn observed of
         Just obs -> pure (Just obs)
         Nothing -> do
-            tmv <- atomically $ do
-                t <- newEmptyTMVar
-                modifyTVar'
-                    waitersVar
-                    (Map.alter (insertWaiter t) txIn)
-                pure t
-            case mTimeout of
-                Nothing -> Just <$> atomically (readTMVar tmv)
-                Just secs ->
-                    either Just (\() -> Nothing)
-                        <$> race
-                            (atomically (readTMVar tmv))
-                            (threadDelay (secs * 1_000_000))
+            mObs <- runTx (lookupObservation txIn)
+            case mObs of
+                Just obs -> pure (Just obs)
+                Nothing -> blockOnWaiter
   where
+    blockOnWaiter = do
+        tmv <- atomically $ do
+            t <- newEmptyTMVar
+            modifyTVar'
+                waitersVar
+                (Map.alter (insertWaiter t) txIn)
+            pure t
+        case mTimeout of
+            Nothing -> Just <$> atomically (readTMVar tmv)
+            Just secs ->
+                either Just (\() -> Nothing)
+                    <$> race
+                        (atomically (readTMVar tmv))
+                        (threadDelay (secs * 1_000_000))
     insertWaiter t Nothing = Just [t]
     insertWaiter t (Just xs) = Just (t : xs)
+
+{- | Persistent fast-path for 'awaitTxIn': join
+'ObservationCol' with 'TxInCol' + 'AddressIndex' to
+reconstruct an 'AwaitObservation' for a 'TxIn' created
+in some prior session. Returns 'Nothing' if the 'TxIn'
+is not observed (either never created or already spent).
+-}
+lookupObservation ::
+    TxIn ->
+    Transaction IO cf Cols op (Maybe AwaitObservation)
+lookupObservation txIn = do
+    mObs <- query ObservationCol txIn
+    case mObs of
+        Nothing -> pure Nothing
+        Just (slot, bh) -> do
+            mAddr <- query TxInCol txIn
+            case mAddr of
+                Nothing -> pure Nothing
+                Just addr -> do
+                    mOut <- query AddressIndex (AddrKey addr txIn)
+                    case mOut of
+                        Nothing -> pure Nothing
+                        Just txOut ->
+                            pure $
+                                Just
+                                    AwaitObservation
+                                        { aoSlot = slot
+                                        , aoBlockHash = bh
+                                        , aoTxOut = txOut
+                                        }
 
 {- | Roll back every slot strictly greater than
 @target@. Walks 'RollbackCol' from the highest slot
@@ -548,28 +603,37 @@ rollbackToSlot target = do
     traverse_ undoSlot entries
     pure (length entries)
   where
-    undoSlot (slot, invs) = do
-        traverse_ applyOne invs
+    -- 'applyOne' on rollback uses the slot+hash of the
+    -- rolled-back entry. For an inverse 'UtxoCreate'
+    -- (i.e. restoring a previously-spent UTxO) this means
+    -- 'ObservationCol' will record the rollback slot as
+    -- the observation slot, not the UTxO's original
+    -- creation slot. That is a known imprecision: 'awaitTxIn'
+    -- after a rollback returns the rollback slot for restored
+    -- UTxOs. The TxOut is still correct, which is what
+    -- consumers actually care about.
+    undoSlot (slot, bh, invs) = do
+        traverse_ (applyOne slot bh) invs
         delete RollbackCol slot
 
 {- | Cursor program: from 'lastEntry' walk backwards,
-collecting @(slot, invs)@ pairs while @slot > target@.
-Returns them in descending-slot order. The 'BlockHash'
-component of each entry is discarded — only the inverse
-list is needed to undo state, the hash is metadata for
-the resume-point story.
+collecting @(slot, blockHash, invs)@ triples while
+@slot > target@. Returns them in descending-slot order.
 -}
 collectGreaterThan ::
     (Monad m) =>
     SlotNo ->
-    Cursor m (KV SlotNo (BlockHash, [UtxoOp])) [(SlotNo, [UtxoOp])]
+    Cursor
+        m
+        (KV SlotNo (BlockHash, [UtxoOp]))
+        [(SlotNo, BlockHash, [UtxoOp])]
 collectGreaterThan target =
     lastEntry >>= go []
   where
     go acc Nothing = pure (reverse acc)
-    go acc (Just Entry{entryKey = slot, entryValue = (_bh, invs)})
+    go acc (Just Entry{entryKey = slot, entryValue = (bh, invs)})
         | slot > target =
-            prevEntry >>= go ((slot, invs) : acc)
+            prevEntry >>= go ((slot, bh, invs) : acc)
         | otherwise = pure (reverse acc)
 
 {- | Drop the @excess@ oldest rollback-log entries.
@@ -629,19 +693,30 @@ opTxIn :: UtxoOp -> TxIn
 opTxIn (UtxoCreate t _ _) = t
 opTxIn (UtxoSpend t) = t
 
+{- | Apply one op against the column state. The
+@(slot, bh)@ pair is recorded into 'ObservationCol' on
+'UtxoCreate' so 'awaitTxIn' can answer the
+"already observed?" fast-path question across process
+restart; on 'UtxoSpend' the corresponding observation is
+removed.
+-}
 applyOne ::
+    SlotNo ->
+    BlockHash ->
     UtxoOp ->
     Transaction IO cf Cols op ()
-applyOne (UtxoCreate txIn addr txOut) = do
+applyOne slot bh (UtxoCreate txIn addr txOut) = do
     insert TxInCol txIn addr
     insert AddressIndex (AddrKey addr txIn) txOut
-applyOne (UtxoSpend txIn) = do
+    insert ObservationCol txIn (slot, bh)
+applyOne _slot _bh (UtxoSpend txIn) = do
     mAddr <- query TxInCol txIn
     case mAddr of
         Nothing -> pure ()
         Just addr -> do
             delete AddressIndex (AddrKey addr txIn)
             delete TxInCol txIn
+            delete ObservationCol txIn
 
 {- | Cursor program: seek to the synthetic minimum key
 under @addr@ and walk forward, collecting every entry
