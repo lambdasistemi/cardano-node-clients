@@ -107,12 +107,29 @@
             cardanoNode = cardano-node.packages.${system}.cardano-node;
             src = ./.;
           };
+          checkApps = import ./nix/apps.nix { inherit pkgs checks; };
         in {
-          packages.devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
-            cp -r ${./e2e-test/genesis} $out
-          '';
+          packages = {
+            devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
+              cp -r ${./e2e-test/genesis} $out
+            '';
+            cardano-tx-generator =
+              components.exes.cardano-tx-generator;
+            utxo-indexer = components.exes.utxo-indexer;
+          };
           inherit checks;
-          apps = import ./nix/apps.nix { inherit pkgs checks; };
+          apps = checkApps // {
+            cardano-tx-generator = {
+              type = "app";
+              program = "${
+                  components.exes.cardano-tx-generator
+                }/bin/cardano-tx-generator";
+            };
+            utxo-indexer = {
+              type = "app";
+              program = "${components.exes.utxo-indexer}/bin/utxo-indexer";
+            };
+          };
           devShells.default = project.shell;
         };
     };
