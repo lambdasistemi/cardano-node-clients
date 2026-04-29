@@ -277,6 +277,7 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.TxGeneratorRefillSpec
     Cardano.Node.Client.E2E.TxGeneratorRestartSpec
     Cardano.Node.Client.E2E.TxGeneratorSnapshotSpec
+    Cardano.Node.Client.E2E.TxGeneratorStarvationSpec
     Cardano.Node.Client.E2E.TxGeneratorTransactSpec
     Cardano.Node.Client.E2E.UTxOIndexerSpec
 
