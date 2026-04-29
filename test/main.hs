@@ -14,6 +14,7 @@ import Cardano.Node.Client.E2E.TxGeneratorReadySpec qualified as TxGeneratorRead
 import Cardano.Node.Client.E2E.TxGeneratorRefillSpec qualified as TxGeneratorRefillSpec
 import Cardano.Node.Client.E2E.TxGeneratorRestartSpec qualified as TxGeneratorRestartSpec
 import Cardano.Node.Client.E2E.TxGeneratorSnapshotSpec qualified as TxGeneratorSnapshotE2ESpec
+import Cardano.Node.Client.E2E.TxGeneratorStarvationSpec qualified as TxGeneratorStarvationSpec
 import Cardano.Node.Client.E2E.TxGeneratorTransactSpec qualified as TxGeneratorTransactSpec
 import Cardano.Node.Client.E2E.UTxOIndexerSpec qualified as UTxOIndexerSpec
 
@@ -33,3 +34,4 @@ main = hspec $ do
     TxGeneratorSnapshotE2ESpec.spec
     TxGeneratorRestartSpec.spec
     TxGeneratorEnduranceSpec.spec
+    TxGeneratorStarvationSpec.spec
