@@ -36,8 +36,15 @@
 
   outputs = inputs@{ self, nixpkgs, flake-parts, haskellNix, hackageNix
     , iohkNix, CHaP, mkdocs, cardano-node, ... }:
+    let
+      imageTag =
+        self.dirtyShortRev or self.shortRev or "unknown";
+    in
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-darwin" ];
+      flake = {
+        inherit imageTag;
+      };
       perSystem = { system, ... }:
         let
           pkgs = import nixpkgs {
@@ -116,6 +123,10 @@
             cardano-tx-generator =
               components.exes.cardano-tx-generator;
             utxo-indexer = components.exes.utxo-indexer;
+            cardano-tx-generator-image =
+              import ./nix/docker-image.nix {
+                inherit pkgs components imageTag;
+              };
           };
           inherit checks;
           apps = checkApps // {
