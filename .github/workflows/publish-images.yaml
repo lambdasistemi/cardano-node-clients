@@ -1,30 +1,13 @@
 name: "Publish docker images"
 
-# Stub workflow that publishes a placeholder image to
-# GHCR so the package exists on the registry and can be
-# made public. Real per-component publishing replaces
-# the body once a real cardano-tx-generator-image flake
-# output lands on main (PR #94).
-#
-# Triggers: manual dispatch from any branch, plus push
-# to main. workflow_dispatch requires the workflow to
-# exist on the default branch first — which is the whole
-# point of merging this stub.
-
 env:
   REGISTRY: ghcr.io/lambdasistemi/cardano-node-clients
 
 on:
   workflow_dispatch:
-    inputs:
-      image:
-        description: "Image short-name to publish"
-        required: true
-        default: "cardano-tx-generator"
-      tag:
-        description: "Override tag (default = git short SHA)"
-        required: false
-        default: ""
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -34,34 +17,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  publish-stub:
-    name: publish placeholder image
+  cardano-tx-generator:
+    name: cardano-tx-generator
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
 
     steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Resolve tag
-        id: tag
-        run: |
-          TAG="${{ inputs.tag }}"
-          if [ -z "$TAG" ]; then
-            TAG="${GITHUB_SHA::7}"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve image short-name
-        id: image
-        run: |
-          NAME="${{ inputs.image }}"
-          if [ -z "$NAME" ]; then
-            NAME="cardano-tx-generator"
-          fi
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+      - uses: paolino/dev-assets/setup-nix@v0.0.1
+        with:
+          cachix-auth-token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -70,10 +42,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull placeholder, retag, push
+      - name: Resolve image tag
+        id: tag
         run: |
-          docker pull alpine:3.20
-          docker tag alpine:3.20 \
-            ${REGISTRY}/${{ steps.image.outputs.name }}:${{ steps.tag.outputs.tag }}
+          TAG=$(nix eval --raw .#imageTag)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $TAG"
+
+      - name: Build image (nix closure → OCI tarball)
+        run: nix build --quiet .#cardano-tx-generator-image
+
+      - name: Load image into docker
+        run: docker load < result
+
+      - name: Push image (commit-tagged)
+        run: |
           docker push \
-            ${REGISTRY}/${{ steps.image.outputs.name }}:${{ steps.tag.outputs.tag }}
+            ${{ env.REGISTRY }}/cardano-tx-generator:${{ steps.tag.outputs.tag }}
+
+      - name: Push image (latest, on main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker tag \
+            ${{ env.REGISTRY }}/cardano-tx-generator:${{ steps.tag.outputs.tag }} \
+            ${{ env.REGISTRY }}/cardano-tx-generator:latest
+          docker push ${{ env.REGISTRY }}/cardano-tx-generator:latest
