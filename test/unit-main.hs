@@ -3,6 +3,8 @@ module Main (main) where
 import Test.Hspec (hspec)
 
 import Cardano.Node.Client.BalanceSpec qualified as BalanceSpec
+import Cardano.Node.Client.N2C.ProbeSpec qualified as N2CProbeSpec
+import Cardano.Node.Client.N2C.TraceSpec qualified as N2CTraceSpec
 import Cardano.Node.Client.TxBuildGoldenSpec qualified as TxBuildGoldenSpec
 import Cardano.Node.Client.TxBuildSpec qualified as TxBuildSpec
 import Cardano.Node.Client.TxGenerator.FanoutSpec qualified as TxGeneratorFanoutSpec
@@ -13,9 +15,7 @@ import Cardano.Node.Client.TxGenerator.ServerSpec qualified as TxGeneratorServer
 import Cardano.Node.Client.TxGenerator.SnapshotSpec qualified as TxGeneratorSnapshotSpec
 import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.PersistenceSpec qualified as UTxOIndexerPersistenceSpec
-import Cardano.Node.Client.UTxOIndexer.ProbeSpec qualified as UTxOIndexerProbeSpec
 import Cardano.Node.Client.UTxOIndexer.ServerSpec qualified as UTxOIndexerServerSpec
-import Cardano.Node.Client.UTxOIndexer.TraceSpec qualified as UTxOIndexerTraceSpec
 import Cardano.Node.Client.UTxOIndexer.TypesSpec qualified as UTxOIndexerTypesSpec
 import Data.List.SampleFibonacciSpec qualified as SampleFibonacciSpec
 
@@ -29,8 +29,8 @@ main = hspec $ do
     UTxOIndexerSpec.spec
     UTxOIndexerServerSpec.spec
     UTxOIndexerPersistenceSpec.spec
-    UTxOIndexerProbeSpec.spec
-    UTxOIndexerTraceSpec.spec
+    N2CProbeSpec.spec
+    N2CTraceSpec.spec
     TxGeneratorFanoutSpec.spec
     TxGeneratorPersistSpec.spec
     TxGeneratorPopulationSpec.spec

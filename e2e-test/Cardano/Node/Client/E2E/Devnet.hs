@@ -11,11 +11,11 @@ module Cardano.Node.Client.E2E.Devnet (
     withRestartableCardanoNode,
 ) where
 
-import Cardano.Node.Client.UTxOIndexer.Probe (
+import Cardano.Node.Client.N2C.Probe (
     defaultProbeConfig,
     waitForNodeReady,
  )
-import Cardano.Node.Client.UTxOIndexer.Trace (nullIndexerTracer)
+import Cardano.Node.Client.N2C.Trace (nullN2CTracer)
 import Control.Concurrent (threadDelay)
 import Control.Exception (
     bracket,
@@ -132,7 +132,7 @@ withRestartableCardanoNode srcGenesis action = do
             -- loading. Replaces the previous 1 s blind grace
             -- with a real readiness check.
             waitForNodeReady
-                nullIndexerTracer
+                nullN2CTracer
                 defaultProbeConfig
                 devnetNetworkMagic
                 sock
@@ -158,7 +158,7 @@ restartNode npRef sock spawnNode cleanupNode = do
     -- previous fixed sleep — the new node is ready when it
     -- says it is.
     waitForNodeReady
-        nullIndexerTracer
+        nullN2CTracer
         defaultProbeConfig
         devnetNetworkMagic
         sock

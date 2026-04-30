@@ -81,7 +81,7 @@ docker restart relay1
 
 ## Stderr trace stream
 
-The executable wires `defaultStderrTracer` from `Cardano.Node.Client.UTxOIndexer.Trace`. Every lifecycle transition emits a single line:
+The executable wires `defaultStderrTracer` from `Cardano.Node.Client.N2C.Trace`. Every lifecycle transition emits a single line:
 
 ```
 2026-04-30T12:34:56.789Z INFO indexer event=started        socketPath=... dbPath=...
@@ -99,7 +99,7 @@ The executable wires `defaultStderrTracer` from `Cardano.Node.Client.UTxOIndexer
 
 The cardano-tx-generator daemon (PR https://github.com/lambdasistemi/cardano-node-clients/pull/94) embeds the indexer. After this feature merges, the embedding code can drop any orchestrator-level `restart: always` workaround and rely on in-process reconnect.
 
-Embedders that want to route `IndexerEvent`s into their own tracer can pass a custom `Tracer IO IndexerEvent` to `runDaemon` (the public field added on `DaemonConfig`).
+Embedders that want to route `N2CEvent`s into their own tracer can pass a custom `Tracer IO N2CEvent` to `runDaemon` (the public field added on `DaemonConfig`).
 
 ## Operator expectations
 

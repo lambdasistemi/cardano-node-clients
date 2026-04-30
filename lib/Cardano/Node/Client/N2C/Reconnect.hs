@@ -1,7 +1,7 @@
 {-# LANGUAGE NumericUnderscores #-}
 
 {- |
-Module      : Cardano.Node.Client.UTxOIndexer.Reconnect
+Module      : Cardano.Node.Client.N2C.Reconnect
 Description : Reconnect supervisor over Control.Retry
 License     : Apache-2.0
 
@@ -26,7 +26,7 @@ stable; a fast failure + exponential back-off is
 sufficient to gate reconnects against a transiently
 unavailable relay.
 -}
-module Cardano.Node.Client.UTxOIndexer.Reconnect (
+module Cardano.Node.Client.N2C.Reconnect (
     -- * Policy
     ReconnectPolicy (..),
     defaultReconnectPolicy,
@@ -39,13 +39,13 @@ module Cardano.Node.Client.UTxOIndexer.Reconnect (
     runReconnectLoop,
 ) where
 
-import Cardano.Node.Client.UTxOIndexer.Probe (
+import Cardano.Node.Client.N2C.Probe (
     ProbeConfig,
     msToMicros,
     waitForNodeReady,
  )
-import Cardano.Node.Client.UTxOIndexer.Trace (
-    IndexerEvent (..),
+import Cardano.Node.Client.N2C.Trace (
+    N2CEvent (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Types (SlotNo)
 import Control.Exception qualified as E
@@ -153,7 +153,7 @@ Async exceptions ('AsyncCancelled', termination signals)
 propagate immediately so the daemon can shut down cleanly.
 -}
 runReconnectLoop ::
-    Tracer IO IndexerEvent ->
+    Tracer IO N2CEvent ->
     ReconnectPolicy ->
     ProbeConfig ->
     NetworkMagic ->

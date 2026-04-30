@@ -1,10 +1,10 @@
 {- |
-Module      : Cardano.Node.Client.UTxOIndexer.Trace
+Module      : Cardano.Node.Client.N2C.Trace
 Description : Structured indexer events for tracing
 License     : Apache-2.0
 
 ADT carried by the indexer's
-'Control.Tracer.Tracer' 'IndexerEvent'. Each lifecycle
+'Control.Tracer.Tracer' 'N2CEvent'. Each lifecycle
 transition emits exactly one event.
 
 For executables, 'defaultStderrTracer' renders events as
@@ -13,12 +13,12 @@ out of mixed-source container logs. Library consumers
 (e.g. embedding daemons) can route events into their
 own tracer.
 -}
-module Cardano.Node.Client.UTxOIndexer.Trace (
-    IndexerEvent (..),
+module Cardano.Node.Client.N2C.Trace (
+    N2CEvent (..),
     StopReason (..),
-    nullIndexerTracer,
+    nullN2CTracer,
     defaultStderrTracer,
-    renderIndexerEvent,
+    renderN2CEvent,
 ) where
 
 import Cardano.Node.Client.UTxOIndexer.Types (SlotNo (..))
@@ -37,11 +37,11 @@ import System.IO (Handle, hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 
 {- | Indexer lifecycle event. Constructors are emitted at
-the points described in @data-model.md § IndexerEvent@.
+the points described in @data-model.md § N2CEvent@.
 Field positions are stable; future variants will be added
 as new constructors rather than by extending existing ones.
 -}
-data IndexerEvent
+data N2CEvent
     = -- | Daemon entry: listen-socket path and (optional)
       -- RocksDB path. Emitted once per process.
       IndexerStarted !FilePath !(Maybe FilePath)
@@ -86,8 +86,8 @@ data StopReason
 daemons before their real tracer is wired through
 'DaemonConfig'.
 -}
-nullIndexerTracer :: Tracer IO IndexerEvent
-nullIndexerTracer = nullTracer
+nullN2CTracer :: Tracer IO N2CEvent
+nullN2CTracer = nullTracer
 
 {- | Render an event as a single key=value line. Used by
 'defaultStderrTracer' and exposed for tests that need to
@@ -102,8 +102,8 @@ indexer event=<name> [k1=v1 k2=v2 ...]
 The leading @indexer @ tag makes the line easy to grep
 out of mixed-source container logs.
 -}
-renderIndexerEvent :: IndexerEvent -> Text
-renderIndexerEvent ev =
+renderN2CEvent :: N2CEvent -> Text
+renderN2CEvent ev =
     Text.pack "indexer " <> case ev of
         IndexerStarted sp dbp ->
             kv "event" "started"
@@ -165,7 +165,7 @@ Format:
 2026-04-30T12:34:56.789Z INFO indexer event=disconnected reason=...
 @
 -}
-handleTracer :: Handle -> Tracer IO IndexerEvent
+handleTracer :: Handle -> Tracer IO N2CEvent
 handleTracer h = Tracer $ \ev -> do
     now <- getCurrentTime
     let ts =
@@ -174,11 +174,11 @@ handleTracer h = Tracer $ \ev -> do
                 "%Y-%m-%dT%H:%M:%S%QZ"
                 now
         line =
-            ts <> " INFO " <> Text.unpack (renderIndexerEvent ev)
+            ts <> " INFO " <> Text.unpack (renderN2CEvent ev)
     withMVar stderrLock $ \() -> hPutStrLn h line
 
 {- | Default tracer for the @utxo-indexer@ executable.
 Routes events to 'stderr'.
 -}
-defaultStderrTracer :: Tracer IO IndexerEvent
+defaultStderrTracer :: Tracer IO N2CEvent
 defaultStderrTracer = handleTracer stderr

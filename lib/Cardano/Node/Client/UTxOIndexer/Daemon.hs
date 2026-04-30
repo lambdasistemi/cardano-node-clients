@@ -31,25 +31,25 @@ import Cardano.Node.Client.N2C.ChainSync (
     mkChainSyncN2C,
     runChainSyncN2C,
  )
+import Cardano.Node.Client.N2C.Probe (ProbeConfig)
+import Cardano.Node.Client.N2C.Reconnect (
+    ReconnectPolicy,
+    UpstreamStatus (..),
+    runReconnectLoop,
+ )
+import Cardano.Node.Client.N2C.Trace (
+    N2CEvent (..),
+    StopReason (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.BlockExtract (extractBlock)
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     withInMemoryIndexer,
     withRocksDBIndexer,
  )
-import Cardano.Node.Client.UTxOIndexer.Probe (ProbeConfig)
-import Cardano.Node.Client.UTxOIndexer.Reconnect (
-    ReconnectPolicy,
-    UpstreamStatus (..),
-    runReconnectLoop,
- )
 import Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
     runServer,
- )
-import Cardano.Node.Client.UTxOIndexer.Trace (
-    IndexerEvent (..),
-    StopReason (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     BlockHash (..),
@@ -127,7 +127,7 @@ on entry and an 'IndexerStopped' on exit (both clean
 termination and async cancellation), plus all
 reconnect-supervisor and probe events between.
 -}
-runDaemon :: Tracer IO IndexerEvent -> DaemonConfig -> IO ()
+runDaemon :: Tracer IO N2CEvent -> DaemonConfig -> IO ()
 runDaemon tracer cfg = do
     onStart
     -- 'onException' propagates the async exception after

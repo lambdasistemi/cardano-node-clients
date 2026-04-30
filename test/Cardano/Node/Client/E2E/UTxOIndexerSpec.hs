@@ -68,8 +68,17 @@ import Cardano.Node.Client.N2C.Connection (
     newLTxSChannel,
     runNodeClient,
  )
+import Cardano.Node.Client.N2C.Probe (
+    defaultProbeConfig,
+ )
 import Cardano.Node.Client.N2C.Provider (mkN2CProvider)
+import Cardano.Node.Client.N2C.Reconnect (
+    defaultReconnectPolicy,
+ )
 import Cardano.Node.Client.N2C.Submitter (mkN2CSubmitter)
+import Cardano.Node.Client.N2C.Trace (
+    nullN2CTracer,
+ )
 import Cardano.Node.Client.N2C.Types (LSQChannel, LTxSChannel)
 import Cardano.Node.Client.Provider (Provider (..))
 import Cardano.Node.Client.Submitter (
@@ -79,15 +88,6 @@ import Cardano.Node.Client.Submitter (
 import Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
- )
-import Cardano.Node.Client.UTxOIndexer.Probe (
-    defaultProbeConfig,
- )
-import Cardano.Node.Client.UTxOIndexer.Reconnect (
-    defaultReconnectPolicy,
- )
-import Cardano.Node.Client.UTxOIndexer.Trace (
-    nullIndexerTracer,
  )
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (
@@ -153,7 +153,7 @@ runE2E = do
                         , dcReconnectPolicy = defaultReconnectPolicy
                         , dcProbeConfig = defaultProbeConfig
                         }
-            withAsync (runDaemon nullIndexerTracer cfg) $ \daemonThread -> do
+            withAsync (runDaemon nullN2CTracer cfg) $ \daemonThread -> do
                 waitForFile daemonSock 600
                 poll daemonThread >>= \case
                     Just (Left e) ->

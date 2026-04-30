@@ -49,8 +49,11 @@ library
     Cardano.Node.Client.N2C.Connection
     Cardano.Node.Client.N2C.LocalStateQuery
     Cardano.Node.Client.N2C.LocalTxSubmission
+    Cardano.Node.Client.N2C.Probe
     Cardano.Node.Client.N2C.Provider
+    Cardano.Node.Client.N2C.Reconnect
     Cardano.Node.Client.N2C.Submitter
+    Cardano.Node.Client.N2C.Trace
     Cardano.Node.Client.N2C.Types
     Cardano.Node.Client.Provider
     Cardano.Node.Client.SampleList
@@ -68,10 +71,7 @@ library
     Cardano.Node.Client.Types
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
-    Cardano.Node.Client.UTxOIndexer.Probe
-    Cardano.Node.Client.UTxOIndexer.Reconnect
     Cardano.Node.Client.UTxOIndexer.Server
-    Cardano.Node.Client.UTxOIndexer.Trace
 
   build-depends:
     , aeson
@@ -218,6 +218,8 @@ test-suite unit-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.BalanceSpec
+    Cardano.Node.Client.N2C.ProbeSpec
+    Cardano.Node.Client.N2C.TraceSpec
     Cardano.Node.Client.TxBuildGoldenSpec
     Cardano.Node.Client.TxBuildSpec
     Cardano.Node.Client.TxGenerator.FanoutSpec
@@ -228,9 +230,7 @@ test-suite unit-tests
     Cardano.Node.Client.TxGenerator.SnapshotSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
-    Cardano.Node.Client.UTxOIndexer.ProbeSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
-    Cardano.Node.Client.UTxOIndexer.TraceSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
     Data.List.SampleFibonacciSpec
 

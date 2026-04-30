@@ -13,14 +13,14 @@ as a client, and exercises both request kinds:
 -}
 module Cardano.Node.Client.UTxOIndexer.ServerSpec (spec) where
 
+import Cardano.Node.Client.N2C.Reconnect (
+    DisconnectInfo (..),
+    UpstreamStatus (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     UtxoOp (..),
     withInMemoryIndexer,
- )
-import Cardano.Node.Client.UTxOIndexer.Reconnect (
-    DisconnectInfo (..),
-    UpstreamStatus (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
