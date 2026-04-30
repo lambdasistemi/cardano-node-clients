@@ -41,6 +41,10 @@ library
   hs-source-dirs:   lib
   default-language: GHC2021
   exposed-modules:
+    Cardano.Node.Client.Adversary.Daemon
+    Cardano.Node.Client.Adversary.RandomSource
+    Cardano.Node.Client.Adversary.Server
+    Cardano.Node.Client.Adversary.Types
     Cardano.Node.Client.Balance
     Cardano.Node.Client.Evaluate
     Cardano.Node.Client.Ledger
@@ -198,6 +202,16 @@ executable utxo-indexer
 executable cardano-tx-generator
   import:           warnings
   hs-source-dirs:   app/cardano-tx-generator
+  main-is:          Main.hs
+  default-language: GHC2021
+  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    , base
+    , cardano-node-clients
+
+executable cardano-adversary
+  import:           warnings
+  hs-source-dirs:   app/cardano-adversary
   main-is:          Main.hs
   default-language: GHC2021
   ghc-options:      -threaded -rtsopts -with-rtsopts=-N
