@@ -5,9 +5,13 @@ License     : Apache-2.0
 
 Minimal address->UTxO indexer daemon. Follows the chain
 via N2C ChainSync from one relay socket, maintains an
-in-memory address->UTxO index, exposes two read
-primitives (@utxos_at@, @await@) plus a @ready@ probe
-over a Unix domain socket using newline-delimited JSON.
+indexed view (in-memory or RocksDB-backed), exposes three
+read primitives (@utxos_at@, @await@, @ready@) over a
+Unix domain socket using newline-delimited JSON.
+
+Wraps the chain-sync follower in an in-process reconnect
+supervisor (see issue #97) — the daemon survives
+upstream-relay restarts without exiting.
 
 This @Main@ is just CLI parsing; everything else lives
 in 'Cardano.Node.Client.UTxOIndexer.Daemon.runDaemon'.
@@ -19,15 +23,16 @@ import Cardano.Node.Client.UTxOIndexer.Daemon (
     runDaemon,
  )
 import Cardano.Node.Client.UTxOIndexer.Probe (
+    ProbeConfig (..),
     defaultProbeConfig,
  )
 import Cardano.Node.Client.UTxOIndexer.Reconnect (
+    ReconnectPolicy (..),
     defaultReconnectPolicy,
  )
-import Cardano.Node.Client.UTxOIndexer.Trace (
-    nullIndexerTracer,
- )
+import Cardano.Node.Client.UTxOIndexer.Trace (defaultStderrTracer)
 import Data.Maybe (fromMaybe)
+import Data.Word (Word64)
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -75,13 +80,53 @@ parseConfig args0 = do
         (mDbPath, args7) = case takeFlag "--db-path" args6 of
             Just (p, rest) -> (Just p, rest)
             Nothing -> (Nothing, args6)
-    case args7 of
+        (initialMsS, args8) =
+            fromMaybe
+                (show (rpInitialMs defaultReconnectPolicy), args7)
+                (takeFlag "--reconnect-initial-ms" args7)
+        (maxMsS, args9) =
+            fromMaybe
+                (show (rpMaxMs defaultReconnectPolicy), args8)
+                (takeFlag "--reconnect-max-ms" args8)
+        (resetMsS, args10) =
+            fromMaybe
+                ( show (rpResetThresholdMs defaultReconnectPolicy)
+                , args9
+                )
+                (takeFlag "--reconnect-reset-threshold-ms" args9)
+        (mTotalMs, args11) = case takeFlag "--node-ready-timeout-ms" args10 of
+            Just (s, rest) -> (Just s, rest)
+            Nothing -> (Nothing, args10)
+    case args11 of
         [] -> pure ()
         extra -> dieUsage $ "Unexpected args: " <> show extra
     magic <- requireWord "--network-magic" magicS
     slots <- requireWord "--byron-epoch-slots" slotsS
     ready <- requireWord "--ready-threshold-slots" readyS
     k <- requireWord "--security-param-k" kS
+    initialMs <-
+        requireWord "--reconnect-initial-ms" initialMsS
+    maxMs <- requireWord "--reconnect-max-ms" maxMsS
+    resetMs <-
+        requireWord "--reconnect-reset-threshold-ms" resetMsS
+    mTotalMsParsed <- case mTotalMs of
+        Nothing -> pure Nothing
+        Just s ->
+            Just <$> requireWord "--node-ready-timeout-ms" s
+    let policy =
+            ReconnectPolicy
+                { rpInitialMs = fromIntegral (initialMs :: Word)
+                , rpMaxMs = fromIntegral (maxMs :: Word)
+                , rpResetThresholdMs =
+                    fromIntegral (resetMs :: Word)
+                }
+        probe =
+            defaultProbeConfig
+                { pcTotalTimeoutMs =
+                    fmap
+                        (fromIntegral :: Word -> Word64)
+                        mTotalMsParsed
+                }
     pure
         DaemonConfig
             { dcRelaySocket = relay
@@ -91,8 +136,8 @@ parseConfig args0 = do
             , dcReadyThresholdSlots = fromIntegral (ready :: Word)
             , dcSecurityParamK = fromIntegral (k :: Word)
             , dcDbPath = mDbPath
-            , dcReconnectPolicy = defaultReconnectPolicy
-            , dcProbeConfig = defaultProbeConfig
+            , dcReconnectPolicy = policy
+            , dcProbeConfig = probe
             }
   where
     requireFlag key args =
@@ -119,7 +164,11 @@ dieUsage msg = do
     hPutStrLn stderr "  --byron-epoch-slots INT \\"
     hPutStrLn stderr "  [--ready-threshold-slots INT] \\"
     hPutStrLn stderr "  [--security-param-k INT] \\"
-    hPutStrLn stderr "  [--db-path PATH]"
+    hPutStrLn stderr "  [--db-path PATH] \\"
+    hPutStrLn stderr "  [--reconnect-initial-ms INT] \\"
+    hPutStrLn stderr "  [--reconnect-max-ms INT] \\"
+    hPutStrLn stderr "  [--reconnect-reset-threshold-ms INT] \\"
+    hPutStrLn stderr "  [--node-ready-timeout-ms INT]"
     exitFailure
 
 -- | Entry point. Parse args, log config, run the daemon.
@@ -128,4 +177,4 @@ main = do
     args <- getArgs
     cfg <- parseConfig args
     hPutStrLn stderr $ "utxo-indexer: " <> show cfg
-    runDaemon nullIndexerTracer cfg
+    runDaemon defaultStderrTracer cfg
