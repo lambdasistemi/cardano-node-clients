@@ -40,7 +40,7 @@ Or, before warmup:
 `details`. Composer drivers should treat `ready: false` as "skip
 this tick" rather than "fail this tick".
 
-## `chain_sync_flap` — reserved (PR B), implemented in PR C
+## `chain_sync_flap` — implemented in PR C
 
 **Request**:
 ```json
@@ -49,47 +49,57 @@ this tick" rather than "fail this tick".
                      "n_conns": 1}}
 ```
 
-- `seed` — `uint64`, sole source of randomness for this request
-  (passed to the `RandomSource`).
+- `seed` — `uint64`, sole source of randomness for this request.
+  Used to derive the per-request `StdGen` via `splitFromSeed`,
+  which then samples a starting point per connection from the
+  parsed chain-points file.
 - `limit` — `uint32`, maximum blocks pulled per connection before
-  disconnecting (mirror of today's one-shot binary's `LIMIT` env
-  var).
+  the adversary disconnects (mirror of the original one-shot
+  binary's `LIMIT` env var).
 - `n_conns` — `uint16`, number of concurrent N2N connections
   spawned by this single request.
 
-**Response (PR B — endpoint reserved, no implementation)**:
-```json
-{"ok": false, "reason": "not-implemented"}
-```
-
-**Response (PR C and beyond — once implemented)**:
+**Response (success)**:
 ```json
 {"ok": true,
- "txId": null,
  "details": {
    "connections": 1,
-   "intersectionPoint": "<hex>@<slot>|origin",
-   "blocksPulled": 100,
-   "completed": true,
-   "failures": []
+   "peerNames": ["p1.example", "p2.example", "p3.example"],
+   "limit": 100
  }}
 ```
 
+The success body is intentionally coarse: every connection the
+daemon dispatched is reflected in `connections`, but
+per-connection outcome (blocks pulled, intersection point chosen,
+DNS or handshake error) is not yet streamed back. Adding a richer
+`details` shape is additive and does not break existing consumers
+— they will see new fields and ignore them.
+
+**Response (structured failure)**:
 ```json
-{"ok": false,
- "reason": "no-chain-points-yet",
- "details": {"chainpointsFile": "/opt/cardano-tracer/chainPoints.log"}}
+{"ok": false, "reason": "no-chain-points-file"}
+{"ok": false, "reason": "no-chain-points-yet"}
+{"ok": false, "reason": "no-producers"}
 ```
 
+| `reason` | When |
+|---|---|
+| `no-chain-points-file` | The daemon was started without `--chain-points-file`, or the configured path does not exist on disk. |
+| `no-chain-points-yet` | The file exists but contains no parseable lines (typical at start-of-test, before `tracer-sidecar` has emitted any points). |
+| `no-producers` | The daemon was started without any `--producer-host` flag, so there is nothing to fan connections across. |
+
 The composer driver script in
-`cardano-foundation/cardano-node-antithesis` will map outcomes to
+`cardano-foundation/cardano-node-antithesis` should map outcomes to
 SDK assertions:
 
 | `reason` | `exit` | Antithesis SDK assertion |
 |---|---|---|
 | (none — `ok == true`) | 0 | `sdk_sometimes true "adversary_chain_sync_flap_completed"` |
-| `not-implemented` | 1 | `sdk_unreachable "adversary_endpoint_not_implemented"` (during the PR-B → PR-C transition window) |
+| `not-implemented` | 1 | `sdk_unreachable "adversary_endpoint_not_implemented"` (only seen during a PR-B → PR-C transition window; should never appear after this PR merges) |
+| `no-chain-points-file` | 1 | `sdk_unreachable "adversary_misconfigured_no_points_file"` |
 | `no-chain-points-yet` | 1 | `sdk_sometimes false "adversary_no_chain_points"` |
+| `no-producers` | 1 | `sdk_unreachable "adversary_misconfigured_no_producers"` |
 
 ## Framing details
 
