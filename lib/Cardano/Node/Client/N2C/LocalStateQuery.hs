@@ -19,6 +19,7 @@ module Cardano.Node.Client.N2C.LocalStateQuery (
 ) where
 
 import Cardano.Node.Client.N2C.Types (
+    ConnectionLost (..),
     LSQChannel (..),
     SomeLSQQuery (..),
  )
@@ -34,6 +35,11 @@ import Control.Concurrent.STM (
     takeTMVar,
     tryReadTBQueue,
     writeTBQueue,
+ )
+import Control.Exception (
+    BlockedIndefinitelyOnSTM,
+    handle,
+    throwIO,
  )
 import Ouroboros.Consensus.Ledger.Query (Query)
 import Ouroboros.Network.Protocol.LocalStateQuery.Client (
@@ -141,4 +147,11 @@ queryLSQ ch query = do
     atomically $
         writeTBQueue (lsqRequests ch) $
             SomeLSQQuery query resultVar
-    atomically $ takeTMVar resultVar
+    -- Catch the synchronous-deadlock detection that GHC
+    -- raises when the consumer thread died with this
+    -- request in flight, and re-raise 'ConnectionLost' so
+    -- callers see a typed, recoverable exception. The
+    -- reconnect supervisor will reopen the bearer.
+    handle
+        (\(_ :: BlockedIndefinitelyOnSTM) -> throwIO ConnectionLost)
+        (atomically $ takeTMVar resultVar)

@@ -9,11 +9,20 @@ shape mirrors @specs/034-cardano-tx-generator/quickstart.md@.
 -}
 module Main (main) where
 
+import Cardano.Node.Client.N2C.Probe (
+    ProbeConfig (..),
+    defaultProbeConfig,
+ )
+import Cardano.Node.Client.N2C.Reconnect (
+    ReconnectPolicy (..),
+    defaultReconnectPolicy,
+ )
 import Cardano.Node.Client.TxGenerator.Daemon (
     DaemonConfig (..),
     runDaemon,
  )
 import Data.Maybe (fromMaybe)
+import Data.Word (Word64)
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -70,7 +79,24 @@ parseConfig args0 = do
         (mDb, args11) = case takeFlag "--db-path" args10 of
             Just (p, rest) -> (Just p, rest)
             Nothing -> (Nothing, args10)
-    case args11 of
+        (initialMsS, args12) =
+            fromMaybe
+                (show (rpInitialMs defaultReconnectPolicy), args11)
+                (takeFlag "--reconnect-initial-ms" args11)
+        (maxMsS, args13) =
+            fromMaybe
+                (show (rpMaxMs defaultReconnectPolicy), args12)
+                (takeFlag "--reconnect-max-ms" args12)
+        (resetMsS, args14) =
+            fromMaybe
+                ( show (rpResetThresholdMs defaultReconnectPolicy)
+                , args13
+                )
+                (takeFlag "--reconnect-reset-threshold-ms" args13)
+        (mTotalMs, args15) = case takeFlag "--node-ready-timeout-ms" args14 of
+            Just (s, rest) -> (Just s, rest)
+            Nothing -> (Nothing, args14)
+    case args15 of
         [] -> pure ()
         extra -> dieUsage $ "Unexpected args: " <> show extra
     magic <- requireWord "--network-magic" magicS
@@ -78,6 +104,28 @@ parseConfig args0 = do
     timeout <- requireWord "--await-timeout-seconds" timeoutS
     ready <- requireWord "--ready-threshold-slots" readyS
     k <- requireWord "--security-param-k" kS
+    initialMs <- requireWord "--reconnect-initial-ms" initialMsS
+    maxMs <- requireWord "--reconnect-max-ms" maxMsS
+    resetMs <-
+        requireWord "--reconnect-reset-threshold-ms" resetMsS
+    mTotalMsParsed <- case mTotalMs of
+        Nothing -> pure Nothing
+        Just s ->
+            Just <$> requireWord "--node-ready-timeout-ms" s
+    let policy =
+            ReconnectPolicy
+                { rpInitialMs = fromIntegral (initialMs :: Word)
+                , rpMaxMs = fromIntegral (maxMs :: Word)
+                , rpResetThresholdMs =
+                    fromIntegral (resetMs :: Word)
+                }
+        probe =
+            defaultProbeConfig
+                { pcTotalTimeoutMs =
+                    fmap
+                        (fromIntegral :: Word -> Word64)
+                        mTotalMsParsed
+                }
     pure
         DaemonConfig
             { dcRelaySocket = relay
@@ -91,6 +139,8 @@ parseConfig args0 = do
             , dcReadyThresholdSlots = fromIntegral (ready :: Word)
             , dcSecurityParamK = fromIntegral (k :: Word)
             , dcDbPath = mDb
+            , dcReconnectPolicy = policy
+            , dcProbeConfig = probe
             }
   where
     requireFlag key args =
@@ -124,7 +174,11 @@ dieUsage msg = do
     hPutStrLn stderr "  [--await-timeout-seconds INT] \\"
     hPutStrLn stderr "  [--ready-threshold-slots INT] \\"
     hPutStrLn stderr "  [--security-param-k INT] \\"
-    hPutStrLn stderr "  [--db-path DIR]"
+    hPutStrLn stderr "  [--db-path DIR] \\"
+    hPutStrLn stderr "  [--reconnect-initial-ms INT] \\"
+    hPutStrLn stderr "  [--reconnect-max-ms INT] \\"
+    hPutStrLn stderr "  [--reconnect-reset-threshold-ms INT] \\"
+    hPutStrLn stderr "  [--node-ready-timeout-ms INT]"
     exitFailure
 
 main :: IO ()

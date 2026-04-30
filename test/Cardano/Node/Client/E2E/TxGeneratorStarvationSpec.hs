@@ -34,6 +34,8 @@ import Cardano.Node.Client.E2E.Setup (
     genesisDir,
     genesisSignKey,
  )
+import Cardano.Node.Client.N2C.Probe (defaultProbeConfig)
+import Cardano.Node.Client.N2C.Reconnect (defaultReconnectPolicy)
 import Cardano.Node.Client.TxGenerator.Daemon (
     DaemonConfig (..),
     runDaemon,
@@ -118,6 +120,8 @@ spec =
                                 , dcReadyThresholdSlots = 10
                                 , dcSecurityParamK = 2160
                                 , dcDbPath = Nothing
+                                , dcReconnectPolicy = defaultReconnectPolicy
+                                , dcProbeConfig = defaultProbeConfig
                                 }
                     daemonThread <- async (runDaemon cfg)
                     result <-

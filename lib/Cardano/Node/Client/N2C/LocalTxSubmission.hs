@@ -17,6 +17,7 @@ module Cardano.Node.Client.N2C.LocalTxSubmission (
 ) where
 
 import Cardano.Node.Client.N2C.Types (
+    ConnectionLost (..),
     LTxSChannel (..),
     TxSubmitRequest (..),
  )
@@ -28,6 +29,11 @@ import Control.Concurrent.STM (
     readTBQueue,
     takeTMVar,
     writeTBQueue,
+ )
+import Control.Exception (
+    BlockedIndefinitelyOnSTM,
+    handle,
+    throwIO,
  )
 import Ouroboros.Consensus.Ledger.SupportsMempool (
     ApplyTxErr,
@@ -77,6 +83,13 @@ clientIdle ch = do
 
 {- | Submit a transaction through the channel and
 block until the result is available.
+
+Re-raises 'ConnectionLost' instead of letting GHC's
+'BlockedIndefinitelyOnSTM' escape when the consumer
+thread dies with the request in flight (bearer
+closed mid-submit). The reconnect supervisor will
+reopen the bearer; callers should treat
+'ConnectionLost' as transient and retry.
 -}
 submitTxN2C ::
     -- | Channel to the LocalTxSubmission client
@@ -92,4 +105,6 @@ submitTxN2C ch tx = do
                 { tsrTx = tx
                 , tsrResult = resultVar
                 }
-    atomically $ takeTMVar resultVar
+    handle
+        (\(_ :: BlockedIndefinitelyOnSTM) -> throwIO ConnectionLost)
+        (atomically $ takeTMVar resultVar)
