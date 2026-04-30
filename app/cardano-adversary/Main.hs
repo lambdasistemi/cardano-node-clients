@@ -60,7 +60,10 @@ parseConfig args0 = do
         (mPortS, args4) = case takeFlag "--producer-port" args3 of
             Just (p, rest) -> (Just p, rest)
             Nothing -> (Nothing, args3)
-    case args4 of
+        (mPoints, args5) = case takeFlag "--chain-points-file" args4 of
+            Just (p, rest) -> (Just p, rest)
+            Nothing -> (Nothing, args4)
+    case args5 of
         [] -> pure ()
         extra -> dieUsage $ "Unexpected args: " <> show extra
     magic <- requireWord32 "--network-magic" magicS
@@ -71,6 +74,7 @@ parseConfig args0 = do
             , daemonProducerHosts = hosts
             , daemonProducerPort = port
             , daemonNetworkMagic = NetworkMagic magic
+            , daemonChainPointsFile = mPoints
             }
   where
     requireFlag key args =
@@ -106,7 +110,8 @@ dieUsage msg = do
     hPutStrLn stderr "  --control-socket PATH \\"
     hPutStrLn stderr "  --network-magic INT \\"
     hPutStrLn stderr "  [--producer-host HOST]... \\"
-    hPutStrLn stderr "  [--producer-port INT]"
+    hPutStrLn stderr "  [--producer-port INT] \\"
+    hPutStrLn stderr "  [--chain-points-file PATH]"
     exitFailure
 
 main :: IO ()
@@ -133,4 +138,5 @@ printHelp = do
     putStrLn "  --network-magic INT      Cardano network magic. Required."
     putStrLn "  --producer-host HOST     Producer hostname (repeatable, optional)."
     putStrLn "  --producer-port INT      N2N port (default 3001)."
+    putStrLn "  --chain-points-file PATH File of chain points written by tracer-sidecar."
     putStrLn "  --help, -h               Print this help and exit 0."
