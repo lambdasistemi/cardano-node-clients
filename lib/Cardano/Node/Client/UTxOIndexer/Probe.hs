@@ -36,6 +36,9 @@ module Cardano.Node.Client.UTxOIndexer.Probe (
 
     -- * Probe
     waitForNodeReady,
+
+    -- * Utilities
+    msToMicros,
 ) where
 
 import Cardano.Node.Client.N2C.Connection (
