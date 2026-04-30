@@ -42,6 +42,7 @@ library
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.Adversary.Application
+    Cardano.Node.Client.Adversary.ChainPoints
     Cardano.Node.Client.Adversary.ChainSync.Codec
     Cardano.Node.Client.Adversary.ChainSync.Connection
     Cardano.Node.Client.Adversary.Daemon
@@ -108,10 +109,10 @@ library
     , contra-tracer
     , directory
     , dns
-    , io-classes
-    , io-classes:strict-stm
     , exceptions
     , filepath
+    , io-classes
+    , io-classes:strict-stm
     , iproute
     , microlens
     , network

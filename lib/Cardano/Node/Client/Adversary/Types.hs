@@ -20,10 +20,13 @@ module Cardano.Node.Client.Adversary.Types (
     -- * Responses
     Response (..),
     ReadyDetails (..),
+    ChainSyncFlapDetails (..),
+    ChainSyncFlapFailure (..),
     ErrorReason (..),
 
     -- * Wire helpers
     errorReasonText,
+    chainSyncFlapFailureText,
 ) where
 
 import Data.Aeson (
@@ -92,11 +95,71 @@ instance FromJSON Request where
 data Response
     = -- | Successful @ready@ response.
       RespReady !ReadyDetails
-    | -- | Endpoint reserved but logic not yet implemented (PR B).
+    | -- | Endpoint reserved but logic not yet implemented.
       RespNotImplemented
+    | -- | Successful @chain_sync_flap@ response.
+      RespChainSyncFlapOk !ChainSyncFlapDetails
+    | -- | Structured @chain_sync_flap@ failure (e.g. no chain points yet).
+      RespChainSyncFlapFail !ChainSyncFlapFailure
     | -- | Wire-level error (malformed json, unknown key).
       RespError !ErrorReason
     deriving stock (Eq, Show)
+
+{- | Diagnostic body returned by a successful @chain_sync_flap@
+invocation. Currently a coarse summary; richer per-connection
+detail can be added later without breaking the wire schema (only
+new fields appear).
+-}
+data ChainSyncFlapDetails = ChainSyncFlapDetails
+    { csfdConnections :: !Int
+    -- ^ Number of concurrent connections that were dispatched.
+    , csfdPeerNames :: ![Text]
+    -- ^ The producer hostnames the connections fanned across.
+    , csfdLimit :: !Word32
+    -- ^ The block-pull limit each connection was given.
+    }
+    deriving stock (Eq, Show)
+
+instance ToJSON ChainSyncFlapDetails where
+    toJSON (ChainSyncFlapDetails conns names limit) =
+        object
+            [ "ok" .= True
+            , "details"
+                .= object
+                    [ "connections" .= conns
+                    , "peerNames" .= names
+                    , "limit" .= limit
+                    ]
+            ]
+
+instance FromJSON ChainSyncFlapDetails where
+    parseJSON = withObject "chain_sync_flap response" $ \o -> do
+        details <- o .: "details"
+        conns <- details .: "connections"
+        names <- details .: "peerNames"
+        limit <- details .: "limit"
+        pure (ChainSyncFlapDetails conns names limit)
+
+{- | Documented failure reasons for the @chain_sync_flap@ endpoint.
+Distinct from the wire-level 'ErrorReason' set: these are valid
+responses whose @ok@ field is @False@.
+-}
+data ChainSyncFlapFailure
+    = -- | The @--chain-points-file@ has not been written yet (or is
+      -- empty), so no intersection point can be sampled.
+      CsffNoChainPointsYet
+    | -- | The configured @--chain-points-file@ does not exist on
+      -- disk at all.
+      CsffNoChainPointsFile
+    | -- | No producer hostnames were configured via @--producer-host@.
+      CsffNoProducers
+    deriving stock (Eq, Show)
+
+chainSyncFlapFailureText :: ChainSyncFlapFailure -> Text
+chainSyncFlapFailureText = \case
+    CsffNoChainPointsYet -> "no-chain-points-yet"
+    CsffNoChainPointsFile -> "no-chain-points-file"
+    CsffNoProducers -> "no-producers"
 
 -- | Structured details accompanying a 'RespReady' response.
 data ReadyDetails = ReadyDetails
@@ -148,6 +211,12 @@ instance ToJSON Response where
         RespReady details -> toJSON details
         RespNotImplemented ->
             object ["ok" .= False, "reason" .= ("not-implemented" :: Text)]
+        RespChainSyncFlapOk details -> toJSON details
+        RespChainSyncFlapFail reason ->
+            object
+                [ "ok" .= False
+                , "reason" .= chainSyncFlapFailureText reason
+                ]
         RespError reason ->
             object ["error" .= errorReasonText reason]
 
