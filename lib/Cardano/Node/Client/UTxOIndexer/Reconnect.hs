@@ -14,10 +14,17 @@ capped at 'rpMaxMs', delivered by 'fullJitterBackoff' +
 exceptions (clean shutdown) and @ConsultPolicy@ on
 synchronous failures.
 
-Before each chain-sync attempt the supervisor calls
-'Probe.waitForNodeReady' so we don't even try to attach
-chain-sync against a relay whose ChainDB hasn't finished
-loading.
+Before the first chain-sync attempt (and after the outer
+'forever' loop restarts, if ever) the supervisor calls
+'Probe.waitForNodeReady' so we don't attach chain-sync
+against a relay whose ChainDB hasn't finished loading.
+Subsequent reconnect retries within the same
+'recoveringDynamic' call proceed directly to
+'innerAttempt' without re-probing: the relay's socket is
+already confirmed reachable and its ChainDB is assumed
+stable; a fast failure + exponential back-off is
+sufficient to gate reconnects against a transiently
+unavailable relay.
 -}
 module Cardano.Node.Client.UTxOIndexer.Reconnect (
     -- * Policy
@@ -34,6 +41,7 @@ module Cardano.Node.Client.UTxOIndexer.Reconnect (
 
 import Cardano.Node.Client.UTxOIndexer.Probe (
     ProbeConfig,
+    msToMicros,
     waitForNodeReady,
  )
 import Cardano.Node.Client.UTxOIndexer.Trace (
@@ -108,8 +116,11 @@ data DisconnectInfo = DisconnectInfo
     , diAttempt :: !Int
     -- ^ 1-based counter of consecutive failed attempts.
     , diSinceMs :: !Word64
-    -- ^ Monotonic ms since the disconnect was first
-    -- observed.
+    -- ^ Cumulative backoff delay (ms) accumulated by the
+    -- retry policy up to this attempt. This tracks the
+    -- time the supervisor has been sleeping between
+    -- reconnect attempts, not real elapsed wall time
+    -- (which also includes probe and connect durations).
     }
     deriving stock (Show, Eq)
 
@@ -120,10 +131,15 @@ Per outer iteration:
 
 1. Call 'waitForNodeReady' (the probe) so we don't attach
    chain-sync against a relay whose ChainDB is still
-   loading. Async exceptions propagate immediately.
+   loading on first connect. Async exceptions propagate
+   immediately.
 2. Run the inner @action@ inside 'recoveringDynamic',
    which retries on synchronous failures with
    @capDelay rpMaxMs (fullJitterBackoff rpInitialMs)@.
+   Each retry goes directly back to 'innerAttempt' without
+   re-probing: the relay is assumed stable after the
+   initial probe; fast-fail + backoff is the reconnect
+   gate.
 3. On retry, the handler emits 'IndexerDisconnected' and
    'IndexerReconnecting' (with the @retry@'s iteration
    counter) and updates the status sink to
@@ -257,9 +273,3 @@ log lines stay scannable.
 -}
 shortenException :: E.SomeException -> Text
 shortenException = Text.pack . take 80 . E.displayException
-
--- | Convert milliseconds to microseconds, saturating at @maxBound :: Int@.
-msToMicros :: Word64 -> Int
-msToMicros ms
-    | ms > fromIntegral (maxBound `div` 1_000 :: Int) = maxBound
-    | otherwise = fromIntegral ms * 1_000
