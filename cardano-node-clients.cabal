@@ -101,6 +101,7 @@ library
     , contra-tracer
     , directory
     , dns
+    , exceptions
     , filepath
     , iproute
     , microlens
@@ -227,6 +228,7 @@ test-suite unit-tests
     Cardano.Node.Client.TxGenerator.SnapshotSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
+    Cardano.Node.Client.UTxOIndexer.ProbeSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.TraceSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
