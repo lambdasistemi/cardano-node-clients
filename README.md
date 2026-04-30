@@ -14,8 +14,12 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 
 ## Executables
 
-- [`utxo-indexer`](app/utxo-indexer/) -- in-memory address->UTxO indexer
-  daemon exposing NDJSON snapshot/await over a Unix socket.
+- [`utxo-indexer`](app/utxo-indexer/) -- address->UTxO indexer daemon
+  (in-memory or RocksDB-backed) exposing NDJSON snapshot/await over a
+  Unix socket. In-process auto-reconnect on upstream-relay disconnect
+  with full-jitter exponential backoff via `Control.Retry`, gated by
+  an LSQ tip probe (issue
+  [#97](https://github.com/lambdasistemi/cardano-node-clients/issues/97)).
 - [`cardano-tx-generator`](app/cardano-tx-generator/) -- Antithesis-driven
   fan-out daemon that creates monotonic UTxO and address pressure on a
   node by driving deterministic transactions through a growing
