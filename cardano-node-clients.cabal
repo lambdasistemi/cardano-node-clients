@@ -242,6 +242,7 @@ test-suite unit-tests
   main-is:          unit-main.hs
   default-language: GHC2021
   other-modules:
+    Cardano.Node.Client.Adversary.ChainPointsSpec
     Cardano.Node.Client.Adversary.ServerSpec
     Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.N2C.ProbeSpec

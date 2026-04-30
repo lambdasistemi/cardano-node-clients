@@ -15,6 +15,8 @@ module Cardano.Node.Client.Adversary.ServerSpec (spec) where
 
 import Cardano.Node.Client.Adversary.Types (
     ChainSyncFlapArgs (..),
+    ChainSyncFlapDetails (..),
+    ChainSyncFlapFailure (..),
     ErrorReason (..),
     ReadyDetails (..),
     Request (..),
@@ -104,6 +106,55 @@ spec = do
             encode (RespError ErrUnknownRequest)
                 `shouldBe` encode
                     ( object ["error" .= ("unknown request" :: String)]
+                    )
+
+        it "RespChainSyncFlapOk shape matches control-wire.md" $
+            encode
+                ( RespChainSyncFlapOk
+                    ChainSyncFlapDetails
+                        { csfdConnections = 2
+                        , csfdPeerNames = ["p1.example", "p2.example"]
+                        , csfdLimit = 100
+                        }
+                )
+                `shouldBe` encode
+                    ( object
+                        [ "ok" .= True
+                        , "details"
+                            .= object
+                                [ "connections" .= (2 :: Int)
+                                , "peerNames"
+                                    .= ["p1.example" :: String, "p2.example"]
+                                , "limit" .= (100 :: Int)
+                                ]
+                        ]
+                    )
+
+        it "RespChainSyncFlapFail no-chain-points-yet" $
+            encode (RespChainSyncFlapFail CsffNoChainPointsYet)
+                `shouldBe` encode
+                    ( object
+                        [ "ok" .= False
+                        , "reason" .= ("no-chain-points-yet" :: String)
+                        ]
+                    )
+
+        it "RespChainSyncFlapFail no-chain-points-file" $
+            encode (RespChainSyncFlapFail CsffNoChainPointsFile)
+                `shouldBe` encode
+                    ( object
+                        [ "ok" .= False
+                        , "reason" .= ("no-chain-points-file" :: String)
+                        ]
+                    )
+
+        it "RespChainSyncFlapFail no-producers" $
+            encode (RespChainSyncFlapFail CsffNoProducers)
+                `shouldBe` encode
+                    ( object
+                        [ "ok" .= False
+                        , "reason" .= ("no-producers" :: String)
+                        ]
                     )
 
     describe "Round-trip" $ do
