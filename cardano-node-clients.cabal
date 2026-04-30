@@ -125,6 +125,7 @@ library
     , time
     , transformers
     , typed-protocols
+    , unix
 
 library devnet
   import:           warnings
