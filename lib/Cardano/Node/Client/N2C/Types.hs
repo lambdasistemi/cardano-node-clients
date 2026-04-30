@@ -23,9 +23,13 @@ module Cardano.Node.Client.N2C.Types (
     -- * Request wrappers
     SomeLSQQuery (..),
     TxSubmitRequest (..),
+
+    -- * Connection-loss signal
+    ConnectionLost (..),
 ) where
 
 import Control.Concurrent.STM (TBQueue, TMVar)
+import Control.Exception (Exception)
 
 import Cardano.Node.Client.Types (Block)
 import Ouroboros.Consensus.Ledger.Query (Query)
@@ -71,3 +75,25 @@ LocalTxSubmission mini-protocol client.
 newtype LTxSChannel = LTxSChannel
     { ltxsRequests :: TBQueue TxSubmitRequest
     }
+
+{- | Synchronous exception raised by 'queryLSQ' /
+'submitTxN2C' when the underlying N2C connection died
+mid-request.
+
+Symptom this replaces: GHC throws
+'BlockedIndefinitelyOnSTM' to the caller because the
+consumer thread held the only reference to the
+result 'TMVar', then died with the bearer-close
+exception, and GC observed no remaining writers. By
+catching that synchronous-detected deadlock here and
+re-raising 'ConnectionLost' instead, callers see a
+typed exception they can handle (e.g. surface
+@no-pickable-source@ / @index-not-ready@ to the
+composer and exit 1 for a retry on the next tick),
+and the daemon process stays alive while the
+reconnect supervisor reopens the bearer.
+-}
+data ConnectionLost = ConnectionLost
+    deriving stock (Eq, Show)
+
+instance Exception ConnectionLost

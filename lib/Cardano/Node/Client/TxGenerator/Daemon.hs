@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -81,6 +82,7 @@ import Cardano.Node.Client.N2C.Trace (
     N2CEvent,
     defaultStderrTracer,
  )
+import Cardano.Node.Client.N2C.Types (ConnectionLost (..))
 import Cardano.Node.Client.Provider (Provider (..))
 import Cardano.Node.Client.Submitter (
     SubmitResult (..),
@@ -349,13 +351,28 @@ runDaemonWithTracer tracer cfg = do
             threadDelay 3_000_000
             let provider = mkN2CProvider lsqCh
                 submitter = mkN2CSubmitter ltxsCh
-            pp <- queryProtocolParams provider
+            -- Boot-time LSQ probes can race the supervisor
+            -- if the bearer dies during chain replay; loop
+            -- with a short backoff so the daemon process
+            -- survives early disconnects too. The
+            -- supervisor is already retrying the bearer
+            -- itself; this just keeps the boot waiting
+            -- until LSQ is reachable.
+            let bootRetry :: forall a. IO a -> IO a
+                bootRetry act =
+                    E.try @ConnectionLost act >>= \case
+                        Right v -> pure v
+                        Left ConnectionLost -> do
+                            threadDelay 500_000
+                            bootRetry act
+            pp <- bootRetry (queryProtocolParams provider)
             -- Probe the faucet once at startup so the
             -- @ready@ probe can flip @faucetUtxosKnown@
             -- without waiting for the first @refill@
             -- trigger. Subsequent refills update this flag
             -- per their LSQ response.
-            initialFaucetUtxos <- queryUTxOs provider faucetAddr
+            initialFaucetUtxos <-
+                bootRetry (queryUTxOs provider faucetAddr)
             atomically
                 ( writeTVar
                     faucetKnownVar
@@ -371,31 +388,50 @@ runDaemonWithTracer tracer cfg = do
                         idx
                         net
                         masterSeed
-                doRefill =
-                    runRefillArm
-                        cfg
-                        pp
-                        idx
-                        provider
-                        submitter
-                        net
-                        masterSeed
-                        faucetSKey
-                        faucetAddr
-                        nextIdxMVar
-                        lastTxIdVar
-                        faucetKnownVar
-                doTransact =
-                    runTransactArm
-                        cfg
-                        pp
-                        idx
-                        provider
-                        submitter
-                        net
-                        masterSeed
-                        nextIdxMVar
-                        lastTxIdVar
+                -- Both arms can raise 'ConnectionLost' when
+                -- a request is in flight at the moment the
+                -- N2C bearer dies. The reconnect supervisor
+                -- reopens the bearer; the arm just needs to
+                -- surface a not-applicable response so the
+                -- composer retries on the next tick instead
+                -- of taking down the daemon process.
+                doRefill req =
+                    E.handle
+                        ( \ConnectionLost ->
+                            pure (RefillFail IndexNotReady)
+                        )
+                        ( runRefillArm
+                            cfg
+                            pp
+                            idx
+                            provider
+                            submitter
+                            net
+                            masterSeed
+                            faucetSKey
+                            faucetAddr
+                            nextIdxMVar
+                            lastTxIdVar
+                            faucetKnownVar
+                            req
+                        )
+                doTransact req =
+                    E.handle
+                        ( \ConnectionLost ->
+                            pure (TransactFail IndexNotReady)
+                        )
+                        ( runTransactArm
+                            cfg
+                            pp
+                            idx
+                            provider
+                            submitter
+                            net
+                            masterSeed
+                            nextIdxMVar
+                            lastTxIdVar
+                            req
+                        )
                 hooks =
                     ServerHooks
                         { hooksReady = getReady
