@@ -64,6 +64,7 @@ import Control.Concurrent.Async (concurrently_)
 import Control.Concurrent.STM (
     TVar,
     atomically,
+    modifyTVar',
     newTVarIO,
     readTVarIO,
     writeTVar,
@@ -159,13 +160,23 @@ runDaemon tracer cfg = do
                             (mkIntersector bootMode cfg readyVar idx)
                             resumePoints
                         )
-                -- Status sink and processed-slot getter are wired
-                -- in T009. For now the supervisor swallows status
-                -- updates and returns Nothing for the resume slot.
-                noopSetStatus :: UpstreamStatus -> IO ()
-                noopSetStatus _ = pure ()
-                noopGetSlot :: IO (Maybe SlotNo)
-                noopGetSlot = pure Nothing
+                -- Wire the supervisor's status sink into the same
+                -- TVar that the server reads from. On
+                -- UpstreamDisconnected we also force rsReady=False
+                -- at the producer (the encoder enforces the same
+                -- invariant on the wire — defense in depth).
+                setUpstreamStatus newStatus =
+                    atomically $ modifyTVar' readyVar $ \rs ->
+                        case newStatus of
+                            UpstreamConnected ->
+                                rs{rsUpstream = UpstreamConnected}
+                            UpstreamDisconnected _ ->
+                                rs
+                                    { rsUpstream = newStatus
+                                    , rsReady = False
+                                    }
+                getProcessedSlot =
+                    rsProcessedSlot <$> readTVarIO readyVar
                 chainAction =
                     runReconnectLoop
                         tracer
@@ -173,8 +184,8 @@ runDaemon tracer cfg = do
                         (dcProbeConfig cfg)
                         (NetworkMagic (dcNetworkMagic cfg))
                         (dcRelaySocket cfg)
-                        noopSetStatus
-                        noopGetSlot
+                        setUpstreamStatus
+                        getProcessedSlot
                         chainSession
                 serverAction =
                     runServer (dcListenSocket cfg) idx getReady
