@@ -18,6 +18,15 @@ import Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
  )
+import Cardano.Node.Client.UTxOIndexer.Probe (
+    defaultProbeConfig,
+ )
+import Cardano.Node.Client.UTxOIndexer.Reconnect (
+    defaultReconnectPolicy,
+ )
+import Cardano.Node.Client.UTxOIndexer.Trace (
+    nullIndexerTracer,
+ )
 import Data.Maybe (fromMaybe)
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
@@ -82,6 +91,8 @@ parseConfig args0 = do
             , dcReadyThresholdSlots = fromIntegral (ready :: Word)
             , dcSecurityParamK = fromIntegral (k :: Word)
             , dcDbPath = mDbPath
+            , dcReconnectPolicy = defaultReconnectPolicy
+            , dcProbeConfig = defaultProbeConfig
             }
   where
     requireFlag key args =
@@ -117,4 +128,4 @@ main = do
     args <- getArgs
     cfg <- parseConfig args
     hPutStrLn stderr $ "utxo-indexer: " <> show cfg
-    runDaemon cfg
+    runDaemon nullIndexerTracer cfg
