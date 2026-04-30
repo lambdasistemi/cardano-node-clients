@@ -68,7 +68,10 @@ library
     Cardano.Node.Client.Types
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
+    Cardano.Node.Client.UTxOIndexer.Probe
+    Cardano.Node.Client.UTxOIndexer.Reconnect
     Cardano.Node.Client.UTxOIndexer.Server
+    Cardano.Node.Client.UTxOIndexer.Trace
 
   build-depends:
     , aeson
@@ -114,6 +117,7 @@ library
     , plutus-core
     , plutus-tx
     , random
+    , retry
     , serialise
     , stm
     , text
