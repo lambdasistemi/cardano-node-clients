@@ -69,8 +69,18 @@ import Cardano.Node.Client.N2C.Connection (
     newLTxSChannel,
     runNodeClientFull,
  )
+import Cardano.Node.Client.N2C.Probe (ProbeConfig)
 import Cardano.Node.Client.N2C.Provider (mkN2CProvider)
+import Cardano.Node.Client.N2C.Reconnect (
+    ReconnectPolicy,
+    UpstreamStatus (..),
+    runReconnectLoop,
+ )
 import Cardano.Node.Client.N2C.Submitter (mkN2CSubmitter)
+import Cardano.Node.Client.N2C.Trace (
+    N2CEvent,
+    defaultStderrTracer,
+ )
 import Cardano.Node.Client.Provider (Provider (..))
 import Cardano.Node.Client.Submitter (
     SubmitResult (..),
@@ -139,12 +149,14 @@ import Control.Concurrent.MVar (
 import Control.Concurrent.STM (
     TVar,
     atomically,
+    modifyTVar',
     newTVarIO,
     readTVarIO,
     writeTVar,
  )
+import Control.Exception qualified as E
 import Control.Monad (void)
-import Control.Tracer (nullTracer)
+import Control.Tracer (Tracer, nullTracer)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
@@ -155,6 +167,7 @@ import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.Encoding qualified as Text
+import Data.Void (Void)
 import Data.Word (Word16, Word32, Word64)
 import Lens.Micro ((%~), (&), (^.))
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
@@ -180,14 +193,29 @@ data DaemonConfig = DaemonConfig
     , dcReadyThresholdSlots :: !Word64
     , dcSecurityParamK :: !Int
     , dcDbPath :: !(Maybe FilePath)
+    , dcReconnectPolicy :: !ReconnectPolicy
+    -- ^ Policy used by the N2C reconnect supervisor
+    -- wrapping the relay connection. Defaults via
+    -- 'defaultReconnectPolicy'.
+    , dcProbeConfig :: !ProbeConfig
+    -- ^ Pre-attempt probe used by the supervisor to wait
+    -- for the relay's ChainDB to finish loading. Defaults
+    -- via 'defaultProbeConfig' — chain-replay-tolerant
+    -- (unbounded total wait, replay-aware retries).
     }
     deriving stock (Show)
 
--- | Mirrors the indexer's per-run readiness state.
+{- | Mirrors the indexer's per-run readiness state. The
+'rsUpstream' field surfaces the reconnect supervisor's
+view of the bearer; 'readyResponseFrom' enforces the
+invariant @UpstreamDisconnected => ready=false@ on the
+wire.
+-}
 data ReadyState = ReadyState
     { rsReady :: !Bool
     , rsTipSlot :: !(Maybe Word64)
     , rsProcessedSlot :: !(Maybe Word64)
+    , rsUpstream :: !UpstreamStatus
     }
     deriving stock (Show)
 
@@ -197,6 +225,7 @@ initialReady =
         { rsReady = False
         , rsTipSlot = Nothing
         , rsProcessedSlot = Nothing
+        , rsUpstream = UpstreamConnected
         }
 
 data BootMode
@@ -217,9 +246,32 @@ to the relay carrying chain-sync + LSQ + LTxS, query
 protocol parameters once at startup, mount the control
 wire on @dcControlSocket@, and block until the chain-sync
 side or the server exits.
+
+The relay connection is wrapped in
+'Cardano.Node.Client.N2C.Reconnect.runReconnectLoop'.
+When the upstream relay closes the bearer (network
+partition, container restart, or the
+'Network.Socket.sendBuf: resource vanished (Broken pipe)'
+/ @BlockedIndefinitely@ pair we observed under
+Antithesis fault injection on
+cardano-foundation/cardano-node-antithesis @ ed6666d) the
+supervisor catches the exception, flips
+'rsUpstream' to 'UpstreamDisconnected', re-probes the
+relay, and reopens the connection. The control surface
+stays bound throughout; @ready@ responses advertise the
+upstream gap; in-flight LSQ/LTxS requests fail fast and
+callers retry on the next composer tick.
 -}
 runDaemon :: DaemonConfig -> IO ()
-runDaemon cfg = do
+runDaemon = runDaemonWithTracer defaultStderrTracer
+
+{- | Variant of 'runDaemon' that takes an explicit
+'N2CEvent' tracer. Wired this way so tests can capture
+supervisor events; the binary uses 'runDaemon' which
+defaults to the stderr renderer.
+-}
+runDaemonWithTracer :: Tracer IO N2CEvent -> DaemonConfig -> IO ()
+runDaemonWithTracer tracer cfg = do
     createDirectoryIfMissing True (dcStateDir cfg)
     masterSeed <- loadOrCreateSeed (dcMasterSeedFile cfg)
     faucetKeyBytes <- BS.readFile (dcFaucetSKeyFile cfg)
@@ -245,16 +297,55 @@ runDaemon cfg = do
                     nullTracer
                     (mkIntersector bootMode cfg readyVar idx)
                     resumePoints
-            nodeAction =
-                runNodeClientFull
+            -- One full N2C session: chain-sync + LSQ +
+            -- LTxS over a single mux bearer. Wrapped in
+            -- 'try' so synchronous exceptions surface to
+            -- the supervisor instead of escaping it.
+            nodeSession =
+                E.try $
+                    void $
+                        runNodeClientFull
+                            (NetworkMagic (dcNetworkMagic cfg))
+                            (EpochSlots (dcByronEpochSlots cfg))
+                            (dcRelaySocket cfg)
+                            chainSyncApp
+                            lsqCh
+                            ltxsCh
+            -- Status sink: every supervisor transition
+            -- goes through this. On UpstreamDisconnected
+            -- we also force rsReady=False at the
+            -- producer (the encoder enforces the same
+            -- invariant on the wire — defense in depth).
+            setUpstreamStatus newStatus =
+                atomically $ modifyTVar' readyVar $ \rs ->
+                    case newStatus of
+                        UpstreamConnected ->
+                            rs{rsUpstream = UpstreamConnected}
+                        UpstreamDisconnected _ ->
+                            rs
+                                { rsUpstream = newStatus
+                                , rsReady = False
+                                }
+            getProcessedSlot =
+                fmap Idx.SlotNo . rsProcessedSlot
+                    <$> readTVarIO readyVar
+            supervisedNodeAction :: IO Void
+            supervisedNodeAction =
+                runReconnectLoop
+                    tracer
+                    (dcReconnectPolicy cfg)
+                    (dcProbeConfig cfg)
                     (NetworkMagic (dcNetworkMagic cfg))
-                    (EpochSlots (dcByronEpochSlots cfg))
                     (dcRelaySocket cfg)
-                    chainSyncApp
-                    lsqCh
-                    ltxsCh
-        withAsync (void nodeAction) $ \_nodeT -> do
-            -- Brief settle for the mux handshake.
+                    setUpstreamStatus
+                    getProcessedSlot
+                    nodeSession
+        withAsync (void supervisedNodeAction) $ \_nodeT -> do
+            -- Brief settle for the mux handshake. The
+            -- probe in 'runReconnectLoop' has already
+            -- confirmed the relay's LSQ answers, so this
+            -- is just a courtesy gap before the first
+            -- queryProtocolParams.
             threadDelay 3_000_000
             let provider = mkN2CProvider lsqCh
                 submitter = mkN2CSubmitter ltxsCh
@@ -750,11 +841,25 @@ readyResponseFrom ::
 readyResponseFrom readyVar faucetKnownVar = do
     rs <- readTVarIO readyVar
     fk <- readTVarIO faucetKnownVar
+    -- Defense in depth: when the supervisor reports
+    -- 'UpstreamDisconnected' the client must treat the
+    -- daemon as not-ready even if the producer's TVar
+    -- still has 'rsReady=True' from before the bearer
+    -- closed. The encoder-side enforcement in
+    -- 'TxGenerator.Types.ReadyResponse'\''s 'ToJSON' makes
+    -- this an invariant on the wire.
+    let ready = case rsUpstream rs of
+            UpstreamConnected -> rsReady rs && fk
+            UpstreamDisconnected{} -> False
+        indexReady = case rsUpstream rs of
+            UpstreamConnected -> rsReady rs
+            UpstreamDisconnected{} -> False
     pure
         ReadyResponse
-            { readyReady = rsReady rs && fk
-            , readyIndexReady = rsReady rs
+            { readyReady = ready
+            , readyIndexReady = indexReady
             , readyFaucetUtxosKnown = fk
+            , readyUpstream = rsUpstream rs
             }
 
 snapshotResponseFrom ::
@@ -950,17 +1055,19 @@ updateReady ::
     Idx.SlotNo ->
     Network.SlotNo ->
     IO ()
-updateReady cfg readyVar (Idx.SlotNo processed) tipNet =
+updateReady cfg readyVar (Idx.SlotNo processed) tipNet = do
     let tip = Network.unSlotNo tipNet
         behind =
             if tip > processed
                 then tip - processed
                 else 0
         ready = behind <= dcReadyThresholdSlots cfg
-        rs =
-            ReadyState
-                { rsReady = ready
-                , rsTipSlot = Just tip
-                , rsProcessedSlot = Just processed
-                }
-     in atomically (writeTVar readyVar rs)
+    -- Preserve the supervisor-managed 'rsUpstream'. The
+    -- chain-sync follower owns rsReady/rsTipSlot/
+    -- rsProcessedSlot; the supervisor owns rsUpstream.
+    atomically $ modifyTVar' readyVar $ \rs ->
+        rs
+            { rsReady = ready
+            , rsTipSlot = Just tip
+            , rsProcessedSlot = Just processed
+            }

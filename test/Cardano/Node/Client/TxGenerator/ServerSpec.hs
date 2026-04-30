@@ -15,6 +15,10 @@ executable mounts the server.
 -}
 module Cardano.Node.Client.TxGenerator.ServerSpec (spec) where
 
+import Cardano.Node.Client.N2C.Reconnect (
+    DisconnectInfo (..),
+    UpstreamStatus (..),
+ )
 import Cardano.Node.Client.TxGenerator.Types (
     FailureReason (..),
     ReadyResponse (..),
@@ -99,11 +103,60 @@ spec = describe "TxGenerator.Server (wire)" $ do
                     { readyReady = True
                     , readyIndexReady = True
                     , readyFaucetUtxosKnown = False
+                    , readyUpstream = UpstreamConnected
                     }
                 `shouldBe` object
                     [ "ready" .= True
                     , "indexReady" .= True
                     , "faucetUtxosKnown" .= False
+                    ]
+
+        it
+            ( "ReadyResponse omits the @upstream@ object"
+                <> " when the supervisor is connected"
+            )
+            $ toJSON
+                ReadyResponse
+                    { readyReady = True
+                    , readyIndexReady = True
+                    , readyFaucetUtxosKnown = True
+                    , readyUpstream = UpstreamConnected
+                    }
+                `shouldBe` object
+                    [ "ready" .= True
+                    , "indexReady" .= True
+                    , "faucetUtxosKnown" .= True
+                    ]
+
+        it
+            ( "ReadyResponse with UpstreamDisconnected forces"
+                <> " ready=false and surfaces the disconnect"
+                <> " detail"
+            )
+            $ toJSON
+                ReadyResponse
+                    { readyReady = True
+                    , readyIndexReady = True
+                    , readyFaucetUtxosKnown = True
+                    , readyUpstream =
+                        UpstreamDisconnected
+                            DisconnectInfo
+                                { diReason = "Broken pipe"
+                                , diAttempt = 3
+                                , diSinceMs = 1500
+                                }
+                    }
+                `shouldBe` object
+                    [ "ready" .= False
+                    , "indexReady" .= False
+                    , "faucetUtxosKnown" .= True
+                    , "upstream"
+                        .= object
+                            [ "status" .= ("disconnected" :: Text)
+                            , "reason" .= ("Broken pipe" :: Text)
+                            , "attempt" .= (3 :: Int)
+                            , "sinceMs" .= (1500 :: Int)
+                            ]
                     ]
 
         it "SnapshotResponse uses the documented shape" $

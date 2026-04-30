@@ -37,6 +37,8 @@ import Cardano.Node.Client.E2E.Setup (
     genesisDir,
     genesisSignKey,
  )
+import Cardano.Node.Client.N2C.Probe (defaultProbeConfig)
+import Cardano.Node.Client.N2C.Reconnect (defaultReconnectPolicy)
 import Cardano.Node.Client.TxGenerator.Daemon (
     DaemonConfig (..),
     runDaemon,
@@ -133,6 +135,8 @@ mkCfg nodeSocket controlSock stateDir masterSeed faucetSkey =
             , dcReadyThresholdSlots = 10
             , dcSecurityParamK = 2160
             , dcDbPath = Nothing
+            , dcReconnectPolicy = defaultReconnectPolicy
+            , dcProbeConfig = defaultProbeConfig
             }
 
 runPhaseA :: DaemonConfig -> FilePath -> IO Integer

@@ -30,6 +30,10 @@ module Cardano.Node.Client.TxGenerator.Types (
     failureReasonText,
 ) where
 
+import Cardano.Node.Client.N2C.Reconnect (
+    DisconnectInfo (..),
+    UpstreamStatus (..),
+ )
 import Data.Aeson (
     FromJSON (..),
     ToJSON (..),
@@ -67,11 +71,21 @@ newtype RefillRequest = RefillRequest
     }
     deriving stock (Eq, Show)
 
--- | Wire body of the @ready@ response.
+{- | Wire body of the @ready@ response.
+
+'readyUpstream' surfaces the N2C reconnect supervisor's
+view of the relay connection. Encoder invariant
+(mirrors @utxo-indexer@ via PR #98): when
+'readyUpstream' is 'UpstreamDisconnected' the wire
+emits @ready=false@ regardless of 'readyReady', and
+adds an @upstream@ object with the disconnect reason
+and reconnect-attempt counters.
+-}
 data ReadyResponse = ReadyResponse
     { readyReady :: !Bool
     , readyIndexReady :: !Bool
     , readyFaucetUtxosKnown :: !Bool
+    , readyUpstream :: !UpstreamStatus
     }
     deriving stock (Eq, Show)
 
@@ -186,12 +200,42 @@ instance FromJSON RefillRequest where
 -- ----------------------------------------------------------------------
 
 instance ToJSON ReadyResponse where
-    toJSON ReadyResponse{readyReady, readyIndexReady, readyFaucetUtxosKnown} =
-        object
-            [ "ready" .= readyReady
-            , "indexReady" .= readyIndexReady
-            , "faucetUtxosKnown" .= readyFaucetUtxosKnown
-            ]
+    toJSON
+        ReadyResponse
+            { readyReady
+            , readyIndexReady
+            , readyFaucetUtxosKnown
+            , readyUpstream
+            } =
+            object (baseFields <> upstreamField)
+          where
+            -- Defensively force ready=false whenever the
+            -- supervisor reports a disconnected upstream.
+            -- Mirrors the indexer's encoder shape so a
+            -- consumer that already knows the indexer's
+            -- @ready@ contract gets the same semantics.
+            ready = case readyUpstream of
+                UpstreamConnected -> readyReady
+                UpstreamDisconnected{} -> False
+            indexReady = case readyUpstream of
+                UpstreamConnected -> readyIndexReady
+                UpstreamDisconnected{} -> False
+            baseFields =
+                [ "ready" .= ready
+                , "indexReady" .= indexReady
+                , "faucetUtxosKnown" .= readyFaucetUtxosKnown
+                ]
+            upstreamField = case readyUpstream of
+                UpstreamConnected -> []
+                UpstreamDisconnected di ->
+                    [ "upstream"
+                        .= object
+                            [ "status" .= ("disconnected" :: Text)
+                            , "reason" .= diReason di
+                            , "attempt" .= diAttempt di
+                            , "sinceMs" .= diSinceMs di
+                            ]
+                    ]
 
 instance ToJSON SnapshotResponse where
     toJSON
