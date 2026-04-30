@@ -220,6 +220,8 @@ executable cardano-adversary
   build-depends:
     , base
     , cardano-node-clients
+    , network
+    , ouroboros-network
 
 test-suite unit-tests
   import:           warnings
