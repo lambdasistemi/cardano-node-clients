@@ -8,6 +8,7 @@ License     : Apache-2.0
 -}
 module Cardano.Node.Client.E2E.Devnet (
     withCardanoNode,
+    withRestartableCardanoNode,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -18,6 +19,12 @@ import Control.Exception (
 import Control.Monad (unless, void)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
+import Data.IORef (
+    IORef,
+    newIORef,
+    readIORef,
+    writeIORef,
+ )
 import Data.Time.Clock (
     NominalDiffTime,
     UTCTime,
@@ -69,30 +76,70 @@ withCardanoNode ::
     FilePath ->
     (FilePath -> Integer -> IO a) ->
     IO a
-withCardanoNode srcGenesis action = do
+withCardanoNode srcGenesis action =
+    withRestartableCardanoNode srcGenesis $ \sock t _ ->
+        action sock t
+
+{- | Like 'withCardanoNode' but exposes a third argument:
+a @restart :: IO ()@ action that terminates the running
+cardano-node and spawns a new one against the same
+database, socket path, and genesis. Used by the issue-97
+reproducer to drive a relay-process restart against an
+indexer running in the same process.
+-}
+withRestartableCardanoNode ::
+    FilePath ->
+    (FilePath -> Integer -> IO () -> IO a) ->
+    IO a
+withRestartableCardanoNode srcGenesis action = do
     now <- getCurrentTime
     let startTime = addUTCTime startOffset now
-        -- Truncate to whole seconds to match the
-        -- genesis file format (%H:%M:%SZ — no
-        -- fractional seconds).
         startMs =
             floor (utcTimeToPOSIXSeconds startTime)
                 * 1000
     tmpDir <- prepareTmpDir srcGenesis startTime
-    logH <- openFile (tmpDir </> "node.log") WriteMode
-    hSetBuffering logH LineBuffering
+    let logPath = tmpDir </> "node.log"
+        sock = tmpDir </> "node.sock"
+        spawnNode = do
+            logH <- openFile logPath AppendMode
+            hSetBuffering logH LineBuffering
+            ph <- launchNode tmpDir logH
+            pure (ph, logH)
+        cleanupNode (ph, logH) = do
+            terminateProcess ph
+            void (waitForProcess ph)
+            hClose logH
     bracket
-        (launchNode tmpDir logH)
-        (cleanup tmpDir logH)
-        $ \_ -> do
-            let sock = tmpDir </> "node.sock"
+        ( do
+            np <- spawnNode
+            newIORef np
+        )
+        ( \npRef -> do
+            np <- readIORef npRef
+            cleanupNode np
+            removePathForcibly tmpDir `onException` pure ()
+        )
+        $ \npRef -> do
             waitForSocket sock 300
-            -- cardano-node 10.7.0 can create the socket
-            -- before the local server is ready to accept.
             threadDelay 1_000_000
-            action sock startMs
-                `onException` dumpNodeLog
-                    (tmpDir </> "node.log")
+            let restart = restartNode npRef sock spawnNode cleanupNode
+            action sock startMs restart
+                `onException` dumpNodeLog logPath
+
+restartNode ::
+    IORef (ProcessHandle, Handle) ->
+    FilePath ->
+    IO (ProcessHandle, Handle) ->
+    ((ProcessHandle, Handle) -> IO ()) ->
+    IO ()
+restartNode npRef sock spawnNode cleanupNode = do
+    oldNp <- readIORef npRef
+    cleanupNode oldNp
+    removePathForcibly sock `onException` pure ()
+    newNp <- spawnNode
+    writeIORef npRef newNp
+    waitForSocket sock 300
+    threadDelay 1_000_000
 
 {- | Prepare a temporary directory with patched
 genesis files and delegate keys.
@@ -236,19 +283,6 @@ launchNode tmpDir logH = do
                 }
     (_, _, _, ph) <- createProcess cp
     pure ph
-
--- | Terminate the node process and clean up.
-cleanup ::
-    FilePath ->
-    Handle ->
-    ProcessHandle ->
-    IO ()
-cleanup tmpDir logH ph = do
-    terminateProcess ph
-    void $ waitForProcess ph
-    hClose logH
-    removePathForcibly tmpDir
-        `onException` pure ()
 
 -- | Print the last 50 lines of the node log.
 dumpNodeLog :: FilePath -> IO ()
