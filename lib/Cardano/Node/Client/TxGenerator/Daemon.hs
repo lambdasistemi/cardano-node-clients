@@ -31,6 +31,7 @@ T008 wires the @refill@ arm end-to-end (User Story 2).
 module Cardano.Node.Client.TxGenerator.Daemon (
     DaemonConfig (..),
     runDaemon,
+    runDaemonWithTracer,
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots (..))
