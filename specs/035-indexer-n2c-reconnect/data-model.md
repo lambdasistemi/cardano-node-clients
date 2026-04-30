@@ -7,7 +7,7 @@ This feature adds four pure types and extends one existing type. No persistence 
 
 ## Entities
 
-### `ReconnectPolicy` (new — `Cardano.Node.Client.UTxOIndexer.Reconnect`)
+### `ReconnectPolicy` (new — `Cardano.Node.Client.N2C.Reconnect`)
 
 Pure configuration for the reconnect supervisor. Constructed once at daemon startup from CLI flags.
 
@@ -23,7 +23,7 @@ Pure configuration for the reconnect supervisor. Constructed once at daemon star
 
 ---
 
-### `ProbeConfig` (new — `Cardano.Node.Client.UTxOIndexer.Probe`)
+### `ProbeConfig` (new — `Cardano.Node.Client.N2C.Probe`)
 
 Pure configuration for the LSQ tip probe.
 
@@ -37,7 +37,7 @@ The probe has its own (small) backoff for transport-level retries (e.g. Connecti
 
 ---
 
-### `UpstreamStatus` (new — `Cardano.Node.Client.UTxOIndexer.Reconnect`)
+### `UpstreamStatus` (new — `Cardano.Node.Client.N2C.Reconnect`)
 
 | Constructor | Fields | Meaning |
 |-------------|--------|---------|
@@ -56,9 +56,9 @@ data DisconnectInfo = DisconnectInfo
 
 ---
 
-### `IndexerEvent` (new — `Cardano.Node.Client.UTxOIndexer.Trace`)
+### `N2CEvent` (new — `Cardano.Node.Client.N2C.Trace`)
 
-ADT carried by `Tracer IO IndexerEvent`.
+ADT carried by `Tracer IO N2CEvent`.
 
 | Constructor | Fields | Emitted at |
 |-------------|--------|-----------|

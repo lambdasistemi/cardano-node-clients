@@ -8,7 +8,7 @@
 
 ## Summary
 
-Wrap the `runChainSyncN2C` call in `Daemon.runDaemon` with a reconnect supervisor built on top of `Control.Retry`. Before each chain-sync attempt, probe the upstream node via LSQ (`Acquire VolatileTip` + `GetCurrentTip`) and only enter chain-sync once the probe sees a non-Origin tip. Surface disconnects as a structured `upstream` JSON object on the `ready` response and as `IndexerEvent`s on a `Tracer IO IndexerEvent`.
+Wrap the `runChainSyncN2C` call in `Daemon.runDaemon` with a reconnect supervisor built on top of `Control.Retry`. Before each chain-sync attempt, probe the upstream node via LSQ (`Acquire VolatileTip` + `GetCurrentTip`) and only enter chain-sync once the probe sees a non-Origin tip. Surface disconnects as a structured `upstream` JSON object on the `ready` response and as `N2CEvent`s on a `Tracer IO N2CEvent`.
 
 No protocol changes. No persistence schema changes. The existing `getResumePoints` resume path is reused unchanged.
 
@@ -62,7 +62,7 @@ lib/Cardano/Node/Client/UTxOIndexer/
 ├── Probe.hs             # NEW: waitForNodeReady (LSQ tip probe wrapped in retry)
 ├── Reconnect.hs         # NEW: runReconnectLoop (Control.Retry-based supervisor)
 ├── Server.hs            # MODIFY: extend ReadyStatus with rsUpstream; encoder emits 'upstream'
-└── Trace.hs             # NEW: IndexerEvent ADT (incl. IndexerNodeReplaying) + stderr renderer
+└── Trace.hs             # NEW: N2CEvent ADT (incl. IndexerNodeReplaying) + stderr renderer
 
 app/utxo-indexer/
 ├── Main.hs              # MODIFY: parse new CLI flags; install stderr tracer
@@ -87,7 +87,7 @@ All open questions resolved. Key resolved decisions:
 
 ### Data model — `data-model.md`
 
-`ReconnectPolicy`, `ProbeConfig`, `UpstreamStatus`, `DisconnectInfo`, `IndexerEvent` (with new `IndexerNodeReplaying`), `ReadyStatus` extension.
+`ReconnectPolicy`, `ProbeConfig`, `UpstreamStatus`, `DisconnectInfo`, `N2CEvent` (with new `IndexerNodeReplaying`), `ReadyStatus` extension.
 
 ### Contracts — `contracts/control-wire.md`
 

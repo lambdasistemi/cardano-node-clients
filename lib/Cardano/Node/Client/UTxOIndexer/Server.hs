@@ -35,13 +35,13 @@ module Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
 ) where
 
+import Cardano.Node.Client.N2C.Reconnect (
+    DisconnectInfo (..),
+    UpstreamStatus (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     AwaitObservation (..),
     IndexerHandle (..),
- )
-import Cardano.Node.Client.UTxOIndexer.Reconnect (
-    DisconnectInfo (..),
-    UpstreamStatus (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),

@@ -80,7 +80,7 @@ finished loading — operators can use the `attempt` counter and
 
 ## Embedded use (cardano-tx-generator)
 
-Embedders that want to route `IndexerEvent`s into their own tracer
-can pass a custom `Tracer IO IndexerEvent` to
+Embedders that want to route `N2CEvent`s into their own tracer
+can pass a custom `Tracer IO N2CEvent` to
 `Cardano.Node.Client.UTxOIndexer.Daemon.runDaemon`'s first argument
 instead of `defaultStderrTracer`.

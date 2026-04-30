@@ -10,7 +10,7 @@ License     : Apache-2.0
 Boots a real @cardano-node@ devnet under
 'withRestartableCardanoNode' (which itself uses
 'Probe.waitForNodeReady' from
-'Cardano.Node.Client.UTxOIndexer.Probe' to gate readiness
+'Cardano.Node.Client.N2C.Probe' to gate readiness
 deterministically), runs 'runDaemon' in the same process
 pointed at the node's Unix socket, drives chain-sync to a
 steady state, then restarts the underlying node and asserts
@@ -32,7 +32,7 @@ the supervisor's full contract:
   rollback-log points and the indexer is applying new
   blocks again,
 
-* the captured 'IndexerEvent' stream contains exactly one
+* the captured 'N2CEvent' stream contains exactly one
   'IndexerStarted' plus at least one 'IndexerDisconnected',
   'IndexerReconnecting', and 'IndexerReconnected'.
 
@@ -45,18 +45,18 @@ module Cardano.Node.Client.E2E.UTxOIndexerReconnectSpec (spec) where
 
 import Cardano.Node.Client.E2E.Devnet (withRestartableCardanoNode)
 import Cardano.Node.Client.E2E.Setup (genesisDir)
+import Cardano.Node.Client.N2C.Probe (
+    defaultProbeConfig,
+ )
+import Cardano.Node.Client.N2C.Reconnect (
+    defaultReconnectPolicy,
+ )
+import Cardano.Node.Client.N2C.Trace (
+    N2CEvent (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
- )
-import Cardano.Node.Client.UTxOIndexer.Probe (
-    defaultProbeConfig,
- )
-import Cardano.Node.Client.UTxOIndexer.Reconnect (
-    defaultReconnectPolicy,
- )
-import Cardano.Node.Client.UTxOIndexer.Trace (
-    IndexerEvent (..),
  )
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (
@@ -108,7 +108,7 @@ spec =
 runReconnectE2E :: IO ()
 runReconnectE2E = do
     gDir <- genesisDir
-    eventsRef <- newTVarIO ([] :: [IndexerEvent])
+    eventsRef <- newTVarIO ([] :: [N2CEvent])
     let captureTracer =
             Tracer
                 ( \ev ->

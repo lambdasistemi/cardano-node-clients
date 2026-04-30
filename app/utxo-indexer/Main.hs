@@ -18,19 +18,19 @@ in 'Cardano.Node.Client.UTxOIndexer.Daemon.runDaemon'.
 -}
 module Main (main) where
 
+import Cardano.Node.Client.N2C.Probe (
+    ProbeConfig (..),
+    defaultProbeConfig,
+ )
+import Cardano.Node.Client.N2C.Reconnect (
+    ReconnectPolicy (..),
+    defaultReconnectPolicy,
+ )
+import Cardano.Node.Client.N2C.Trace (defaultStderrTracer)
 import Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
  )
-import Cardano.Node.Client.UTxOIndexer.Probe (
-    ProbeConfig (..),
-    defaultProbeConfig,
- )
-import Cardano.Node.Client.UTxOIndexer.Reconnect (
-    ReconnectPolicy (..),
-    defaultReconnectPolicy,
- )
-import Cardano.Node.Client.UTxOIndexer.Trace (defaultStderrTracer)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word64)
 import System.Environment (getArgs, getProgName)

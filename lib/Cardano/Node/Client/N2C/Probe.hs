@@ -1,7 +1,7 @@
 {-# LANGUAGE NumericUnderscores #-}
 
 {- |
-Module      : Cardano.Node.Client.UTxOIndexer.Probe
+Module      : Cardano.Node.Client.N2C.Probe
 Description : "Is the upstream node ready?" probe over LSQ
 License     : Apache-2.0
 
@@ -29,7 +29,7 @@ a real testnet can take minutes or longer; we don't want
 to give up. Operators set @pcTotalTimeoutMs = Just _@ for
 a finite total cap (e.g. CI scenarios).
 -}
-module Cardano.Node.Client.UTxOIndexer.Probe (
+module Cardano.Node.Client.N2C.Probe (
     -- * Config
     ProbeConfig (..),
     defaultProbeConfig,
@@ -47,8 +47,8 @@ import Cardano.Node.Client.N2C.Connection (
     runNodeClient,
  )
 import Cardano.Node.Client.N2C.LocalStateQuery (queryLSQ)
-import Cardano.Node.Client.UTxOIndexer.Trace (
-    IndexerEvent (..),
+import Cardano.Node.Client.N2C.Trace (
+    N2CEvent (..),
  )
 import Control.Concurrent.Async (withAsync)
 import Control.Exception (
@@ -145,7 +145,7 @@ Async exceptions ('AsyncCancelled', termination signals)
 propagate immediately so the daemon can shut down cleanly.
 -}
 waitForNodeReady ::
-    Tracer IO IndexerEvent ->
+    Tracer IO N2CEvent ->
     ProbeConfig ->
     NetworkMagic ->
     -- | Path to the upstream node Unix socket.

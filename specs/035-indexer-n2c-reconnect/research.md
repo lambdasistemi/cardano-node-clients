@@ -28,13 +28,13 @@ The bug in https://github.com/lambdasistemi/cardano-node-clients/issues/97 is re
 
 ### Logging
 
-- `nullTracer` everywhere today. We introduce `IndexerEvent` in a new `Cardano.Node.Client.UTxOIndexer.Trace` module.
+- `nullTracer` everywhere today. We introduce `N2CEvent` in a new `Cardano.Node.Client.N2C.Trace` module.
 
 ## Decisions
 
 ### D1. Where the supervisor lives — wrap `runChainSyncN2C` in `Daemon.hs`
 
-**Decision**: Put `runReconnectLoop` in a new `Cardano.Node.Client.UTxOIndexer.Reconnect` module. `Daemon.runDaemon` wraps the `runChainSyncN2C` call in it.
+**Decision**: Put `runReconnectLoop` in a new `Cardano.Node.Client.N2C.Reconnect` module. `Daemon.runDaemon` wraps the `runChainSyncN2C` call in it.
 
 **Rationale**: The N2C connection layer is shared between several clients (LSQ, LTxS, ChainSync). Reconnect policy is indexer-specific because it depends on the indexer's resume points. Keeping the supervisor in indexer-land lets each consumer pick its own policy.
 
@@ -63,13 +63,13 @@ The bug in https://github.com/lambdasistemi/cardano-node-clients/issues/97 is re
 
 **Rationale**: FR-005/FR-006 require a defined response during disconnect. `ready=false` plus a structured reason is the simplest informative answer. `utxos_at`/`await` continue against persisted state.
 
-### D5. Logging — `IndexerEvent` ADT + default stderr renderer
+### D5. Logging — `N2CEvent` ADT + default stderr renderer
 
-**Decision**: New `IndexerEvent` ADT with constructors `IndexerStarted`, `IndexerDisconnected`, `IndexerReconnecting`, `IndexerReconnected`, `IndexerStopped`, **`IndexerNodeReplaying`** (new — emitted by the probe loop while the upstream node hasn't yet completed ChainDB load). Default `defaultStderrTracer` renders one line per event with an ISO-8601 timestamp and `indexer event=<name>` grep tag. Library exposes `Tracer IO IndexerEvent` so embedding consumers can route events into their own tracer.
+**Decision**: New `N2CEvent` ADT with constructors `IndexerStarted`, `IndexerDisconnected`, `IndexerReconnecting`, `IndexerReconnected`, `IndexerStopped`, **`IndexerNodeReplaying`** (new — emitted by the probe loop while the upstream node hasn't yet completed ChainDB load). Default `defaultStderrTracer` renders one line per event with an ISO-8601 timestamp and `indexer event=<name>` grep tag. Library exposes `Tracer IO N2CEvent` so embedding consumers can route events into their own tracer.
 
 ### D6. Node-ready probe — LSQ tip query with unbounded timeout
 
-**Decision**: New `Cardano.Node.Client.UTxOIndexer.Probe` module exposing `waitForNodeReady`. Opens an LSQ-only N2C session, sends `MsgAcquire VolatileTip`, runs `GetCurrentTip`, succeeds when the response is non-Origin. Wrapped in `Control.Retry.recoverAll (capDelay maxBound (exponentialBackoff 250_000))` so it retries on transport-level errors. On each retry, emits `IndexerNodeReplaying` so the operator sees progress.
+**Decision**: New `Cardano.Node.Client.N2C.Probe` module exposing `waitForNodeReady`. Opens an LSQ-only N2C session, sends `MsgAcquire VolatileTip`, runs `GetCurrentTip`, succeeds when the response is non-Origin. Wrapped in `Control.Retry.recoverAll (capDelay maxBound (exponentialBackoff 250_000))` so it retries on transport-level errors. On each retry, emits `IndexerNodeReplaying` so the operator sees progress.
 
 **Rationale**:
 - Per `Ouroboros.Network.Protocol.LocalStateQuery.Type:114-128`, `VolatileTip` "cannot fail to be acquired" — failure modes are eliminated by construction.

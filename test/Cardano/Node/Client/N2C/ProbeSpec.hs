@@ -1,5 +1,5 @@
 {- |
-Module      : Cardano.Node.Client.UTxOIndexer.ProbeSpec
+Module      : Cardano.Node.Client.N2C.ProbeSpec
 Description : Smoke tests for the probe's defaults
 License     : Apache-2.0
 
@@ -10,16 +10,16 @@ lock down the pure surface: 'defaultProbeConfig' values
 match the documented defaults from
 @quickstart.md § CLI surface@.
 -}
-module Cardano.Node.Client.UTxOIndexer.ProbeSpec (spec) where
+module Cardano.Node.Client.N2C.ProbeSpec (spec) where
 
-import Cardano.Node.Client.UTxOIndexer.Probe (
+import Cardano.Node.Client.N2C.Probe (
     ProbeConfig (..),
     defaultProbeConfig,
  )
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 spec :: Spec
-spec = describe "Cardano.Node.Client.UTxOIndexer.Probe" $ do
+spec = describe "Cardano.Node.Client.N2C.Probe" $ do
     describe "defaultProbeConfig" $ do
         it "per-attempt timeout = 5_000 ms" $
             pcAttemptTimeoutMs defaultProbeConfig `shouldBe` 5_000

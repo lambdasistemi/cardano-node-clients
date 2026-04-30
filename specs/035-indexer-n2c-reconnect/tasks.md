@@ -28,11 +28,11 @@ description: "Task list for feature 035-indexer-n2c-reconnect"
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-- [ ] **T002** — Cabal: add `, retry` to the library `build-depends`. Add new exposed-modules `Cardano.Node.Client.UTxOIndexer.Probe`, `Cardano.Node.Client.UTxOIndexer.Reconnect`, `Cardano.Node.Client.UTxOIndexer.Trace`. Empty stubs.
+- [ ] **T002** — Cabal: add `, retry` to the library `build-depends`. Add new exposed-modules `Cardano.Node.Client.N2C.Probe`, `Cardano.Node.Client.N2C.Reconnect`, `Cardano.Node.Client.N2C.Trace`. Empty stubs.
   Files: `cardano-node-clients.cabal`, three new stub files.
   Bisect-safe gate: `nix develop -c just ci` build + cabal-check.
 
-- [ ] **T003** — Implement `IndexerEvent` ADT and `defaultStderrTracer` in `Trace.hs` per [data-model.md § IndexerEvent](data-model.md#indexerevent-new--cardanonodeclientutxoindexertrace) — including the new `IndexerNodeReplaying` constructor for the probe loop.
+- [ ] **T003** — Implement `N2CEvent` ADT and `defaultStderrTracer` in `Trace.hs` per [data-model.md § IndexerEvent](data-model.md#indexerevent-new--cardanonodeclientutxoindexertrace) — including the new `IndexerNodeReplaying` constructor for the probe loop.
   Files: `lib/Cardano/Node/Client/UTxOIndexer/Trace.hs`, `test/Cardano/Node/Client/UTxOIndexer/TraceSpec.hs` (renderer unit tests).
   Bisect-safe gate: `just ci` + new unit tests green.
 
@@ -40,7 +40,7 @@ description: "Task list for feature 035-indexer-n2c-reconnect"
 
 ## Phase 3: User Story 1 — Process survives + reconnects (Priority: P1) 🎯 MVP
 
-- [ ] **T004** [US1] — Implement `Cardano.Node.Client.UTxOIndexer.Probe.waitForNodeReady` per [research.md § D6](research.md#d6-node-ready-probe--lsq-tip-query-with-unbounded-timeout). Opens an LSQ-only N2C connection via `runNodeClient`, sends `MsgAcquire VolatileTip`, runs `GetCurrentTip`, succeeds when the response is non-Origin. Wrapped in `Control.Retry.recoverAll (capDelay (pcRetryMaxMs * 1000) (exponentialBackoff (pcRetryBaseMs * 1000)))`. On each retry attempt, emits `IndexerNodeReplaying`. Honors `pcTimeoutMs` if `Just`.
+- [ ] **T004** [US1] — Implement `Cardano.Node.Client.N2C.Probe.waitForNodeReady` per [research.md § D6](research.md#d6-node-ready-probe--lsq-tip-query-with-unbounded-timeout). Opens an LSQ-only N2C connection via `runNodeClient`, sends `MsgAcquire VolatileTip`, runs `GetCurrentTip`, succeeds when the response is non-Origin. Wrapped in `Control.Retry.recoverAll (capDelay (pcRetryMaxMs * 1000) (exponentialBackoff (pcRetryBaseMs * 1000)))`. On each retry attempt, emits `IndexerNodeReplaying`. Honors `pcTimeoutMs` if `Just`.
   Files: `lib/Cardano/Node/Client/UTxOIndexer/Probe.hs`, `test/Cardano/Node/Client/UTxOIndexer/ProbeSpec.hs` (unit: `ProbeConfig` defaults, retry-policy mapping).
   Satisfies: FR-002 (readiness side).
   Bisect-safe gate: `just ci` + unit tests green.
@@ -51,7 +51,7 @@ description: "Task list for feature 035-indexer-n2c-reconnect"
   Depends on: T004.
   Bisect-safe gate: `just ci` + unit tests green.
 
-- [ ] **T006** [US1] — Wire probe + supervisor into `Daemon.runDaemon`. New signature: `runDaemon :: Tracer IO IndexerEvent -> DaemonConfig -> IO ()`. `DaemonConfig` gains `dcReconnectPolicy :: ReconnectPolicy` and `dcProbeConfig :: ProbeConfig`. Replace the bare `chainAction = runChainSyncN2C ...` with `runReconnectLoop tracer policy probeConfig setStatus getProcessedSlot chainSession`. `runDaemon` emits `IndexerStarted` on entry and `IndexerStopped` on exit (via `onException`, NOT `bracket_` — bracket masks the body and breaks the supervisor's threadDelay/STM path).
+- [ ] **T006** [US1] — Wire probe + supervisor into `Daemon.runDaemon`. New signature: `runDaemon :: Tracer IO N2CEvent -> DaemonConfig -> IO ()`. `DaemonConfig` gains `dcReconnectPolicy :: ReconnectPolicy` and `dcProbeConfig :: ProbeConfig`. Replace the bare `chainAction = runChainSyncN2C ...` with `runReconnectLoop tracer policy probeConfig setStatus getProcessedSlot chainSession`. `runDaemon` emits `IndexerStarted` on entry and `IndexerStopped` on exit (via `onException`, NOT `bracket_` — bracket masks the body and breaks the supervisor's threadDelay/STM path).
   Files: `lib/Cardano/Node/Client/UTxOIndexer/Daemon.hs`, update existing `test/Cardano/Node/Client/E2E/UTxOIndexerSpec.hs` to pass `nullIndexerTracer` + default policies.
   Satisfies: FR-001, FR-003 (resume path is unchanged — `getResumePoints` is recomputed inside the loop).
   Depends on: T005.
@@ -93,7 +93,7 @@ description: "Task list for feature 035-indexer-n2c-reconnect"
 
 ## Phase 6: End-to-end test
 
-- [ ] **T011** [US1+US2+US3] — Implement `test/Cardano/Node/Client/E2E/UTxOIndexerReconnectSpec.hs` covering all three user stories in one test, per [quickstart.md § Run the new E2E](quickstart.md#run-the-new-e2e-post-fix). Uses a captured `Tracer IO IndexerEvent` (writes events into a `TVar`). Asserts: daemon `Async` doesn't exit, listen socket stays open, `upstream` object visible during gap, `utxos_at` served during gap, `processedSlot` advances post-reconnect, captured event stream contains expected variants.
+- [ ] **T011** [US1+US2+US3] — Implement `test/Cardano/Node/Client/E2E/UTxOIndexerReconnectSpec.hs` covering all three user stories in one test, per [quickstart.md § Run the new E2E](quickstart.md#run-the-new-e2e-post-fix). Uses a captured `Tracer IO N2CEvent` (writes events into a `TVar`). Asserts: daemon `Async` doesn't exit, listen socket stays open, `upstream` object visible during gap, `utxos_at` served during gap, `processedSlot` advances post-reconnect, captured event stream contains expected variants.
   Files: `test/Cardano/Node/Client/E2E/UTxOIndexerReconnectSpec.hs`, register in `test/main.hs`.
   Satisfies: SC-001..SC-006.
   Depends on: T010.
