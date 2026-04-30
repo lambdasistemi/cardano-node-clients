@@ -39,6 +39,10 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
     AwaitObservation (..),
     IndexerHandle (..),
  )
+import Cardano.Node.Client.UTxOIndexer.Reconnect (
+    DisconnectInfo (..),
+    UpstreamStatus (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
     BlockHash (..),
@@ -90,25 +94,62 @@ endpoint. Mirrors @cardano-utxo-csmt@'s @ReadyResponse@
 field shape (@ready@/@tipSlot@/@processedSlot@/
 @slotsBehind@) so consumers wired against either
 daemon get the same JSON.
+
+The 'rsUpstream' field surfaces the reconnect supervisor's
+view of the upstream chain-sync session. Invariant:
+'rsUpstream' = 'UpstreamDisconnected' implies
+'rsReady' is 'False'. The 'ToJSON' encoder enforces this
+defensively on the wire — 'rsReady' is set to 'False'
+whenever 'rsUpstream' is in the disconnected state, even
+if the producer's 'TVar' lags. Encoding stays
+backwards-compatible: the @upstream@ field is omitted
+entirely when the supervisor reports
+'UpstreamConnected'. See
+@specs\/035-indexer-n2c-reconnect\/contracts\/control-wire.md@.
 -}
 data ReadyStatus = ReadyStatus
     { rsReady :: !Bool
     , rsTipSlot :: !(Maybe SlotNo)
     , rsProcessedSlot :: !(Maybe SlotNo)
     , rsSlotsBehind :: !(Maybe Word64)
+    , rsUpstream :: !UpstreamStatus
     }
     deriving stock (Eq, Show)
 
 instance ToJSON ReadyStatus where
-    toJSON ReadyStatus{rsReady, rsTipSlot, rsProcessedSlot, rsSlotsBehind} =
-        object
-            [ "ready" .= rsReady
-            , "tipSlot" .= fmap unSlotNo rsTipSlot
-            , "processedSlot" .= fmap unSlotNo rsProcessedSlot
-            , "slotsBehind" .= rsSlotsBehind
-            ]
-      where
-        unSlotNo (SlotNo s) = s
+    toJSON
+        ReadyStatus
+            { rsReady
+            , rsTipSlot
+            , rsProcessedSlot
+            , rsSlotsBehind
+            , rsUpstream
+            } =
+            object (baseFields <> upstreamField)
+          where
+            -- Defensively force ready=False whenever the
+            -- supervisor reports a disconnected upstream.
+            ready = case rsUpstream of
+                UpstreamConnected -> rsReady
+                UpstreamDisconnected _ -> False
+            unSlotNo (SlotNo s) = s
+            baseFields =
+                [ "ready" .= ready
+                , "tipSlot" .= fmap unSlotNo rsTipSlot
+                , "processedSlot" .= fmap unSlotNo rsProcessedSlot
+                , "slotsBehind" .= rsSlotsBehind
+                ]
+            upstreamField = case rsUpstream of
+                UpstreamConnected -> []
+                UpstreamDisconnected di ->
+                    [ "upstream"
+                        .= object
+                            [ "status" .= ("disconnected" :: Text)
+                            , "reason" .= diReason di
+                            , "attempt" .= diAttempt di
+                            , "elapsedMs" .= diSinceMs di
+                            ]
+                    ]
 
 {- | Run the NDJSON server on @socketPath@ until killed
 (by exception). Removes any stale socket file at

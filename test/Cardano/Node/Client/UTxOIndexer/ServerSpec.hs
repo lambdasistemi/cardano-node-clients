@@ -18,6 +18,10 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
     UtxoOp (..),
     withInMemoryIndexer,
  )
+import Cardano.Node.Client.UTxOIndexer.Reconnect (
+    DisconnectInfo (..),
+    UpstreamStatus (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
     runServer,
@@ -37,6 +41,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Network.Socket (
@@ -52,7 +57,14 @@ import Network.Socket.ByteString qualified as Net
 import System.Directory (createDirectoryIfMissing, doesPathExist, removeFile)
 import System.IO.Error (isDoesNotExistError)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (
+    Spec,
+    describe,
+    expectationFailure,
+    it,
+    shouldBe,
+    shouldSatisfy,
+ )
 
 spec :: Spec
 spec = describe "Cardano.Node.Client.UTxOIndexer.Server" $ do
@@ -60,6 +72,39 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Server" $ do
         withTestServer ready1 $ \sockPath -> do
             resp <- request sockPath "{\"ready\":null}\n"
             decodeReady resp `shouldBe` Just (True, Just 1234, Just 1230, Just 4)
+
+    it "ready encoding omits 'upstream' when supervisor is Connected" $ do
+        let bs = Aeson.encode ready1
+            obj = decodeObj bs
+        KM.member "upstream" obj `shouldBe` False
+        KM.lookup "ready" obj `shouldBe` Just (Aeson.Bool True)
+
+    it "ready encoding includes 'upstream' object when Disconnected" $ do
+        let di =
+                DisconnectInfo
+                    { diReason = Text.pack "bearer-closed"
+                    , diAttempt = 3
+                    , diSinceMs = 4_200
+                    }
+            rs =
+                ready1
+                    { rsReady = True -- forced to False on the wire
+                    , rsUpstream = UpstreamDisconnected di
+                    }
+            obj = decodeObj (Aeson.encode rs)
+        KM.lookup "ready" obj `shouldBe` Just (Aeson.Bool False)
+        case KM.lookup "upstream" obj of
+            Just (Aeson.Object up) -> do
+                KM.lookup "status" up
+                    `shouldBe` Just (Aeson.String (Text.pack "disconnected"))
+                KM.lookup "reason" up
+                    `shouldBe` Just (Aeson.String (Text.pack "bearer-closed"))
+                KM.lookup "attempt" up `shouldBe` Just (Aeson.Number 3)
+                KM.lookup "elapsedMs" up
+                    `shouldBe` Just (Aeson.Number 4200)
+            other ->
+                expectationFailure
+                    ("expected upstream object, got: " <> show other)
 
     it "utxos_at returns an empty list when no UTxOs exist" $
         withTestServer ready1 $ \sockPath -> do
@@ -179,7 +224,17 @@ ready1 =
         , rsTipSlot = Just (SlotNo 1234)
         , rsProcessedSlot = Just (SlotNo 1230)
         , rsSlotsBehind = Just 4
+        , rsUpstream = UpstreamConnected
         }
+
+{- | Decode a 'Data.Aeson.encode' result (lazy 'ByteString')
+into the top-level 'KM.KeyMap'. Aborts the test on
+non-object encodings.
+-}
+decodeObj :: LBS.ByteString -> KM.KeyMap Aeson.Value
+decodeObj bs = case Aeson.decode bs of
+    Just (Aeson.Object o) -> o
+    other -> error ("decodeObj: not an object: " <> show other)
 
 {- | Spin up an in-memory indexer + server on a tempdir
 Unix socket, run the action, then kill the server.
