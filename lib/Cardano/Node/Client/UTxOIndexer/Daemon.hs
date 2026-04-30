@@ -40,7 +40,7 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
 import Cardano.Node.Client.UTxOIndexer.Probe (ProbeConfig)
 import Cardano.Node.Client.UTxOIndexer.Reconnect (
     ReconnectPolicy,
-    UpstreamStatus,
+    UpstreamStatus (..),
     runReconnectLoop,
  )
 import Cardano.Node.Client.UTxOIndexer.Server (
@@ -190,6 +190,7 @@ runDaemon tracer cfg = do
             , rsTipSlot = Nothing
             , rsProcessedSlot = Nothing
             , rsSlotsBehind = Nothing
+            , rsUpstream = UpstreamConnected
             }
     withIndexer Nothing = withInMemoryIndexer
     withIndexer (Just path) = withRocksDBIndexer path
@@ -345,5 +346,11 @@ updateReady cfg readyVar (SlotNo processed) tipNet =
                 , rsTipSlot = Just (SlotNo tip)
                 , rsProcessedSlot = Just (SlotNo processed)
                 , rsSlotsBehind = Just behind
+                , -- A roll-forward implies the supervisor's
+                  -- chain-sync session is alive. T009 wires the
+                  -- supervisor's status sink into the same
+                  -- TVar so transient flips are corrected on
+                  -- the next event.
+                  rsUpstream = UpstreamConnected
                 }
      in atomically (writeTVar readyVar rs)
