@@ -11,6 +11,11 @@ module Cardano.Node.Client.E2E.Devnet (
     withRestartableCardanoNode,
 ) where
 
+import Cardano.Node.Client.UTxOIndexer.Probe (
+    defaultProbeConfig,
+    waitForNodeReady,
+ )
+import Cardano.Node.Client.UTxOIndexer.Trace (nullIndexerTracer)
 import Control.Concurrent (threadDelay)
 import Control.Exception (
     bracket,
@@ -38,6 +43,7 @@ import Data.Time.Format (
     defaultTimeLocale,
     formatTime,
  )
+import Ouroboros.Network.Magic (NetworkMagic (..))
 import System.Directory (
     copyFile,
     createDirectoryIfMissing,
@@ -121,7 +127,15 @@ withRestartableCardanoNode srcGenesis action = do
         )
         $ \npRef -> do
             waitForSocket sock 300
-            threadDelay 1_000_000
+            -- Block until cardano-node's LSQ server replies
+            -- with a non-Origin tip — i.e. ChainDB has finished
+            -- loading. Replaces the previous 1 s blind grace
+            -- with a real readiness check.
+            waitForNodeReady
+                nullIndexerTracer
+                defaultProbeConfig
+                devnetNetworkMagic
+                sock
             let restart = restartNode npRef sock spawnNode cleanupNode
             action sock startMs restart
                 `onException` dumpNodeLog logPath
@@ -139,7 +153,22 @@ restartNode npRef sock spawnNode cleanupNode = do
     newNp <- spawnNode
     writeIORef npRef newNp
     waitForSocket sock 300
-    threadDelay 1_000_000
+    -- Block until ChainDB has finished loading and the LSQ
+    -- server is replying with a non-Origin tip. Replaces the
+    -- previous fixed sleep — the new node is ready when it
+    -- says it is.
+    waitForNodeReady
+        nullIndexerTracer
+        defaultProbeConfig
+        devnetNetworkMagic
+        sock
+
+{- | The devnet's network magic, hardcoded in the
+genesis files patched by 'prepareTmpDir'. Used by the
+LSQ readiness probe.
+-}
+devnetNetworkMagic :: NetworkMagic
+devnetNetworkMagic = NetworkMagic 42
 
 {- | Prepare a temporary directory with patched
 genesis files and delegate keys.
