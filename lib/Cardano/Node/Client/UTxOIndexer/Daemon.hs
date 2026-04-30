@@ -37,9 +37,19 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
     withInMemoryIndexer,
     withRocksDBIndexer,
  )
+import Cardano.Node.Client.UTxOIndexer.Probe (ProbeConfig)
+import Cardano.Node.Client.UTxOIndexer.Reconnect (
+    ReconnectPolicy,
+    UpstreamStatus,
+    runReconnectLoop,
+ )
 import Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
     runServer,
+ )
+import Cardano.Node.Client.UTxOIndexer.Trace (
+    IndexerEvent (..),
+    StopReason (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     BlockHash (..),
@@ -58,8 +68,9 @@ import Control.Concurrent.STM (
     readTVarIO,
     writeTVar,
  )
+import Control.Exception (onException)
 import Control.Monad (void)
-import Control.Tracer (nullTracer)
+import Control.Tracer (Tracer, nullTracer, traceWith)
 import Data.ByteString.Short qualified as SBS
 import Data.Word (Word32, Word64)
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
@@ -87,38 +98,92 @@ data DaemonConfig = DaemonConfig
     -- database at this path; state survives process
     -- restart. When 'Nothing', use the volatile
     -- in-memory backend (intended for tests).
+    , dcReconnectPolicy :: !ReconnectPolicy
+    -- ^ Backoff policy for the in-process reconnect
+    -- supervisor. Defaults via 'defaultReconnectPolicy'.
+    , dcProbeConfig :: !ProbeConfig
+    -- ^ Configuration for the LSQ tip probe that gates
+    -- each reconnect attempt. Defaults via
+    -- 'defaultProbeConfig' — chain-replay-tolerant
+    -- (unbounded total timeout).
     }
     deriving stock (Show)
 
 {- | Open the indexer (RocksDB if @dcDbPath@ is set,
 in-memory otherwise), start the NDJSON server and the
-chain-sync follower, and block. Returns when either side
-exits (chain-sync disconnect, server crash, etc.) — the
-caller is expected to supervise.
+chain-sync follower, and block.
+
+The chain-sync follower is wrapped in 'runReconnectLoop'
+(a probe-then-connect supervisor on top of
+'Control.Retry'); when the upstream relay disconnects,
+the supervisor catches the exception, probes the relay
+via LSQ until ready, and re-attempts chain-sync. The
+listen socket and indexer state persist across the
+reconnect window.
+
+The caller-provided 'Tracer' receives an 'IndexerStarted'
+on entry and an 'IndexerStopped' on exit (both clean
+termination and async cancellation), plus all
+reconnect-supervisor and probe events between.
 -}
-runDaemon :: DaemonConfig -> IO ()
-runDaemon cfg = do
-    readyVar <- newTVarIO initialReady
-    withIndexer (dcDbPath cfg) $ \idx -> do
-        bootMode <- detectBootMode idx
-        let resumePoints = case bootMode of
-                ColdBoot -> [Network.Point Network.Point.Origin]
-                WarmBoot ps -> fmap toHeaderPoint ps
-            getReady = readTVarIO readyVar
-            chainAction =
-                runChainSyncN2C
-                    (EpochSlots (dcByronEpochSlots cfg))
-                    (NetworkMagic (dcNetworkMagic cfg))
-                    (dcRelaySocket cfg)
-                    ( mkChainSyncN2C
-                        nullTracer
-                        nullTracer
-                        (mkIntersector bootMode cfg readyVar idx)
-                        resumePoints
-                    )
-            serverAction = runServer (dcListenSocket cfg) idx getReady
-        concurrently_ (void chainAction) serverAction
+runDaemon :: Tracer IO IndexerEvent -> DaemonConfig -> IO ()
+runDaemon tracer cfg = do
+    onStart
+    -- 'onException' propagates the async exception after
+    -- emitting IndexerStopped, without masking the body
+    -- (which would interfere with the supervisor's STM
+    -- callbacks and threadDelay).
+    runBody `onException` onStop StoppedAsync
+    onStop StoppedNormally
   where
+    runBody = do
+        readyVar <- newTVarIO initialReady
+        withIndexer (dcDbPath cfg) $ \idx -> do
+            let getReady = readTVarIO readyVar
+                -- Recompute resume points on each retry so the
+                -- supervisor always feeds the latest persisted
+                -- state into chain-sync.
+                chainSession = do
+                    bootMode <- detectBootMode idx
+                    let resumePoints = case bootMode of
+                            ColdBoot ->
+                                [Network.Point Network.Point.Origin]
+                            WarmBoot ps -> fmap toHeaderPoint ps
+                    runChainSyncN2C
+                        (EpochSlots (dcByronEpochSlots cfg))
+                        (NetworkMagic (dcNetworkMagic cfg))
+                        (dcRelaySocket cfg)
+                        ( mkChainSyncN2C
+                            nullTracer
+                            nullTracer
+                            (mkIntersector bootMode cfg readyVar idx)
+                            resumePoints
+                        )
+                -- Status sink and processed-slot getter are wired
+                -- in T009. For now the supervisor swallows status
+                -- updates and returns Nothing for the resume slot.
+                noopSetStatus :: UpstreamStatus -> IO ()
+                noopSetStatus _ = pure ()
+                noopGetSlot :: IO (Maybe SlotNo)
+                noopGetSlot = pure Nothing
+                chainAction =
+                    runReconnectLoop
+                        tracer
+                        (dcReconnectPolicy cfg)
+                        (dcProbeConfig cfg)
+                        (NetworkMagic (dcNetworkMagic cfg))
+                        (dcRelaySocket cfg)
+                        noopSetStatus
+                        noopGetSlot
+                        chainSession
+                serverAction =
+                    runServer (dcListenSocket cfg) idx getReady
+            concurrently_ (void chainAction) serverAction
+    onStart =
+        traceWith
+            tracer
+            (IndexerStarted (dcListenSocket cfg) (dcDbPath cfg))
+    onStop r = traceWith tracer (IndexerStopped r)
     initialReady =
         ReadyStatus
             { rsReady = False

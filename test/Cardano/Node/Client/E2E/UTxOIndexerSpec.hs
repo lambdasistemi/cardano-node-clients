@@ -80,6 +80,15 @@ import Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
  )
+import Cardano.Node.Client.UTxOIndexer.Probe (
+    defaultProbeConfig,
+ )
+import Cardano.Node.Client.UTxOIndexer.Reconnect (
+    defaultReconnectPolicy,
+ )
+import Cardano.Node.Client.UTxOIndexer.Trace (
+    nullIndexerTracer,
+ )
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (
     async,
@@ -141,8 +150,10 @@ runE2E = do
                         , dcReadyThresholdSlots = 60
                         , dcSecurityParamK = 2160
                         , dcDbPath = Nothing
+                        , dcReconnectPolicy = defaultReconnectPolicy
+                        , dcProbeConfig = defaultProbeConfig
                         }
-            withAsync (runDaemon cfg) $ \daemonThread -> do
+            withAsync (runDaemon nullIndexerTracer cfg) $ \daemonThread -> do
                 waitForFile daemonSock 600
                 poll daemonThread >>= \case
                     Just (Left e) ->
