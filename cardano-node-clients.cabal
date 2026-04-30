@@ -117,6 +117,7 @@ library
     , ouroboros-network:protocols
     , plutus-core
     , plutus-tx
+    , process
     , random
     , serialise
     , stm
