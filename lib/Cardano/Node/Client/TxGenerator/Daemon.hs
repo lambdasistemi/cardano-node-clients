@@ -213,12 +213,20 @@ data DaemonConfig = DaemonConfig
 view of the bearer; 'readyResponseFrom' enforces the
 invariant @UpstreamDisconnected => ready=false@ on the
 wire.
+
+'rsIndexFresh' is orthogonal to 'rsReady' (which gates on
+tip-distance) and 'rsUpstream' (which gates on bearer
+state). It captures whether the indexer has applied at
+least one block since the most recent reconnect: false on
+cold start and on every transition into 'UpstreamConnected';
+true after the first 'rollForward' completes (issue #109).
 -}
 data ReadyState = ReadyState
     { rsReady :: !Bool
     , rsTipSlot :: !(Maybe Word64)
     , rsProcessedSlot :: !(Maybe Word64)
     , rsUpstream :: !UpstreamStatus
+    , rsIndexFresh :: !Bool
     }
     deriving stock (Show)
 
@@ -229,6 +237,7 @@ initialReady =
         , rsTipSlot = Nothing
         , rsProcessedSlot = Nothing
         , rsUpstream = UpstreamConnected
+        , rsIndexFresh = False
         }
 
 data BootMode
@@ -319,11 +328,20 @@ runDaemonWithTracer tracer cfg = do
             -- we also force rsReady=False at the
             -- producer (the encoder enforces the same
             -- invariant on the wire — defense in depth).
+            -- On UpstreamConnected we clear rsIndexFresh
+            -- so the arms refuse to read a stale UTxO
+            -- view until the chain-sync follower has
+            -- applied at least one post-reconnect block
+            -- (issue #109). rsIndexFresh flips back to
+            -- true inside 'updateReady'.
             setUpstreamStatus newStatus =
                 atomically $ modifyTVar' readyVar $ \rs ->
                     case newStatus of
                         UpstreamConnected ->
-                            rs{rsUpstream = UpstreamConnected}
+                            rs
+                                { rsUpstream = UpstreamConnected
+                                , rsIndexFresh = False
+                                }
                         UpstreamDisconnected _ ->
                             rs
                                 { rsUpstream = newStatus
@@ -396,43 +414,73 @@ runDaemonWithTracer tracer cfg = do
                 -- surface a not-applicable response so the
                 -- composer retries on the next tick instead
                 -- of taking down the daemon process.
+                --
+                -- The freshness gate ('rsIndexFresh') runs
+                -- before the arm body: between the
+                -- supervisor flipping rsUpstream to
+                -- 'UpstreamConnected' and the chain-sync
+                -- follower applying its first post-reconnect
+                -- block, the indexer's UTxO view is stale
+                -- (#109). Reading it would lead to a refill
+                -- submitting against already-spent inputs
+                -- ('ConwayMempoolFailure "All inputs are
+                -- spent"') or a transact returning
+                -- 'no-pickable-source'. We short-circuit
+                -- with 'IndexNotReady' instead so the
+                -- composer retries on the next tick.
+                indexFresh =
+                    rsIndexFresh <$> readTVarIO readyVar
                 doRefill req =
-                    E.handle
-                        ( \ConnectionLost ->
+                    indexFresh >>= \case
+                        False ->
                             pure (RefillFail IndexNotReady)
-                        )
-                        ( runRefillArm
-                            cfg
-                            pp
-                            idx
-                            provider
-                            submitter
-                            net
-                            masterSeed
-                            faucetSKey
-                            faucetAddr
-                            nextIdxMVar
-                            lastTxIdVar
-                            faucetKnownVar
-                            req
-                        )
+                        True ->
+                            E.handle
+                                ( \ConnectionLost ->
+                                    pure
+                                        ( RefillFail
+                                            IndexNotReady
+                                        )
+                                )
+                                ( runRefillArm
+                                    cfg
+                                    pp
+                                    idx
+                                    provider
+                                    submitter
+                                    net
+                                    masterSeed
+                                    faucetSKey
+                                    faucetAddr
+                                    nextIdxMVar
+                                    lastTxIdVar
+                                    faucetKnownVar
+                                    req
+                                )
                 doTransact req =
-                    E.handle
-                        ( \ConnectionLost ->
+                    indexFresh >>= \case
+                        False ->
                             pure (TransactFail IndexNotReady)
-                        )
-                        ( runTransactArm
-                            cfg
-                            pp
-                            idx
-                            provider
-                            submitter
-                            net
-                            masterSeed
-                            nextIdxMVar
-                            lastTxIdVar
-                            req
-                        )
+                        True ->
+                            E.handle
+                                ( \ConnectionLost ->
+                                    pure
+                                        ( TransactFail
+                                            IndexNotReady
+                                        )
+                                )
+                                ( runTransactArm
+                                    cfg
+                                    pp
+                                    idx
+                                    provider
+                                    submitter
+                                    net
+                                    masterSeed
+                                    nextIdxMVar
+                                    lastTxIdVar
+                                    req
+                                )
                 hooks =
                     ServerHooks
                         { hooksReady = getReady
@@ -1101,10 +1149,15 @@ updateReady cfg readyVar (Idx.SlotNo processed) tipNet = do
         ready = behind <= dcReadyThresholdSlots cfg
     -- Preserve the supervisor-managed 'rsUpstream'. The
     -- chain-sync follower owns rsReady/rsTipSlot/
-    -- rsProcessedSlot; the supervisor owns rsUpstream.
+    -- rsProcessedSlot/rsIndexFresh; the supervisor owns
+    -- rsUpstream. rsIndexFresh flips true here on every
+    -- applied 'rollForward' — which proves chain-sync has
+    -- resumed past the most recent reconnect anchor and
+    -- the indexer's UTxO view is no longer stale (#109).
     atomically $ modifyTVar' readyVar $ \rs ->
         rs
             { rsReady = ready
             , rsTipSlot = Just tip
             , rsProcessedSlot = Just processed
+            , rsIndexFresh = True
             }
