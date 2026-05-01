@@ -48,11 +48,12 @@ import Cardano.Ledger.Api.Tx (
     txIdTx,
     witsTxL,
  )
+import Cardano.Ledger.Api.Tx.Body (inputsTxBodyL)
 import Cardano.Ledger.Api.Tx.Out (coinTxOutL)
 import Cardano.Ledger.BaseTypes (Network (Mainnet, Testnet))
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Core (TxOut, extractHash)
+import Cardano.Ledger.Core (TxOut, bodyTxL, extractHash)
 import Cardano.Ledger.Keys (
     VKey (..),
     WitVKey (..),
@@ -111,6 +112,7 @@ import Cardano.Node.Client.TxGenerator.Population (
  )
 import Cardano.Node.Client.TxGenerator.Selection (
     pickSourceIndex,
+    verifyInputsUnspent,
  )
 import Cardano.Node.Client.TxGenerator.Server (
     ServerHooks (..),
@@ -556,6 +558,7 @@ runRefillArm
                         else
                             buildSignSubmit
                                 cfg
+                                provider
                                 pp
                                 idx
                                 submitter
@@ -569,6 +572,7 @@ runRefillArm
 
 buildSignSubmit ::
     DaemonConfig ->
+    Provider IO ->
     PParams ConwayEra ->
     IndexerHandle ->
     Submitter IO ->
@@ -582,6 +586,7 @@ buildSignSubmit ::
     IO (Word64, RefillResponse)
 buildSignSubmit
     cfg
+    provider
     pp
     idx
     submitter
@@ -602,43 +607,52 @@ buildSignSubmit
                     )
             Right tx -> do
                 let signed = addKeyWitness faucetSKey tx
-                result <- submitTx submitter signed
-                case result of
-                    Rejected reason -> do
-                        let reasonText =
-                                Text.decodeUtf8With
-                                    (\_ _ -> Just '\xFFFD')
-                                    reason
+                    inputs = signed ^. bodyTxL . inputsTxBodyL
+                inputsOk <- verifyInputsUnspent provider inputs
+                if not inputsOk
+                    then
                         pure
                             ( currentIdx
-                            , RefillFail
-                                (SubmitRejected reasonText)
+                            , RefillFail IndexNotReady
                             )
-                    Submitted txId -> do
-                        let freshIxn =
-                                ledgerToIndexerTxIn txId 0
-                            timeoutS =
-                                Just (dcAwaitTimeoutSeconds cfg)
-                        obs <- awaitTxIn idx freshIxn timeoutS
-                        let awaited = isJust (obs :: Maybe AwaitObservation)
-                            txHex = txIdToHex txId
-                        writeNextHDIndex
-                            (nextHDIndexPath (dcStateDir cfg))
-                            (currentIdx + 1)
-                        atomically
-                            ( writeTVar
-                                lastTxIdVar
-                                (Just txHex)
-                            )
-                        pure
-                            ( currentIdx + 1
-                            , RefillOk
-                                { rfOkTxId = txHex
-                                , rfOkFreshIndex = currentIdx
-                                , rfOkValueLovelace = unCoin amount
-                                , rfOkAwaited = awaited
-                                }
-                            )
+                    else do
+                        result <- submitTx submitter signed
+                        case result of
+                            Rejected reason -> do
+                                let reasonText =
+                                        Text.decodeUtf8With
+                                            (\_ _ -> Just '\xFFFD')
+                                            reason
+                                pure
+                                    ( currentIdx
+                                    , RefillFail
+                                        (SubmitRejected reasonText)
+                                    )
+                            Submitted txId -> do
+                                let freshIxn =
+                                        ledgerToIndexerTxIn txId 0
+                                    timeoutS =
+                                        Just (dcAwaitTimeoutSeconds cfg)
+                                obs <- awaitTxIn idx freshIxn timeoutS
+                                let awaited = isJust (obs :: Maybe AwaitObservation)
+                                    txHex = txIdToHex txId
+                                writeNextHDIndex
+                                    (nextHDIndexPath (dcStateDir cfg))
+                                    (currentIdx + 1)
+                                atomically
+                                    ( writeTVar
+                                        lastTxIdVar
+                                        (Just txHex)
+                                    )
+                                pure
+                                    ( currentIdx + 1
+                                    , RefillOk
+                                        { rfOkTxId = txHex
+                                        , rfOkFreshIndex = currentIdx
+                                        , rfOkValueLovelace = unCoin amount
+                                        , rfOkAwaited = awaited
+                                        }
+                                    )
 
 -- ----------------------------------------------------------------------
 -- Transact arm (User Story 1 / T011)
@@ -844,78 +858,89 @@ transactWithSource
                             )
                     Right tx -> do
                         let signed = addKeyWitness srcSKey tx
-                        result <- submitTx submitter signed
-                        case result of
-                            Rejected reason -> do
-                                let reasonText =
-                                        Text.decodeUtf8With
-                                            (\_ _ -> Just '\xFFFD')
-                                            reason
+                            inputs =
+                                signed ^. bodyTxL . inputsTxBodyL
+                        inputsOk <-
+                            verifyInputsUnspent provider inputs
+                        if not inputsOk
+                            then
                                 pure
                                     ( currentIdx
-                                    , TransactFail
-                                        (SubmitRejected reasonText)
+                                    , TransactFail IndexNotReady
                                     )
-                            Submitted txId -> do
-                                -- The change output is at
-                                -- index K (after the K
-                                -- explicit destinations).
-                                let changeIxn =
-                                        ledgerToIndexerTxIn
-                                            txId
-                                            ( fromIntegral
-                                                ( txReqFanout req
-                                                ) ::
-                                                Word16
+                            else do
+                                result <- submitTx submitter signed
+                                case result of
+                                    Rejected reason -> do
+                                        let reasonText =
+                                                Text.decodeUtf8With
+                                                    (\_ _ -> Just '\xFFFD')
+                                                    reason
+                                        pure
+                                            ( currentIdx
+                                            , TransactFail
+                                                (SubmitRejected reasonText)
                                             )
-                                    timeoutS =
-                                        Just
-                                            (dcAwaitTimeoutSeconds cfg)
-                                obs <-
-                                    awaitTxIn
-                                        idx
-                                        changeIxn
-                                        timeoutS
-                                let awaited =
-                                        isJust
-                                            ( obs ::
-                                                Maybe AwaitObservation
+                                    Submitted txId -> do
+                                        -- The change output is at
+                                        -- index K (after the K
+                                        -- explicit destinations).
+                                        let changeIxn =
+                                                ledgerToIndexerTxIn
+                                                    txId
+                                                    ( fromIntegral
+                                                        ( txReqFanout req
+                                                        ) ::
+                                                        Word16
+                                                    )
+                                            timeoutS =
+                                                Just
+                                                    (dcAwaitTimeoutSeconds cfg)
+                                        obs <-
+                                            awaitTxIn
+                                                idx
+                                                changeIxn
+                                                timeoutS
+                                        let awaited =
+                                                isJust
+                                                    ( obs ::
+                                                        Maybe AwaitObservation
+                                                    )
+                                            txHex = txIdToHex txId
+                                            freshCount =
+                                                fromIntegral
+                                                    ( length
+                                                        ( filter
+                                                            destFresh
+                                                            dests
+                                                        )
+                                                    )
+                                        writeNextHDIndex
+                                            ( nextHDIndexPath
+                                                (dcStateDir cfg)
                                             )
-                                    txHex = txIdToHex txId
-                                    freshCount =
-                                        fromIntegral
-                                            ( length
-                                                ( filter
-                                                    destFresh
-                                                    dests
-                                                )
+                                            newNextIdx
+                                        atomically
+                                            ( writeTVar
+                                                lastTxIdVar
+                                                (Just txHex)
                                             )
-                                writeNextHDIndex
-                                    ( nextHDIndexPath
-                                        (dcStateDir cfg)
-                                    )
-                                    newNextIdx
-                                atomically
-                                    ( writeTVar
-                                        lastTxIdVar
-                                        (Just txHex)
-                                    )
-                                pure
-                                    ( newNextIdx
-                                    , TransactOk
-                                        { txOkTxId = txHex
-                                        , txOkSrc = srcIdx
-                                        , txOkDsts =
-                                            fmap destIndex dests
-                                        , txOkValuesLovelace =
-                                            fmap
-                                                (unCoin . destValue)
-                                                dests
-                                        , txOkFreshCount =
-                                            freshCount
-                                        , txOkAwaited = awaited
-                                        }
-                                    )
+                                        pure
+                                            ( newNextIdx
+                                            , TransactOk
+                                                { txOkTxId = txHex
+                                                , txOkSrc = srcIdx
+                                                , txOkDsts =
+                                                    fmap destIndex dests
+                                                , txOkValuesLovelace =
+                                                    fmap
+                                                        (unCoin . destValue)
+                                                        dests
+                                                , txOkFreshCount =
+                                                    freshCount
+                                                , txOkAwaited = awaited
+                                                }
+                                            )
 
 -- ----------------------------------------------------------------------
 -- Server hooks
