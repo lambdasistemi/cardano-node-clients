@@ -19,6 +19,7 @@ module Cardano.Node.Client.Provider (
 ) where
 
 import Data.Map.Strict (Map)
+import Data.Set (Set)
 
 import Cardano.Ledger.Address (Addr)
 import Cardano.Ledger.Alonzo.Plutus.Evaluate (
@@ -53,6 +54,13 @@ data Provider m = Provider
         Addr ->
         m [(TxIn, TxOut ConwayEra)]
     -- ^ Look up UTxOs at an address
+    , queryUTxOByTxIn ::
+        Set TxIn ->
+        m (Map TxIn (TxOut ConwayEra))
+    -- ^ Look up UTxOs by their 'TxIn' at the
+    --     current chain tip. Returns only those
+    --     inputs still unspent; missing entries
+    --     are spent or rolled past.
     , queryProtocolParams ::
         m (PParams ConwayEra)
     -- ^ Fetch current protocol parameters

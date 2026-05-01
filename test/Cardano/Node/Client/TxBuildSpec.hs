@@ -1504,6 +1504,7 @@ outputCountingProvider ::
 outputCountingProvider pp perOutput =
     Provider
         { queryUTxOs = const (pure [])
+        , queryUTxOByTxIn = const (pure Map.empty)
         , queryProtocolParams = pure pp
         , evaluateTx =
             pure
