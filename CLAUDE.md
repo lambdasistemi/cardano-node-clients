@@ -29,7 +29,6 @@ Haskell (GHC 9.6+, same as cardano-node-clients): Follow standard conventions
 - 037-tx-gen-indexer-fresh: Added Haskell, GHC 9.6+ (matches repo) + `cardano-ledger-conway`, `ouroboros-network`, internal `chain-follower` `Follower` abstraction, internal `N2C.Reconnect.runReconnectLoop` (PR #105)
 - 034-cardano-tx-generator: Added Haskell, GHC 9.6+ (matches repo).
 
-- 003-tx-builder-dsl: Added Haskell (GHC 9.6+, same as cardano-node-clients) + cardano-ledger-api, cardano-ledger-conway, plutus-ledger-api, plutus-tx (ToData/FromData)
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
