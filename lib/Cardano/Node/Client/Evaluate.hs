@@ -5,7 +5,10 @@ License     : Apache-2.0
 
 Combines script evaluation, execution unit patching,
 integrity hash recomputation, and transaction
-balancing into a single function.
+balancing into a single function. Evaluation is
+iterated against the balanced transaction body so
+validators see the same TxInfo shape during local
+evaluation and submission.
 
 This is the standard workflow for submitting
 transactions with Plutus scripts:
@@ -39,10 +42,14 @@ import Cardano.Ledger.Api.Tx (
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
+    feeTxBodyL,
     inputsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (TxOut)
 import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
+import Cardano.Ledger.BaseTypes (
+    StrictMaybe (SNothing),
+ )
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Plutus.Language (Language)
@@ -52,6 +59,7 @@ import Cardano.Node.Client.Balance (
     BalanceResult (..),
     balanceTx,
     computeScriptIntegrity,
+    evalBudgetExUnits,
  )
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Provider (Provider (..))
@@ -73,6 +81,8 @@ The workflow:
    redeemers.
 5. Call 'balanceTx' to add fee inputs and a change
    output.
+6. Re-evaluate the balanced transaction and repeat
+   until fee and redeemer ExUnits are stable.
 
 Throws an error if script evaluation fails or
 balancing fails (insufficient funds).
@@ -96,38 +106,82 @@ evaluateAndBalance ::
     ConwayTx ->
     IO ConwayTx
 evaluateAndBalance lang prov pp inputUtxos refUtxos changeAddr tx =
-    do
-        -- Pre-add all inputs so the evaluator sees
-        -- the complete input set and spending indices
-        -- match the redeemers.
-        let existingIns =
-                tx ^. bodyTxL . inputsTxBodyL
-            allIns =
-                foldl
-                    ( \s (tin, _) ->
-                        Set.insert tin s
-                    )
-                    existingIns
-                    inputUtxos
-            txForEval =
-                tx
-                    & bodyTxL . inputsTxBodyL
-                        .~ allIns
-        evalResult <- evaluateTx prov txForEval
-        -- Check for script evaluation failures
-        let failures =
-                [ (p, e)
-                | (p, Left e) <-
-                    Map.toList evalResult
-                ]
-        if null failures
-            then pure ()
-            else
-                error $
-                    "evaluateAndBalance: \
-                    \script eval failed: "
-                        <> show failures
-        -- Patch ExUnits from eval result
+    go (0 :: Int) txForEval
+  where
+    -- Pre-add all inputs so the evaluator sees
+    -- the complete input set and spending indices
+    -- match the redeemers.
+    existingIns =
+        tx ^. bodyTxL . inputsTxBodyL
+    allIns =
+        foldl
+            ( \s (tin, _) ->
+                Set.insert tin s
+            )
+            existingIns
+            inputUtxos
+    txForEval =
+        tx
+            & bodyTxL . inputsTxBodyL
+                .~ allIns
+
+    go n candidate
+        | n > (10 :: Int) =
+            error
+                "evaluateAndBalance: ExUnits did not converge"
+        | otherwise = do
+            evalResult <-
+                evaluateTx
+                    prov
+                    (inflateRedeemerBudgets candidate)
+            case evalFailures evalResult of
+                [] -> do
+                    balanced <-
+                        balanceFromEval evalResult
+                    if n > 0
+                        && stableFeeAndExUnits
+                            candidate
+                            balanced
+                        then pure balanced
+                        else go (n + 1) balanced
+                failures ->
+                    error $
+                        "evaluateAndBalance: \
+                        \script eval failed: "
+                            <> show failures
+
+    inflateRedeemerBudgets candidate =
+        let Redeemers rdmrMap =
+                candidate ^. witsTxL . rdmrsTxWitsL
+            inflated =
+                Redeemers $
+                    fmap
+                        ( \(dat, _) ->
+                            (dat, evalBudgetExUnits)
+                        )
+                        rdmrMap
+            integrity =
+                if Map.null rdmrMap
+                    then SNothing
+                    else
+                        computeScriptIntegrity
+                            lang
+                            pp
+                            inflated
+         in candidate
+                & witsTxL . rdmrsTxWitsL
+                    .~ inflated
+                & bodyTxL
+                    . scriptIntegrityHashTxBodyL
+                    .~ integrity
+
+    evalFailures evalResult =
+        [ (p, e)
+        | (p, Left e) <-
+            Map.toList evalResult
+        ]
+
+    balanceFromEval evalResult =
         let Redeemers rdmrMap =
                 tx ^. witsTxL . rdmrsTxWitsL
             patched =
@@ -154,14 +208,25 @@ evaluateAndBalance lang prov pp inputUtxos refUtxos changeAddr tx =
                     & bodyTxL
                         . scriptIntegrityHashTxBodyL
                         .~ integrity
-        case balanceTx
-            pp
-            inputUtxos
-            refUtxos
-            changeAddr
-            patched' of
-            Left err ->
-                error $
-                    "evaluateAndBalance: "
-                        <> show err
-            Right br -> pure (balancedTx br)
+         in case balanceTx
+                pp
+                inputUtxos
+                refUtxos
+                changeAddr
+                patched' of
+                Left err ->
+                    error $
+                        "evaluateAndBalance: "
+                            <> show err
+                Right br -> pure (balancedTx br)
+
+    stableFeeAndExUnits candidate balanced =
+        candidate ^. bodyTxL . feeTxBodyL
+            == balanced ^. bodyTxL . feeTxBodyL
+            && redeemerExUnits candidate
+                == redeemerExUnits balanced
+
+    redeemerExUnits candidate =
+        let Redeemers rdmrMap =
+                candidate ^. witsTxL . rdmrsTxWitsL
+         in fmap snd rdmrMap

@@ -6,9 +6,11 @@
 ## Status
 
 **Completed**: Baseline CI gate passed on the branch before edits. Speckit
-specification created from issue #112.  
-**Current**: Implement regression tests and balance-aware ExUnits
-convergence.  
+specification created from issue #112. Regression tests added for `build`
+and `evaluateAndBalance`. Balance-aware ExUnits convergence implemented
+and verified with focused unit tests, `just ci`, and the CI-parity Nix
+gate.  
+**Current**: Draft PR review.  
 **Blockers**: None.
 
 ## Summary

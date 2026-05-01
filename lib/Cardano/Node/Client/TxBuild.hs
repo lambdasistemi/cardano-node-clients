@@ -864,10 +864,15 @@ the Tx body stabilizes:
 
 1. Interpret program with current Tx (resolve Peek)
 2. Assemble Tx from steps
-3. Add input UTxOs, evaluate scripts → ExUnits
-4. Patch redeemers, recompute integrity hash
-5. Balance (fee + change)
-6. If any Peek returned Iterate or Tx changed → 1
+3. Add input UTxOs, evaluate scripts with inflated
+   budgets → ExUnits
+4. Patch redeemers, recompute integrity hash, and
+   balance (fee + change)
+5. Re-evaluate the balanced body, patch the
+   original unbalanced body with those ExUnits, and
+   balance again
+6. If any Peek returned Iterate, fee changed, or
+   ExUnits changed after balancing → 1
 -}
 
 {- | Knobs that influence 'buildWith'. New options
@@ -968,6 +973,48 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
             (tx ^. bodyTxL . referenceInputsTxBodyL)
             refUtxos
 
+    inflateRedeemerBudgets tx =
+        let Redeemers rdmrs =
+                tx ^. witsTxL . rdmrsTxWitsL
+            inflated =
+                Redeemers $
+                    fmap
+                        ( \(d, _) ->
+                            (d, evalBudgetExUnits)
+                        )
+                        rdmrs
+            integrity =
+                if Map.null rdmrs
+                    then SNothing
+                    else
+                        computeScriptIntegrity
+                            PlutusV3
+                            pp
+                            inflated
+         in tx
+                & witsTxL . rdmrsTxWitsL
+                    .~ inflated
+                & bodyTxL
+                    . scriptIntegrityHashTxBodyL
+                    .~ integrity
+
+    evaluateForBudget tx =
+        evaluateTx (inflateRedeemerBudgets tx)
+
+    evalFailures evalResult =
+        [ (p, e)
+        | (p, Left e) <-
+            Map.toList evalResult
+        ]
+
+    balanceWithEval tx evalResult =
+        balanceTx
+            pp
+            inputUtxos
+            refUtxos
+            changeAddr
+            (patchExUnits tx evalResult)
+
     -- \| One iteration: interpret, assemble, eval,
     -- patch, balance. Track seen fees to detect
     -- oscillation and bisect.
@@ -990,36 +1037,8 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
         --    so the evaluator gives scripts enough
         --    room to execute. The real ExUnits come
         --    back in evalResult.
-        let Redeemers evalRdmrs =
-                txForEval ^. witsTxL . rdmrsTxWitsL
-            inflated =
-                Redeemers $
-                    fmap
-                        ( \(d, _) ->
-                            (d, evalBudgetExUnits)
-                        )
-                        evalRdmrs
-            budgetIntegrity =
-                if Map.null evalRdmrs
-                    then SNothing
-                    else
-                        computeScriptIntegrity
-                            PlutusV3
-                            pp
-                            inflated
-            txForEvalBudget =
-                txForEval
-                    & witsTxL . rdmrsTxWitsL
-                        .~ inflated
-                    & bodyTxL
-                        . scriptIntegrityHashTxBodyL
-                        .~ budgetIntegrity
-        evalResult <- evaluateTx txForEvalBudget
-        let failures =
-                [ (p, e)
-                | (p, Left e) <-
-                    Map.toList evalResult
-                ]
+        evalResult <- evaluateForBudget txForEval
+        let failures = evalFailures evalResult
         case failures of
             ((purpose, msg) : _) -> do
                 -- Eval failed. Distinguish terminal
@@ -1108,111 +1127,143 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                                     (evalRetries + 1)
                                     retryTx
             [] -> do
-                -- 3. Patch ExUnits THEN balance.
-                --    This way balanceTx sees the
-                --    real script cost.
-                let patchedTx =
-                        patchExUnits tx evalResult
-                case balanceTx
-                    pp
-                    inputUtxos
-                    refUtxos
-                    changeAddr
-                    patchedTx of
+                -- 3. Balance once from the
+                --    pre-balance evaluation, then
+                --    evaluate the balanced body that
+                --    validators will actually see.
+                case balanceWithEval tx evalResult of
                     Left err ->
                         pure $
                             Left $
                                 BalanceFailed err
-                    Right BalanceResult{balancedTx = balanced, changeIndex = chIx} -> do
-                        let finalFee =
-                                balanced
-                                    ^. bodyTxL
-                                        . feeTxBodyL
-                            newMax =
-                                max maxFee finalFee
-                        if finalFee == prevFee
-                            then
-                                if newMax > finalFee
-                                    then
-                                        -- Fee converged
-                                        -- but below max.
-                                        -- Re-iterate
-                                        -- once with max
-                                        -- so Peek sees
-                                        -- the right fee.
-                                        case bumpFee
-                                            chIx
-                                            balanced
-                                            newMax of
-                                            Left msg ->
-                                                pure $
-                                                    Left $
-                                                        BumpFeeFailed
-                                                            msg
-                                            Right bumped ->
-                                                step
-                                                    seenFees
-                                                    newMax
-                                                    0
-                                                    bumped
-                                    else
-                                        if not peekConverged
-                                            && finalFee
-                                                > Coin 0
-                                            then
-                                                -- Fee converged
-                                                -- but Peek has
-                                                -- not. Re-iterate.
-                                                step
-                                                    seenFees
-                                                    newMax
-                                                    0
-                                                    balanced
-                                            else
-                                                -- Truly
-                                                -- converged.
-                                                case failedChecks
-                                                    (tsChecks st)
-                                                    balanced of
-                                                    [] ->
-                                                        pure $
-                                                            Right
-                                                                balanced
-                                                    errs ->
-                                                        pure $
-                                                            Left $
-                                                                ChecksFailed
-                                                                    errs
-                            else
-                                if Set.member
-                                    finalFee
+                    Right BalanceResult{balancedTx = balanced0} -> do
+                        balancedEvalResult <-
+                            evaluateForBudget balanced0
+                        case evalFailures balancedEvalResult of
+                            ((purpose, msg) : _) ->
+                                pure $
+                                    Left $
+                                        EvalFailure
+                                            purpose
+                                            msg
+                            [] ->
+                                continueAfterBalancedEval
+                                    st
+                                    peekConverged
+                                    prevFee
                                     seenFees
-                                    then do
-                                        -- Oscillation!
-                                        let lo =
-                                                min
-                                                    finalFee
-                                                    prevFee
-                                            hi =
-                                                max
-                                                    finalFee
-                                                    prevFee
-                                        bisect
-                                            st
-                                            evalResult
-                                            chIx
-                                            balanced
-                                            lo
-                                            hi
-                                    else
-                                        step
-                                            ( Set.insert
-                                                finalFee
+                                    maxFee
+                                    tx
+                                    balancedEvalResult
+
+    continueAfterBalancedEval
+        st
+        peekConverged
+        prevFee
+        seenFees
+        maxFee
+        tx
+        balancedEvalResult =
+            -- Patch the original unbalanced body with
+            -- the balanced-body ExUnits, then balance
+            -- again so fee and change account for
+            -- those final costs without appending a
+            -- second change output.
+            case balanceWithEval tx balancedEvalResult of
+                Left err ->
+                    pure $
+                        Left $
+                            BalanceFailed err
+                Right BalanceResult{balancedTx = balanced, changeIndex = chIx} -> do
+                    let finalFee =
+                            balanced
+                                ^. bodyTxL
+                                    . feeTxBodyL
+                        newMax =
+                            max maxFee finalFee
+                    if finalFee == prevFee
+                        then
+                            if newMax > finalFee
+                                then
+                                    -- Fee converged
+                                    -- but below max.
+                                    -- Re-iterate
+                                    -- once with max
+                                    -- so Peek sees
+                                    -- the right fee.
+                                    case bumpFee
+                                        chIx
+                                        balanced
+                                        newMax of
+                                        Left msg ->
+                                            pure $
+                                                Left $
+                                                    BumpFeeFailed
+                                                        msg
+                                        Right bumped ->
+                                            step
                                                 seenFees
-                                            )
-                                            newMax
-                                            0
-                                            balanced
+                                                newMax
+                                                0
+                                                bumped
+                                else
+                                    if not peekConverged
+                                        && finalFee
+                                            > Coin 0
+                                        then
+                                            -- Fee converged
+                                            -- but Peek has
+                                            -- not. Re-iterate.
+                                            step
+                                                seenFees
+                                                newMax
+                                                0
+                                                balanced
+                                        else
+                                            -- Truly
+                                            -- converged.
+                                            case failedChecks
+                                                (tsChecks st)
+                                                balanced of
+                                                [] ->
+                                                    pure $
+                                                        Right
+                                                            balanced
+                                                errs ->
+                                                    pure $
+                                                        Left $
+                                                            ChecksFailed
+                                                                errs
+                        else
+                            if Set.member
+                                finalFee
+                                seenFees
+                                then do
+                                    -- Oscillation!
+                                    let lo =
+                                            min
+                                                finalFee
+                                                prevFee
+                                        hi =
+                                            max
+                                                finalFee
+                                                prevFee
+                                    bisect
+                                        st
+                                        balancedEvalResult
+                                        chIx
+                                        balanced
+                                        lo
+                                        hi
+                                else
+                                    step
+                                        ( Set.insert
+                                            finalFee
+                                            seenFees
+                                        )
+                                        newMax
+                                        0
+                                        balanced
 
     -- \| Binary search for the smallest fee where
     -- eval passes. lo fails eval, hi passes.
