@@ -20,10 +20,16 @@ The function is otherwise oblivious to ledger types — the
 -}
 module Cardano.Node.Client.TxGenerator.Selection (
     pickSourceIndex,
+    verifyInputsUnspent,
 ) where
 
+import Data.Map.Strict qualified as Map
+import Data.Set (Set)
 import Data.Word (Word32, Word64)
 import System.Random (Random (random), StdGen)
+
+import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Provider (Provider (..))
 
 {- | Repeatedly draw an index from the request's RNG
 stream and call the viability predicate. Returns the
@@ -72,3 +78,21 @@ pickSourceIndex viable population maxRetries gen0
             if ok
                 then pure (Just (idx, gen'))
                 else go (attempts + 1) gen'
+
+{- | Pre-submit chain-tip probe. Returns 'True' when every
+input in the supplied set is still unspent at the relay's
+current chain tip, 'False' when at least one input is missing.
+
+One LSQ round-trip via 'queryUTxOByTxIn'. Raises
+'Cardano.Node.Client.N2C.Types.ConnectionLost' on bearer
+failure (propagated from the underlying query); callers
+catch this exception at the arm level and map it to
+@IndexNotReady@.
+
+Empty input set is vacuously 'True' — there is nothing to
+verify.
+-}
+verifyInputsUnspent :: Provider IO -> Set TxIn -> IO Bool
+verifyInputsUnspent p inputs = do
+    found <- queryUTxOByTxIn p inputs
+    pure (Map.keysSet found == inputs)

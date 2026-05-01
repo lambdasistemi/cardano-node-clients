@@ -109,6 +109,19 @@ mkN2CProvider ch =
                     error
                         "queryUTxOs: era mismatch \
                         \— node not in Conway"
+        , queryUTxOByTxIn = \txins -> do
+            result <-
+                queryLSQ ch $
+                    BlockQuery $
+                        QueryIfCurrentConway $
+                            GetUTxOByTxIn txins
+            case result of
+                Right utxo -> pure $ unUTxO utxo
+                Left _mismatch ->
+                    error
+                        "queryUTxOByTxIn: era \
+                        \mismatch — node not in \
+                        \Conway"
         , evaluateTx = \tx -> do
             let body = tx ^. bodyTxL
                 allInputs =
