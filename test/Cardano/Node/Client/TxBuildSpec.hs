@@ -75,6 +75,7 @@ import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
 import Cardano.Ledger.Core (
+    PParams,
     bodyTxL,
     hashTxAuxData,
     metadataTxAuxDataL,
@@ -99,6 +100,9 @@ import Cardano.Ledger.Mary.Value (
  )
 import Cardano.Ledger.Metadata (Metadatum (..))
 import Cardano.Ledger.Plutus (ExUnits (..))
+import Cardano.Ledger.Plutus.Language (
+    Language (PlutusV3),
+ )
 import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
@@ -107,7 +111,9 @@ import Cardano.Node.Client.Balance (
     BalanceResult (..),
     balanceTx,
  )
+import Cardano.Node.Client.Evaluate (evaluateAndBalance)
 import Cardano.Node.Client.Ledger (ConwayTx)
+import Cardano.Node.Client.Provider (Provider (..))
 import Cardano.Node.Client.TxBuild
 import Cardano.Slotting.Slot (SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
@@ -1010,6 +1016,125 @@ buildSpec =
                         fee
                             `shouldSatisfy` (> 0)
 
+        it "patches ExUnits from balanced output count" $ do
+            let pp =
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
+                        & ppMaxTxSizeL .~ 100_000
+                perOutput = 200_000
+                scriptUtxo =
+                    ( mkTxIn 2
+                    , mkBasicTxOut
+                        (mkAddr 3)
+                        (inject (Coin 5_000_000))
+                    )
+                feeUtxo =
+                    ( mkTxIn 9
+                    , mkBasicTxOut
+                        (mkAddr 1)
+                        (inject (Coin 10_000_000))
+                    )
+                prog :: TxBuild TestQ TestErr ()
+                prog = do
+                    _ <-
+                        spendScript
+                            (mkTxIn 2)
+                            (42 :: Integer)
+                    _ <-
+                        payTo
+                            (mkAddr 4)
+                            (inject (Coin 3_000_000))
+                    collateral (mkTxIn 9)
+                mockEval =
+                    outputCountingEval perOutput
+            result <-
+                build
+                    pp
+                    noCtxInterpretIO
+                    mockEval
+                    [feeUtxo, scriptUtxo]
+                    []
+                    (mkAddr 1)
+                    prog
+            case result of
+                Left err ->
+                    expectationFailure $ show err
+                Right tx -> do
+                    length
+                        ( toList $
+                            tx
+                                ^. bodyTxL
+                                    . outputsTxBodyL
+                        )
+                        `shouldBe` 2
+                    redeemerExUnits
+                        (ConwaySpending (AsIx 0))
+                        tx
+                        `shouldBe` Just
+                            (outputCountExUnits perOutput tx)
+
+        it
+            "evaluateAndBalance patches ExUnits from \
+            \balanced output count"
+            $ do
+                let pp =
+                        emptyPParams @ConwayEra
+                            & ppTxFeePerByteL
+                                .~ CoinPerByte
+                                    (compactCoinOrError (Coin 44))
+                            & ppTxFeeFixedL .~ Coin 155381
+                            & ppMaxTxSizeL .~ 100_000
+                    perOutput = 200_000
+                    scriptUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 3)
+                            (inject (Coin 5_000_000))
+                        )
+                    feeUtxo =
+                        ( mkTxIn 9
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 10_000_000))
+                        )
+                    unbalanced =
+                        draft pp $ do
+                            _ <-
+                                spendScript
+                                    (mkTxIn 2)
+                                    (42 :: Integer)
+                            _ <-
+                                payTo
+                                    (mkAddr 4)
+                                    (inject (Coin 3_000_000))
+                            collateral (mkTxIn 9)
+                    provider =
+                        outputCountingProvider pp perOutput
+                tx <-
+                    evaluateAndBalance
+                        PlutusV3
+                        provider
+                        pp
+                        [feeUtxo, scriptUtxo]
+                        []
+                        (mkAddr 1)
+                        unbalanced
+                length
+                    ( toList $
+                        tx
+                            ^. bodyTxL
+                                . outputsTxBodyL
+                    )
+                    `shouldBe` 2
+                redeemerExUnits
+                    (ConwaySpending (AsIx 0))
+                    tx
+                    `shouldBe` Just
+                        (outputCountExUnits perOutput tx)
+
         it "retries with an estimated fee after eval failure" $ do
             feeHistoryRef <- newIORef []
             let pp =
@@ -1345,6 +1470,61 @@ isMint ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
 isMint (ConwayMinting _) = True
 isMint _ = False
+
+outputCountExUnits :: Int -> ConwayTx -> ExUnits
+outputCountExUnits perOutput tx =
+    ExUnits
+        0
+        ( fromIntegral perOutput
+            * fromIntegral
+                ( length $
+                    toList $
+                        tx ^. bodyTxL . outputsTxBodyL
+                )
+        )
+
+outputCountingEval ::
+    Int ->
+    ConwayTx ->
+    IO
+        ( Map.Map
+            (ConwayPlutusPurpose AsIx ConwayEra)
+            (Either String ExUnits)
+        )
+outputCountingEval perOutput tx =
+    pure $
+        Map.singleton
+            (ConwaySpending (AsIx 0))
+            (Right (outputCountExUnits perOutput tx))
+
+outputCountingProvider ::
+    PParams ConwayEra ->
+    Int ->
+    Provider IO
+outputCountingProvider pp perOutput =
+    Provider
+        { queryUTxOs = const (pure [])
+        , queryProtocolParams = pure pp
+        , evaluateTx =
+            pure
+                . Map.singleton
+                    (ConwaySpending (AsIx 0))
+                . Right
+                . outputCountExUnits perOutput
+        , posixMsToSlot =
+            pure . SlotNo . fromIntegral
+        , posixMsCeilSlot =
+            pure . SlotNo . fromIntegral
+        }
+
+redeemerExUnits ::
+    ConwayPlutusPurpose AsIx ConwayEra ->
+    ConwayTx ->
+    Maybe ExUnits
+redeemerExUnits purpose tx =
+    let Redeemers rdmrs =
+            tx ^. witsTxL . rdmrsTxWitsL
+     in snd <$> Map.lookup purpose rdmrs
 
 {- | Run draft and return both the Tx and the
 program's result.
