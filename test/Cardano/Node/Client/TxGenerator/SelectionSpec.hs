@@ -21,18 +21,39 @@ Pins the determinism + retry contract of
 -}
 module Cardano.Node.Client.TxGenerator.SelectionSpec (spec) where
 
+import Cardano.Crypto.Hash (HashAlgorithm, hashFromBytes)
+import Cardano.Crypto.Hash qualified as Hash
+import Cardano.Ledger.Address (Addr (..))
+import Cardano.Ledger.Api.Tx.Out (TxOut, mkBasicTxOut)
+import Cardano.Ledger.BaseTypes (Network (Testnet), TxIx (..))
+import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Credential (
+    Credential (KeyHashObj),
+    StakeReference (StakeRefNull),
+ )
+import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
+import Cardano.Ledger.Keys (KeyHash (..))
+import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
+import Cardano.Ledger.Val (inject)
+import Cardano.Node.Client.Provider (Provider (..))
 import Cardano.Node.Client.TxGenerator.Selection (
     pickSourceIndex,
+    verifyInputsUnspent,
  )
 import Control.Monad (when)
+import Data.ByteString qualified as BS
 import Data.IORef (
     modifyIORef',
     newIORef,
     readIORef,
     writeIORef,
  )
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (fromJust)
 import Data.Set qualified as Set
-import Data.Word (Word32, Word64)
+import Data.Word (Word32, Word64, Word8)
 import System.Random (mkStdGen)
 import Test.Hspec (
     Spec,
@@ -44,6 +65,60 @@ import Test.Hspec (
 
 spec :: Spec
 spec = describe "TxGenerator.Selection" $ do
+    describe "verifyInputsUnspent" $ do
+        it
+            "returns True when every queried input is \
+            \present in the tip UTxO"
+            $ do
+                let inputs = Set.fromList [mkTxIn 1, mkTxIn 2]
+                    tip =
+                        Map.fromList
+                            [ (mkTxIn 1, mkOut 10)
+                            , (mkTxIn 2, mkOut 20)
+                            ]
+                ok <-
+                    verifyInputsUnspent
+                        (stubProvider tip)
+                        inputs
+                ok `shouldBe` True
+
+        it
+            "returns False when any queried input is \
+            \missing from the tip UTxO"
+            $ do
+                let inputs =
+                        Set.fromList
+                            [mkTxIn 1, mkTxIn 2, mkTxIn 3]
+                    -- mkTxIn 2 is missing — already spent
+                    tip =
+                        Map.fromList
+                            [ (mkTxIn 1, mkOut 10)
+                            , (mkTxIn 3, mkOut 30)
+                            ]
+                ok <-
+                    verifyInputsUnspent
+                        (stubProvider tip)
+                        inputs
+                ok `shouldBe` False
+
+        it "queries only the requested inputs (round-trip count)" $ do
+            calls <- newIORef (0 :: Int)
+            let tip =
+                    Map.fromList
+                        [(mkTxIn 1, mkOut 10)]
+                provider =
+                    (stubProvider tip)
+                        { queryUTxOByTxIn = \q -> do
+                            modifyIORef' calls (+ 1)
+                            pure (Map.restrictKeys tip q)
+                        }
+            _ <-
+                verifyInputsUnspent
+                    provider
+                    (Set.fromList [mkTxIn 1])
+            n <- readIORef calls
+            n `shouldBe` 1
+
     describe "pickSourceIndex" $ do
         it
             "returns Nothing on empty population without \
@@ -176,6 +251,73 @@ isNothing' _ = False
 
 indexOf :: Maybe (Word64, a) -> Maybe Word64
 indexOf = fmap fst
+
+-- --------------------------------------------------
+-- verifyInputsUnspent helpers
+-- --------------------------------------------------
+
+mkHash32 ::
+    (HashAlgorithm h) => Word8 -> Hash.Hash h a
+mkHash32 n =
+    fromJust $
+        hashFromBytes $
+            BS.pack $
+                replicate 31 0 ++ [n]
+
+mkHash28 ::
+    (HashAlgorithm h) => Word8 -> Hash.Hash h a
+mkHash28 n =
+    fromJust $
+        hashFromBytes $
+            BS.pack $
+                replicate 27 0 ++ [n]
+
+mkTxIn :: Word8 -> TxIn
+mkTxIn n =
+    TxIn
+        (TxId $ unsafeMakeSafeHash $ mkHash32 n)
+        (TxIx (fromIntegral n))
+
+mkAddr :: Word8 -> Addr
+mkAddr n =
+    Addr
+        Testnet
+        (KeyHashObj (KeyHash (mkHash28 n)))
+        StakeRefNull
+
+mkOut :: Word8 -> TxOut ConwayEra
+mkOut n =
+    mkBasicTxOut
+        (mkAddr n)
+        (inject (Coin (fromIntegral n)))
+
+{- | Stub 'Provider' whose 'queryUTxOByTxIn' restricts a
+fixed UTxO map by the requested keys. All other methods
+are 'undefined' — the verifyInputsUnspent tests do not
+touch them.
+-}
+stubProvider ::
+    Map TxIn (TxOut ConwayEra) -> Provider IO
+stubProvider tip =
+    Provider
+        { queryUTxOs = const (pure [])
+        , queryUTxOByTxIn = pure . Map.restrictKeys tip
+        , queryProtocolParams =
+            pure (unused "queryProtocolParams")
+        , evaluateTx = \_ ->
+            pure (unused "evaluateTx")
+        , posixMsToSlot = \_ ->
+            pure (unused "posixMsToSlot")
+        , posixMsCeilSlot = \_ ->
+            pure (unused "posixMsCeilSlot")
+        }
+  where
+    unused name =
+        error
+            ( "stubProvider: "
+                <> name
+                <> " unused"
+            )
 
 -- | Local 'shouldNotBe' for clarity.
 shouldNotBe' :: (Eq a, Show a) => a -> a -> IO ()
