@@ -20,6 +20,16 @@ let
     '';
   };
 
+  unit = pkgs.writeShellApplication {
+    name = "unit";
+    runtimeInputs = [
+      components.tests.unit-tests
+    ];
+    text = ''
+      exec unit-tests
+    '';
+  };
+
   lint = pkgs.writeShellApplication {
     name = "lint";
     runtimeInputs = with pkgs.haskellPackages; [
@@ -36,5 +46,5 @@ let
   };
 in
 {
-  inherit build e2e lint;
+  inherit build e2e lint unit;
 }

@@ -22,6 +22,7 @@ catch-up state.
 module Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
+    applyUpstreamStatus,
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots (..))
@@ -161,20 +162,15 @@ runDaemon tracer cfg = do
                             resumePoints
                         )
                 -- Wire the supervisor's status sink into the same
-                -- TVar that the server reads from. On
-                -- UpstreamDisconnected we also force rsReady=False
-                -- at the producer (the encoder enforces the same
-                -- invariant on the wire — defense in depth).
+                -- TVar that the server reads from. The state
+                -- transition is captured by 'applyUpstreamStatus'
+                -- (a pure function for testability — see
+                -- 'DaemonSpec.applyUpstreamStatus'). The wire
+                -- encoder enforces the same invariant as defense
+                -- in depth.
                 setUpstreamStatus newStatus =
-                    atomically $ modifyTVar' readyVar $ \rs ->
-                        case newStatus of
-                            UpstreamConnected ->
-                                rs{rsUpstream = UpstreamConnected}
-                            UpstreamDisconnected _ ->
-                                rs
-                                    { rsUpstream = newStatus
-                                    , rsReady = False
-                                    }
+                    atomically $
+                        modifyTVar' readyVar (applyUpstreamStatus cfg newStatus)
                 getProcessedSlot =
                     rsProcessedSlot <$> readTVarIO readyVar
                 chainAction =
@@ -340,6 +336,39 @@ pointToBlockHash p =
         Network.Point Network.Point.Origin -> BlockHash mempty
         Network.Point (Network.Point.At (Network.Point.Block _ h)) ->
             BlockHash (SBS.fromShort (getOneEraHash h))
+
+{- | Apply a supervisor status transition to a 'ReadyStatus'.
+
+  * @'UpstreamDisconnected' _@ → keep slot fields, force
+    @rsReady = False@.
+  * @'UpstreamConnected'@      → keep slot fields, re-derive
+    @rsReady@ from the current @rsSlotsBehind@ against
+    @dcReadyThresholdSlots@. This is what makes the daemon
+    flip back to @ready=true@ on reconnect to a chain that is
+    already at the last seen tip — without this re-derive,
+    @rsReady@ stays @False@ until the next 'rollForward'
+    fires 'updateReady' (which never happens if the chain
+    has stopped producing blocks). See issue #119.
+-}
+applyUpstreamStatus ::
+    DaemonConfig ->
+    UpstreamStatus ->
+    ReadyStatus ->
+    ReadyStatus
+applyUpstreamStatus cfg newStatus rs =
+    case newStatus of
+        UpstreamConnected ->
+            rs
+                { rsUpstream = UpstreamConnected
+                , rsReady = case rsSlotsBehind rs of
+                    Just b -> b <= dcReadyThresholdSlots cfg
+                    Nothing -> False
+                }
+        UpstreamDisconnected _ ->
+            rs
+                { rsUpstream = newStatus
+                , rsReady = False
+                }
 
 updateReady ::
     DaemonConfig ->
