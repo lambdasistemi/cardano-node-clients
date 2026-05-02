@@ -1141,11 +1141,47 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                             evaluateForBudget balanced0
                         case evalFailures balancedEvalResult of
                             ((purpose, msg) : _) ->
-                                pure $
-                                    Left $
-                                        EvalFailure
-                                            purpose
-                                            msg
+                                -- Balanced eval can legitimately
+                                -- fail when scripts read fee via
+                                -- 'Peek': the pre-balance eval
+                                -- saw fee=prevFee but the
+                                -- post-balance body has a fresh
+                                -- fee that violates whatever
+                                -- conservation the script was
+                                -- enforcing. The next interpret
+                                -- will re-read 'Peek' against
+                                -- the balanced body and the
+                                -- script will see the new fee,
+                                -- so iterate with 'balanced0' as
+                                -- the new prevTx. Fall through
+                                -- to a terminal error only when
+                                -- we've already seen the same
+                                -- fee before (no progress) or
+                                -- after one retry past prevFee>0
+                                -- — same shape as the
+                                -- pre-balance eval-failure path.
+                                let finalFee =
+                                        balanced0
+                                            ^. bodyTxL
+                                                . feeTxBodyL
+                                 in if Set.member finalFee seenFees
+                                        || evalRetries
+                                            >= (1 :: Int)
+                                        then
+                                            pure $
+                                                Left $
+                                                    EvalFailure
+                                                        purpose
+                                                        msg
+                                        else
+                                            step
+                                                ( Set.insert
+                                                    finalFee
+                                                    seenFees
+                                                )
+                                                (max maxFee finalFee)
+                                                (evalRetries + 1)
+                                                balanced0
                             [] ->
                                 continueAfterBalancedEval
                                     st

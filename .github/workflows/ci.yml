@@ -22,6 +22,7 @@ jobs:
           nix build --quiet
           .#checks.x86_64-linux.build
           .#checks.x86_64-linux.e2e
+          .#checks.x86_64-linux.unit
           .#checks.x86_64-linux.lint
   build:
     needs: build-gate
@@ -45,6 +46,17 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: E2E tests
         run: nix run --quiet .#e2e
+  unit:
+    needs: build-gate
+    runs-on: nixos
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/cachix-action@v17
+        with:
+          name: paolino
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Unit tests
+        run: nix run --quiet .#unit
   lint:
     needs: build-gate
     runs-on: nixos
@@ -59,7 +71,7 @@ jobs:
   docs:
     runs-on: nixos
     if: github.ref == 'refs/heads/main'
-    needs: [build, e2e, lint]
+    needs: [build, e2e, unit, lint]
     steps:
       - uses: actions/checkout@v6
       - uses: cachix/cachix-action@v17
