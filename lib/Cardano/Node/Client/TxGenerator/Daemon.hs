@@ -171,6 +171,7 @@ import Data.List (maximumBy)
 import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Void (Void)
 import Data.Word (Word16, Word32, Word64)
@@ -608,6 +609,48 @@ buildSignSubmit
             Right tx -> do
                 let signed = addKeyWitness faucetSKey tx
                     inputs = signed ^. bodyTxL . inputsTxBodyL
+                    -- Computed locally from the signed
+                    -- bytes; matches the txId that the
+                    -- relay would assign on accept.
+                    -- 'refillTx' is deterministic in
+                    -- 'currentIdx' + 'amount' + the chosen
+                    -- faucet input, so a prior submit
+                    -- attempt that elicited
+                    -- 'ConnectionLost' would have produced
+                    -- the SAME txId.
+                    txId = txIdTx signed
+                    freshIxn = ledgerToIndexerTxIn txId 0
+                    awaitTimeout =
+                        Just (dcAwaitTimeoutSeconds cfg)
+                    -- Bias-low timeout for the
+                    -- recovery-await on uncertain-submit
+                    -- paths (ConnectionLost,
+                    -- "already-included"). Long enough
+                    -- for a fresh block carrying the prior
+                    -- submission to be observed; short
+                    -- enough that genuine non-landing
+                    -- failures don't stall the composer.
+                    recoveryAwait = Just 5
+                    finishOk awaited = do
+                        let txHex = txIdToHex txId
+                        writeNextHDIndex
+                            (nextHDIndexPath (dcStateDir cfg))
+                            (currentIdx + 1)
+                        atomically
+                            ( writeTVar
+                                lastTxIdVar
+                                (Just txHex)
+                            )
+                        pure
+                            ( currentIdx + 1
+                            , RefillOk
+                                { rfOkTxId = txHex
+                                , rfOkFreshIndex = currentIdx
+                                , rfOkValueLovelace =
+                                    unCoin amount
+                                , rfOkAwaited = awaited
+                                }
+                            )
                 inputsOk <- verifyInputsUnspent provider inputs
                 if not inputsOk
                     then
@@ -616,43 +659,97 @@ buildSignSubmit
                             , RefillFail IndexNotReady
                             )
                     else do
-                        result <- submitTx submitter signed
-                        case result of
-                            Rejected reason -> do
+                        -- Wrap submitTx narrowly so a
+                        -- bearer-close mid-submit can be
+                        -- recovered via awaitTxIn — the
+                        -- relay may have already accepted
+                        -- our tx and the daemon just lost
+                        -- the response.
+                        submitOutcome <-
+                            E.try @ConnectionLost
+                                (submitTx submitter signed)
+                        case submitOutcome of
+                            Right (Submitted _) -> do
+                                obs <-
+                                    awaitTxIn
+                                        idx
+                                        freshIxn
+                                        awaitTimeout
+                                finishOk
+                                    ( isJust
+                                        ( obs ::
+                                            Maybe AwaitObservation
+                                        )
+                                    )
+                            Right (Rejected reason) -> do
                                 let reasonText =
                                         Text.decodeUtf8With
                                             (\_ _ -> Just '\xFFFD')
                                             reason
-                                pure
-                                    ( currentIdx
-                                    , RefillFail
-                                        (SubmitRejected reasonText)
-                                    )
-                            Submitted txId -> do
-                                let freshIxn =
-                                        ledgerToIndexerTxIn txId 0
-                                    timeoutS =
-                                        Just (dcAwaitTimeoutSeconds cfg)
-                                obs <- awaitTxIn idx freshIxn timeoutS
-                                let awaited = isJust (obs :: Maybe AwaitObservation)
-                                    txHex = txIdToHex txId
-                                writeNextHDIndex
-                                    (nextHDIndexPath (dcStateDir cfg))
-                                    (currentIdx + 1)
-                                atomically
-                                    ( writeTVar
-                                        lastTxIdVar
-                                        (Just txHex)
-                                    )
-                                pure
-                                    ( currentIdx + 1
-                                    , RefillOk
-                                        { rfOkTxId = txHex
-                                        , rfOkFreshIndex = currentIdx
-                                        , rfOkValueLovelace = unCoin amount
-                                        , rfOkAwaited = awaited
-                                        }
-                                    )
+                                -- The relay's
+                                -- "already been included"
+                                -- rejection means a prior
+                                -- in-flight submission of
+                                -- THIS exact tx (build is
+                                -- deterministic) landed on
+                                -- the chain. Verify by
+                                -- awaiting the
+                                -- change-output briefly;
+                                -- on observation, treat
+                                -- the request as having
+                                -- succeeded against the
+                                -- prior submission.
+                                if "already been included"
+                                    `Text.isInfixOf` reasonText
+                                    then do
+                                        obs <-
+                                            awaitTxIn
+                                                idx
+                                                freshIxn
+                                                recoveryAwait
+                                        case obs of
+                                            Just _ ->
+                                                finishOk True
+                                            Nothing ->
+                                                pure
+                                                    ( currentIdx
+                                                    , RefillFail
+                                                        ( SubmitRejected
+                                                            reasonText
+                                                        )
+                                                    )
+                                    else
+                                        pure
+                                            ( currentIdx
+                                            , RefillFail
+                                                ( SubmitRejected
+                                                    reasonText
+                                                )
+                                            )
+                            Left ConnectionLost -> do
+                                -- Bearer died mid-submit.
+                                -- The submission may or
+                                -- may not have landed on
+                                -- the relay. Wait briefly
+                                -- for the change-output;
+                                -- on observation, treat
+                                -- as success. Otherwise
+                                -- IndexNotReady so the
+                                -- composer retries on the
+                                -- next tick.
+                                obs <-
+                                    awaitTxIn
+                                        idx
+                                        freshIxn
+                                        recoveryAwait
+                                case obs of
+                                    Just _ -> finishOk True
+                                    Nothing ->
+                                        pure
+                                            ( currentIdx
+                                            , RefillFail
+                                                IndexNotReady
+                                            )
 
 -- ----------------------------------------------------------------------
 -- Transact arm (User Story 1 / T011)
