@@ -15,6 +15,7 @@ import Cardano.Node.Client.TxGenerator.PopulationSpec qualified as TxGeneratorPo
 import Cardano.Node.Client.TxGenerator.SelectionSpec qualified as TxGeneratorSelectionSpec
 import Cardano.Node.Client.TxGenerator.ServerSpec qualified as TxGeneratorServerSpec
 import Cardano.Node.Client.TxGenerator.SnapshotSpec qualified as TxGeneratorSnapshotSpec
+import Cardano.Node.Client.UTxOIndexer.DaemonSpec qualified as UTxOIndexerDaemonSpec
 import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.PersistenceSpec qualified as UTxOIndexerPersistenceSpec
 import Cardano.Node.Client.UTxOIndexer.ServerSpec qualified as UTxOIndexerServerSpec
@@ -33,6 +34,7 @@ main = hspec $ do
     UTxOIndexerSpec.spec
     UTxOIndexerServerSpec.spec
     UTxOIndexerPersistenceSpec.spec
+    UTxOIndexerDaemonSpec.spec
     N2CProbeSpec.spec
     N2CTraceSpec.spec
     TxGeneratorFanoutSpec.spec
