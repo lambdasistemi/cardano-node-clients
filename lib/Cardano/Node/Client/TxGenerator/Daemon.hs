@@ -622,15 +622,27 @@ buildSignSubmit
                     freshIxn = ledgerToIndexerTxIn txId 0
                     awaitTimeout =
                         Just (dcAwaitTimeoutSeconds cfg)
-                    -- Bias-low timeout for the
-                    -- recovery-await on uncertain-submit
-                    -- paths (ConnectionLost,
-                    -- "already-included"). Long enough
-                    -- for a fresh block carrying the prior
-                    -- submission to be observed; short
-                    -- enough that genuine non-landing
-                    -- failures don't stall the composer.
-                    recoveryAwait = Just 5
+                    -- Recovery-await on uncertain-submit
+                    -- paths (ConnectionLost or
+                    -- "already-included"). Tuned to the
+                    -- configured 'dcAwaitTimeoutSeconds'
+                    -- so under aggressive fault injection
+                    -- the indexer has the same window to
+                    -- observe the change-output as the
+                    -- happy-path 'Submitted txId' branch.
+                    -- The previous 5 s constant was too
+                    -- short under the Antithesis workload:
+                    -- the indexer is mid-reconnect itself
+                    -- when this fires, and 5 s isn't
+                    -- enough for it to see the block that
+                    -- carries the prior in-flight tx.
+                    -- Empirically, 'tx_generator_refill_landed'
+                    -- examples land at ~57 s vtime while
+                    -- 'tx_generator_refill_submit_rejected'
+                    -- fires at ~70-91 s — a 30 s window is
+                    -- inside that gap.
+                    recoveryAwait =
+                        Just (dcAwaitTimeoutSeconds cfg)
                     finishOk awaited = do
                         let txHex = txIdToHex txId
                         writeNextHDIndex
