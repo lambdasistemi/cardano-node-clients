@@ -714,6 +714,28 @@ buildSignSubmit
                                 if "already been included"
                                     `Text.isInfixOf` reasonText
                                     then do
+                                        -- awaitTxIn timeout
+                                        -- here is *uncertain*:
+                                        -- the prior submission
+                                        -- landed on the relay
+                                        -- but the change-output
+                                        -- never appeared on the
+                                        -- best chain — most
+                                        -- likely the carrying
+                                        -- block was rolled
+                                        -- back. Treat as
+                                        -- transient
+                                        -- (IndexNotReady) so
+                                        -- the composer retries;
+                                        -- next tick the rebuilt
+                                        -- tx will spend a
+                                        -- different
+                                        -- (post-rollback)
+                                        -- faucet UTxO and
+                                        -- submit cleanly,
+                                        -- instead of firing the
+                                        -- always-assertion on
+                                        -- SubmitRejected.
                                         obs <-
                                             awaitTxIn
                                                 idx
@@ -726,9 +748,7 @@ buildSignSubmit
                                                 pure
                                                     ( currentIdx
                                                     , RefillFail
-                                                        ( SubmitRejected
-                                                            reasonText
-                                                        )
+                                                        IndexNotReady
                                                     )
                                     else
                                         pure
