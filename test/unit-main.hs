@@ -2,8 +2,6 @@ module Main (main) where
 
 import Test.Hspec (hspec)
 
-import Cardano.Node.Client.Adversary.ChainPointsSpec qualified as AdversaryChainPointsSpec
-import Cardano.Node.Client.Adversary.ServerSpec qualified as AdversaryServerSpec
 import Cardano.Node.Client.BalanceSpec qualified as BalanceSpec
 import Cardano.Node.Client.N2C.ProbeSpec qualified as N2CProbeSpec
 import Cardano.Node.Client.N2C.TraceSpec qualified as N2CTraceSpec
@@ -25,8 +23,6 @@ import Data.List.SampleFibonacciSpec qualified as SampleFibonacciSpec
 main :: IO ()
 main = hspec $ do
     SampleFibonacciSpec.spec
-    AdversaryChainPointsSpec.spec
-    AdversaryServerSpec.spec
     BalanceSpec.spec
     TxBuildSpec.spec
     TxBuildGoldenSpec.spec

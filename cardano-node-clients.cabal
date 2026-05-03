@@ -41,14 +41,6 @@ library
   hs-source-dirs:   lib
   default-language: GHC2021
   exposed-modules:
-    Cardano.Node.Client.Adversary.Application
-    Cardano.Node.Client.Adversary.ChainPoints
-    Cardano.Node.Client.Adversary.ChainSync.Codec
-    Cardano.Node.Client.Adversary.ChainSync.Connection
-    Cardano.Node.Client.Adversary.Daemon
-    Cardano.Node.Client.Adversary.RandomSource
-    Cardano.Node.Client.Adversary.Server
-    Cardano.Node.Client.Adversary.Types
     Cardano.Node.Client.Balance
     Cardano.Node.Client.Evaluate
     Cardano.Node.Client.Ledger
@@ -223,18 +215,6 @@ executable cardano-tx-generator
     , base
     , cardano-node-clients
 
-executable cardano-adversary
-  import:           warnings
-  hs-source-dirs:   app/cardano-adversary
-  main-is:          Main.hs
-  default-language: GHC2021
-  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
-  build-depends:
-    , base
-    , cardano-node-clients
-    , network
-    , ouroboros-network
-
 test-suite unit-tests
   import:           warnings
   type:             exitcode-stdio-1.0
@@ -242,8 +222,6 @@ test-suite unit-tests
   main-is:          unit-main.hs
   default-language: GHC2021
   other-modules:
-    Cardano.Node.Client.Adversary.ChainPointsSpec
-    Cardano.Node.Client.Adversary.ServerSpec
     Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
