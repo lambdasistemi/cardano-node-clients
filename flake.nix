@@ -123,14 +123,8 @@
             cardano-tx-generator =
               components.exes.cardano-tx-generator;
             utxo-indexer = components.exes.utxo-indexer;
-            cardano-adversary =
-              components.exes.cardano-adversary;
             cardano-tx-generator-image =
               import ./nix/docker-image.nix {
-                inherit pkgs components imageTag;
-              };
-            cardano-adversary-image =
-              import ./nix/cardano-adversary-docker-image.nix {
                 inherit pkgs components imageTag;
               };
           };
@@ -145,12 +139,6 @@
             utxo-indexer = {
               type = "app";
               program = "${components.exes.utxo-indexer}/bin/utxo-indexer";
-            };
-            cardano-adversary = {
-              type = "app";
-              program = "${
-                  components.exes.cardano-adversary
-                }/bin/cardano-adversary";
             };
           };
           devShells.default = project.shell;
