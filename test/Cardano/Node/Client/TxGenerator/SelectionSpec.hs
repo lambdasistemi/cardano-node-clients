@@ -36,7 +36,10 @@ import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
 import Cardano.Ledger.Keys (KeyHash (..))
 import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Ledger.Val (inject)
-import Cardano.Node.Client.Provider (Provider (..))
+import Cardano.Node.Client.Provider (
+    Provider (..),
+    singleShotWithAcquired,
+ )
 import Cardano.Node.Client.TxGenerator.Selection (
     pickSourceIndex,
     verifyInputsUnspent,
@@ -299,19 +302,23 @@ touch them.
 stubProvider ::
     Map TxIn (TxOut ConwayEra) -> Provider IO
 stubProvider tip =
-    Provider
-        { queryUTxOs = const (pure [])
-        , queryUTxOByTxIn = pure . Map.restrictKeys tip
-        , queryProtocolParams =
-            pure (unused "queryProtocolParams")
-        , evaluateTx = \_ ->
-            pure (unused "evaluateTx")
-        , posixMsToSlot = \_ ->
-            pure (unused "posixMsToSlot")
-        , posixMsCeilSlot = \_ ->
-            pure (unused "posixMsCeilSlot")
-        }
+    provider
   where
+    provider =
+        Provider
+            { withAcquired =
+                singleShotWithAcquired provider
+            , queryUTxOs = const (pure [])
+            , queryUTxOByTxIn = pure . Map.restrictKeys tip
+            , queryProtocolParams =
+                pure (unused "queryProtocolParams")
+            , evaluateTx = \_ ->
+                pure (unused "evaluateTx")
+            , posixMsToSlot = \_ ->
+                pure (unused "posixMsToSlot")
+            , posixMsCeilSlot = \_ ->
+                pure (unused "posixMsCeilSlot")
+            }
     unused name =
         error
             ( "stubProvider: "

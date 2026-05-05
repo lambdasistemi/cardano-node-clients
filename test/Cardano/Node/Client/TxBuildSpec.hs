@@ -121,7 +121,10 @@ import Cardano.Node.Client.Balance (
  )
 import Cardano.Node.Client.Evaluate (evaluateAndBalance)
 import Cardano.Node.Client.Ledger (ConwayTx)
-import Cardano.Node.Client.Provider (Provider (..))
+import Cardano.Node.Client.Provider (
+    Provider (..),
+    singleShotWithAcquired,
+ )
 import Cardano.Node.Client.TxBuild
 import Cardano.Slotting.Slot (SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
@@ -1770,21 +1773,26 @@ outputCountingProvider ::
     Int ->
     Provider IO
 outputCountingProvider pp perOutput =
-    Provider
-        { queryUTxOs = const (pure [])
-        , queryUTxOByTxIn = const (pure Map.empty)
-        , queryProtocolParams = pure pp
-        , evaluateTx =
-            pure
-                . Map.singleton
-                    (ConwaySpending (AsIx 0))
-                . Right
-                . outputCountExUnits perOutput
-        , posixMsToSlot =
-            pure . SlotNo . fromIntegral
-        , posixMsCeilSlot =
-            pure . SlotNo . fromIntegral
-        }
+    provider
+  where
+    provider =
+        Provider
+            { withAcquired =
+                singleShotWithAcquired provider
+            , queryUTxOs = const (pure [])
+            , queryUTxOByTxIn = const (pure Map.empty)
+            , queryProtocolParams = pure pp
+            , evaluateTx =
+                pure
+                    . Map.singleton
+                        (ConwaySpending (AsIx 0))
+                    . Right
+                    . outputCountExUnits perOutput
+            , posixMsToSlot =
+                pure . SlotNo . fromIntegral
+            , posixMsCeilSlot =
+                pure . SlotNo . fromIntegral
+            }
 
 redeemerExUnits ::
     ConwayPlutusPurpose AsIx ConwayEra ->
