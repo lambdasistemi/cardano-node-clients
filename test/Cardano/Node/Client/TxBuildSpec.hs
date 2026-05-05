@@ -43,6 +43,7 @@ import Cardano.Ledger.Api.PParams (
  )
 import Cardano.Ledger.Api.Tx (
     auxDataTxL,
+    estimateMinFeeTx,
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
@@ -114,6 +115,7 @@ import Cardano.Ledger.TxIn (
     TxIn (..),
  )
 import Cardano.Node.Client.Balance (
+    BalanceError (..),
     BalanceResult (..),
     balanceTx,
  )
@@ -1570,20 +1572,27 @@ collateralFieldsSpec =
                         expectationFailure $ show err
                     Right tx -> do
                         -- The fee returned by build must
-                        -- be at least estimateMinFeeTx of
-                        -- the final body; otherwise the
-                        -- chain would reject for
-                        -- FeeTooSmallUTxO. We don't have
-                        -- estimateMinFeeTx in scope here,
-                        -- but a positive fee that
-                        -- balances the body is enough to
-                        -- prove the loop converged with
-                        -- the new fields counted.
-                        let Coin fee =
+                        -- be at least estimateMinFeeTx
+                        -- of the final body — otherwise
+                        -- the chain rejects with
+                        -- FeeTooSmallUTxO. This pins
+                        -- down that the fee fixpoint
+                        -- accounts for the bytes of
+                        -- total_collateral and
+                        -- collateral_return.
+                        let fee =
                                 tx
                                     ^. bodyTxL
                                         . feeTxBodyL
-                        fee `shouldSatisfy` (> 0)
+                            estimated =
+                                estimateMinFeeTx
+                                    pp
+                                    tx
+                                    1 -- key witnesses
+                                    0 -- Byron witnesses
+                                    0 -- ref-script bytes
+                        fee
+                            `shouldSatisfy` (>= estimated)
 
         it
             "omits both fields for a tx with no script \
@@ -1674,6 +1683,51 @@ collateralFieldsSpec =
                                 expectationFailure
                                     "expected collateral_return \
                                     \to be set"
+
+        it
+            "surfaces CollateralShortfall when the \
+            \collateral input lovelace is below the \
+            \protocol-required total_collateral"
+            $ do
+                -- Tiny collateral input: covers minUtxo
+                -- for emptyPParams (which has zero
+                -- per-byte cost so any coin clears
+                -- 'getMinCoinTxOut') but is well below
+                -- ceil(fee × 150 / 100).
+                let tinyCollUtxo =
+                        ( mkTxIn 9
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 1_000))
+                        )
+                    mockEval =
+                        outputCountingEval 200_000
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [tinyCollUtxo, scriptUtxo]
+                        []
+                        (mkAddr 1)
+                        scriptProg
+                case result of
+                    Left
+                        ( BalanceFailed
+                                ( CollateralShortfall
+                                        required
+                                        available
+                                    )
+                            ) -> do
+                            required `shouldSatisfy` (> available)
+                            available `shouldBe` Coin 1_000
+                    Left err ->
+                        expectationFailure $
+                            "expected CollateralShortfall, got "
+                                <> show err
+                    Right _ ->
+                        expectationFailure
+                            "expected CollateralShortfall"
 
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
