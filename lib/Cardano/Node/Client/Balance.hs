@@ -114,6 +114,10 @@ data BalanceError
       InsufficientFee !Coin !Coin
     | -- | Fee did not converge within 10 iterations.
       FeeNotConverged
+    | -- | Collateral inputs supply less lovelace than the
+      --   protocol-required @ceil(fee × collateralPercent / 100)@.
+      --   Carries @(required, available)@.
+      CollateralShortfall !Coin !Coin
     deriving (Eq, Show)
 
 {- | Balance a transaction by adding input UTxOs
