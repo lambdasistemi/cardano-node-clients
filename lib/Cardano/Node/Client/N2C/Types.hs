@@ -13,7 +13,9 @@ protocol-parameter queries) and LocalTxSubmission
 
 Communication is channel-based: callers enqueue
 requests into a 'TBQueue' and block on a 'TMVar'
-for the result.
+for the result. Acquired sessions use a second
+queue that is served while the LocalStateQuery
+client remains in the acquired state.
 -}
 module Cardano.Node.Client.N2C.Types (
     -- * Channel types
@@ -21,6 +23,9 @@ module Cardano.Node.Client.N2C.Types (
     LTxSChannel (..),
 
     -- * Request wrappers
+    AcquiredLSQ (..),
+    AcquiredLSQRequest (..),
+    LSQRequest (..),
     SomeLSQQuery (..),
     TxSubmitRequest (..),
 
@@ -48,14 +53,48 @@ data SomeLSQQuery where
         TMVar result ->
         SomeLSQQuery
 
+{- | Commands accepted while the protocol client is
+already acquired.
+-}
+data AcquiredLSQRequest where
+    AcquiredLSQQuery ::
+        Query Block result ->
+        TMVar result ->
+        AcquiredLSQRequest
+    AcquiredLSQRelease ::
+        TMVar () ->
+        AcquiredLSQRequest
+
+-- | Internal handle for an acquired LSQ session.
+newtype AcquiredLSQ = AcquiredLSQ
+    { acquiredLSQRequests :: TBQueue AcquiredLSQRequest
+    }
+
+{- | Requests accepted by the idle LSQ client.
+
+One-shot queries acquire, query, and release. Acquired
+sessions acquire once, then serve commands from the
+session queue until release.
+-}
+data LSQRequest where
+    LSQOneShot ::
+        SomeLSQQuery ->
+        LSQRequest
+    LSQAcquire ::
+        AcquiredLSQ ->
+        TMVar () ->
+        LSQRequest
+
 {- | Channel for communicating with the
 LocalStateQuery mini-protocol client.
 
-Callers enqueue a 'SomeLSQQuery' and then block
-on the embedded 'TMVar' to receive the result.
+Callers enqueue an 'LSQRequest'. One-shot callers
+block on the embedded query 'TMVar'. Acquired-session
+callers wait for the acquire acknowledgement, then
+send commands to the acquired-session queue.
 -}
 newtype LSQChannel = LSQChannel
-    { lsqRequests :: TBQueue SomeLSQQuery
+    { lsqRequests :: TBQueue LSQRequest
     }
 
 {- | A transaction submission request bundled with
