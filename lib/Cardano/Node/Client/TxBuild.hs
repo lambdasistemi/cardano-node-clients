@@ -313,6 +313,9 @@ data TxInstr q e a where
     SetValidFrom :: SlotNo -> TxInstr q e ()
     -- | Set the upper validity bound.
     SetValidTo :: SlotNo -> TxInstr q e ()
+    -- | Override the address that receives the
+    --     collateral-return output. Last-write-wins.
+    SetCollReturn :: Addr -> TxInstr q e ()
     -- | Peek at the final Tx (fixpoint).
     Peek ::
         (ConwayTx -> Convergence a) ->
@@ -556,6 +559,7 @@ data TxState e = TxState
         Map ScriptHash (Script ConwayEra)
     , tsValidFrom :: StrictMaybe SlotNo
     , tsValidTo :: StrictMaybe SlotNo
+    , tsCollReturnAddr :: StrictMaybe Addr
     , tsChecks :: [ConwayTx -> Check e]
     }
 
@@ -573,6 +577,7 @@ emptyState =
         , tsScripts = Map.empty
         , tsValidFrom = SNothing
         , tsValidTo = SNothing
+        , tsCollReturnAddr = SNothing
         , tsChecks = []
         }
 
@@ -693,6 +698,13 @@ interpretWithM runCtx currentTx = go emptyState True
             go
                 st
                     { tsValidTo = SJust slot
+                    }
+                conv
+                (k ())
+        SetCollReturn addr :>>= k ->
+            go
+                st
+                    { tsCollReturnAddr = SJust addr
                     }
                 conv
                 (k ())
