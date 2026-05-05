@@ -100,6 +100,7 @@ import Cardano.Ledger.TxIn (
     TxId (..),
     TxIn (..),
  )
+import Cardano.Node.Client.Balance (CollateralUtxos (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxBuild (
     BuildOptions (..),
@@ -477,7 +478,8 @@ buildGoldenTx expected inputCoins =
         ]
     goldenBuildOptions =
         defaultBuildOptions
-            { boCollateralUtxos = syntheticCollateralUtxos
+            { boCollateralUtxos =
+                CollateralUtxos syntheticCollateralUtxos
             }
 
 selectChangeAddr ::

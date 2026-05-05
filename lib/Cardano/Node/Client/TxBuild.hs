@@ -161,6 +161,7 @@ import Cardano.Ledger.Api.Tx.Wits (
  )
 import Cardano.Ledger.BaseTypes (
     StrictMaybe (SJust, SNothing),
+    strictMaybeToMaybe,
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
@@ -196,6 +197,7 @@ import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Balance (
     BalanceError,
     BalanceResult (..),
+    CollateralUtxos (..),
     balanceTxWith,
     computeScriptIntegrity,
     evalBudgetExUnits,
@@ -924,7 +926,7 @@ data BuildOptions = BuildOptions
     -- newer side, and that delta lands as
     -- 'PlutusFailure' at submit time even though the
     -- shape of the tx is correct.
-    , boCollateralUtxos :: [(TxIn, TxOut ConwayEra)]
+    , boCollateralUtxos :: CollateralUtxos
     -- ^ Resolution map for the body's collateral
     -- inputs (issue #124). Used to compute the
     -- @total_collateral@ / @collateral_return@
@@ -932,13 +934,17 @@ data BuildOptions = BuildOptions
     -- NOT added to the body's @inputs@ — they only
     -- contribute lovelace to the collateral fields.
     --
-    -- Pass @[]@ (the default) when the program uses
-    -- the same UTxO for both a regular @spend@ and a
-    -- @collateral@ instruction, since 'inputUtxos'
-    -- already covers both lookups in that case.
-    -- Pass the collateral-only UTxOs here when the
-    -- collateral inputs are different from the
-    -- regular spend inputs.
+    -- Pass @CollateralUtxos []@ (the default) when
+    -- the program uses the same UTxO for both a
+    -- regular @spend@ and a @collateral@ instruction,
+    -- since 'inputUtxos' already covers both lookups
+    -- in that case. Pass the collateral-only UTxOs
+    -- here when the collateral inputs are different
+    -- from the regular spend inputs.
+    --
+    -- This field is input data rather than a tunable
+    -- knob; it lives here for backwards compatibility
+    -- with the @build@ / @buildWith@ signatures.
     }
 
 -- | All defaults preserve pre-'buildWith' behaviour.
@@ -946,7 +952,7 @@ defaultBuildOptions :: BuildOptions
 defaultBuildOptions =
     BuildOptions
         { boExUnitsMargin = id
-        , boCollateralUtxos = []
+        , boCollateralUtxos = CollateralUtxos []
         }
 
 build ::
@@ -1056,15 +1062,6 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
             Map.toList evalResult
         ]
 
-    -- \| Resolve the collateral-return override
-    -- address from interpreter state. Threaded into
-    -- 'balanceTxWith' so the Conway @collateral_return@
-    -- output's address respects 'setCollateralReturn'
-    -- when the caller used it.
-    collReturnFor st = case tsCollReturnAddr st of
-        SJust a -> Just a
-        SNothing -> Nothing
-
     balanceWithEval st tx evalResult =
         balanceTxWith
             pp
@@ -1072,7 +1069,7 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
             (boCollateralUtxos opts)
             refUtxos
             changeAddr
-            (collReturnFor st)
+            (strictMaybeToMaybe (tsCollReturnAddr st))
             (patchExUnits tx evalResult)
 
     -- \| One iteration: interpret, assemble, eval,
@@ -1144,7 +1141,7 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                                     (boCollateralUtxos opts)
                                     refUtxos
                                     changeAddr
-                                    (collReturnFor st)
+                                    (strictMaybeToMaybe (tsCollReturnAddr st))
                                     patchedTx of
                                     Left err ->
                                         pure $
@@ -1401,7 +1398,7 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                         (boCollateralUtxos opts)
                         refUtxos
                         changeAddr
-                        (collReturnFor st')
+                        (strictMaybeToMaybe (tsCollReturnAddr st'))
                         tx' of
                         Left _ ->
                             -- Can't balance at mid
@@ -1478,7 +1475,7 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
             (boCollateralUtxos opts)
             refUtxos
             changeAddr
-            (collReturnFor st')
+            (strictMaybeToMaybe (tsCollReturnAddr st'))
             patched of
             Left err ->
                 pure $ Left $ BalanceFailed err

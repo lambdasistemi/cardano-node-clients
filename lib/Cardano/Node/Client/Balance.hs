@@ -31,6 +31,7 @@ module Cardano.Node.Client.Balance (
     balanceTx,
     balanceTxWith,
     BalanceResult (..),
+    CollateralUtxos (..),
     balanceFeeLoop,
     refScriptsSize,
 
@@ -85,6 +86,7 @@ import Cardano.Ledger.Api.Tx.Body (
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
     coinTxOutL,
+    getMinCoinTxOut,
     mkBasicTxOut,
     referenceScriptTxOutL,
     valueTxOutL,
@@ -162,7 +164,24 @@ balanceTx ::
     ConwayTx ->
     Either BalanceError BalanceResult
 balanceTx pp inputUtxos refUtxos changeAddr =
-    balanceTxWith pp inputUtxos [] refUtxos changeAddr Nothing
+    balanceTxWith
+        pp
+        inputUtxos
+        (CollateralUtxos [])
+        refUtxos
+        changeAddr
+        Nothing
+
+{- | Newtype wrapper around the resolution map for
+@collateral_inputs@. Distinct from @inputUtxos@ /
+@refUtxos@ at the type level so the three positional
+@[(TxIn, TxOut ConwayEra)]@ arguments to 'balanceTxWith'
+cannot be transposed by accident.
+-}
+newtype CollateralUtxos = CollateralUtxos
+    { unCollateralUtxos :: [(TxIn, TxOut ConwayEra)]
+    }
+    deriving (Eq, Show)
 
 {- | Like 'balanceTx', but also populates the Conway
 @total_collateral@ and @collateral_return@ body
@@ -194,11 +213,11 @@ balanceTxWith ::
     -- | Collateral-only input UTxOs. Used to look up
     --     lovelace for @total_collateral@ /
     --     @collateral_return@ arithmetic; not added
-    --     to the body's @inputs@. Pass @[]@ when no
-    --     collateral resolution is needed (or when
-    --     collateral UTxOs are already in
+    --     to the body's @inputs@. Pass @'CollateralUtxos' []@
+    --     when no collateral resolution is needed
+    --     (or when collateral UTxOs are already in
     --     @inputUtxos@ because they double as spends).
-    [(TxIn, TxOut ConwayEra)] ->
+    CollateralUtxos ->
     [(TxIn, TxOut ConwayEra)] ->
     Addr ->
     -- | Optional collateral-return address override.
@@ -209,7 +228,7 @@ balanceTxWith ::
 balanceTxWith
     pp
     inputUtxos
-    collateralUtxos
+    (CollateralUtxos collateralUtxos)
     refUtxos
     changeAddr
     mCollReturnAddr
@@ -318,33 +337,69 @@ balanceTxWith
             -- body (or leave them absent). Returns the
             -- result so the fee loop can spot a shortfall
             -- and abort.
+            --
+            -- Edge cases the ledger imposes:
+            --   * @collateral_return@, when present, is
+            --     subject to @minUtxo@ like any output;
+            --     a tiny residual would be rejected with
+            --     @BabbageOutputTooSmallUTxO@.
+            --   * @total_collateral@ is a floor, not an
+            --     exact amount — paying more is allowed.
+            --
+            -- So when the residual @avail − tc@ is below
+            -- @minUtxo@, we fold it into @total_collateral@
+            -- (consume the entire collateral, no return).
+            -- This mirrors @cardano-cli transaction build@.
             applyCollateralFields f b =
                 if needsCollateralFields
                     then
-                        let totalColl@(Coin tc) =
+                        let requiredTc@(Coin tc) =
                                 totalCollateralFor f
                             Coin avail = collateralLovelace
+                            tentativeReturn residualCoin =
+                                mkBasicTxOut
+                                    collReturnAddr
+                                    ( MaryValue
+                                        residualCoin
+                                        mempty
+                                    )
+                            residual = Coin (avail - tc)
+                            minReturn =
+                                getMinCoinTxOut
+                                    pp
+                                    (tentativeReturn residual)
                          in if avail < tc
                                 then
                                     Left
                                         ( CollateralShortfall
-                                            totalColl
+                                            requiredTc
                                             collateralLovelace
                                         )
                                 else
-                                    let returnOut =
-                                            mkBasicTxOut
-                                                collReturnAddr
-                                                ( MaryValue
-                                                    (Coin (avail - tc))
-                                                    mempty
-                                                )
-                                     in Right $
-                                            b
-                                                & totalCollateralTxBodyL
-                                                    .~ SJust totalColl
-                                                & collateralReturnTxBodyL
-                                                    .~ SJust returnOut
+                                    if residual == Coin 0
+                                        || residual < minReturn
+                                        then
+                                            -- Cannot emit a
+                                            -- min-UTxO-valid
+                                            -- collateral_return:
+                                            -- consume the
+                                            -- entire collateral
+                                            -- input set as
+                                            -- total_collateral.
+                                            Right $
+                                                b
+                                                    & totalCollateralTxBodyL
+                                                        .~ SJust collateralLovelace
+                                                    & collateralReturnTxBodyL
+                                                        .~ SNothing
+                                        else
+                                            Right $
+                                                b
+                                                    & totalCollateralTxBodyL
+                                                        .~ SJust requiredTc
+                                                    & collateralReturnTxBodyL
+                                                        .~ SJust
+                                                            (tentativeReturn residual)
                     else Right b
             -- Build a candidate tx for a given fee.
             -- Change is clamped to 0 so fee estimation
@@ -373,7 +428,10 @@ balanceTxWith
                         Left err -> Left err
                         Right finalBody ->
                             Right (tx & bodyTxL .~ finalBody)
-            -- Iterate until the fee stabilises.
+            -- Iterate until the fee stabilises. Returns
+            -- the converged fee and the final candidate
+            -- so the post-loop block reuses it instead
+            -- of calling 'buildTx' once more.
             go !n currentFee
                 | n > (10 :: Int) =
                     Left FeeNotConverged
@@ -389,12 +447,14 @@ balanceTxWith
                                         0 -- Byron witnesses
                                         refScriptBytes
                              in if newFee <= currentFee
-                                    then Right currentFee
+                                    then
+                                        Right
+                                            (currentFee, candidate)
                                     else go (n + 1) newFee
             initFee = Coin 0
          in case go 0 initFee of
                 Left err -> Left err
-                Right fee ->
+                Right (fee, result) ->
                     let Coin available = inputCoin
                         Coin required = fee
                         changeAmount =
@@ -406,16 +466,12 @@ balanceTxWith
                                         fee
                                         inputCoin
                                     )
-                            else case buildTx fee of
-                                Left err -> Left err
-                                Right result ->
-                                    let chIdx =
-                                            length origOutputs
-                                     in Right
-                                            ( BalanceResult
-                                                result
-                                                chIdx
-                                            )
+                            else
+                                Right
+                                    ( BalanceResult
+                                        result
+                                        (length origOutputs)
+                                    )
 
 {- | Output function rejected the fee, or the
 iteration did not converge.
