@@ -365,6 +365,9 @@ balanceTxSpec =
                 Left FeeNotConverged ->
                     expectationFailure
                         "expected InsufficientFee"
+                Left (CollateralShortfall _ _) ->
+                    expectationFailure
+                        "expected InsufficientFee"
                 Right _ ->
                     expectationFailure
                         "expected InsufficientFee"

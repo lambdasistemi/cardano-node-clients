@@ -29,6 +29,7 @@ only folds the leftover into a single change output.
 module Cardano.Node.Client.Balance (
     -- * Balancing
     balanceTx,
+    balanceTxWith,
     BalanceResult (..),
     balanceFeeLoop,
     refScriptsSize,
@@ -45,6 +46,7 @@ module Cardano.Node.Client.Balance (
 ) where
 
 import Data.ByteString qualified as BS
+import Data.Maybe (fromMaybe)
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
 import Data.Word (Word32)
@@ -54,6 +56,7 @@ import Cardano.Ledger.Address (Addr)
 import Cardano.Ledger.Alonzo.PParams (
     LangDepView,
     getLanguageView,
+    ppCollateralPercentageL,
  )
 import Cardano.Ledger.Alonzo.Tx (
     ScriptIntegrity (..),
@@ -67,19 +70,27 @@ import Cardano.Ledger.Alonzo.TxWits (
 import Cardano.Ledger.Api.Tx (
     bodyTxL,
     estimateMinFeeTx,
+    witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
+    collateralInputsTxBodyL,
+    collateralReturnTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
+    totalCollateralTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
+    coinTxOutL,
     mkBasicTxOut,
     referenceScriptTxOutL,
     valueTxOutL,
+ )
+import Cardano.Ledger.Api.Tx.Wits (
+    rdmrsTxWitsL,
  )
 import Cardano.Ledger.BaseTypes (
     StrictMaybe (SJust, SNothing),
@@ -150,127 +161,261 @@ balanceTx ::
     -- | Unbalanced transaction
     ConwayTx ->
     Either BalanceError BalanceResult
-balanceTx pp inputUtxos refUtxos changeAddr tx =
-    let body = tx ^. bodyTxL
-        refScriptBytes =
-            refScriptsSize
-                (body ^. referenceInputsTxBodyL)
-                refUtxos
-        valueOf o = let MaryValue c m = o ^. valueTxOutL in (c, m)
-        sumValues ::
-            (Foldable t) =>
-            t (TxOut ConwayEra) ->
-            (Coin, MultiAsset)
-        sumValues =
-            foldl'
-                ( \(Coin a, ma) o ->
-                    let (Coin c, m) = valueOf o
-                     in (Coin (a + c), ma <> m)
-                )
-                (Coin 0, mempty)
-        (inputCoin, inputMA) = sumValues (map snd inputUtxos)
-        newInputs =
-            foldl'
-                (\s (tin, _) -> Set.insert tin s)
-                (body ^. inputsTxBodyL)
-                inputUtxos
-        origOutputs = body ^. outputsTxBodyL
-        -- Sum ADA / multi-assets already committed
-        -- in existing outputs (e.g. asteria + ship
-        -- outputs in a spawn-ship tx).
-        (Coin origAda, origMA) = sumValues origOutputs
-        bodyMint :: MultiAsset
-        bodyMint = body ^. mintTxBodyL
-        -- Residual multi-assets that no existing
-        -- output absorbed: input + mint − output.
-        -- A positive residual indicates minted tokens
-        -- (e.g. a PILOT NFT) or unspent input assets
-        -- that must land in the change output to
-        -- satisfy the ledger's value-conservation
-        -- equation.
-        --
-        -- Negative entries — output references assets
-        -- the balancer wasn't told about — are
-        -- filtered out: the caller has already
-        -- balanced those via inputs not surfaced in
-        -- @inputUtxos@, and the ledger checks
-        -- conservation against the real UTxO state
-        -- at submission time.
-        changeMA :: MultiAsset
-        changeMA =
-            filterMultiAsset
-                (\_ _ q -> q > 0)
-                ( inputMA
-                    <> bodyMint
-                    <> mapMaybeMultiAsset
-                        (\_ _ q -> Just (negate q))
-                        origMA
-                )
-        -- Build a candidate tx for a given fee.
-        -- Change is clamped to 0 so fee estimation
-        -- works even when funds are insufficient.
-        buildTx f =
-            let Coin avail = inputCoin
-                Coin req = f
-                change =
-                    max
-                        0
-                        (avail - req - origAda)
-                changeOut =
-                    mkBasicTxOut
-                        changeAddr
-                        (MaryValue (Coin change) changeMA)
-                finalBody =
-                    body
-                        & inputsTxBodyL
-                            .~ newInputs
-                        & outputsTxBodyL
-                            .~ ( origOutputs
-                                    |> changeOut
-                               )
-                        & feeTxBodyL .~ f
-             in tx & bodyTxL .~ finalBody
-        -- Iterate until the fee stabilises.
-        go !n currentFee
-            | n > (10 :: Int) =
-                Left FeeNotConverged
-            | otherwise =
-                let candidate =
-                        buildTx currentFee
-                    newFee =
-                        estimateMinFeeTx
-                            pp
-                            candidate
-                            1 -- key witnesses
-                            0 -- Byron witnesses
-                            refScriptBytes
-                 in if newFee <= currentFee
-                        then Right currentFee
-                        else go (n + 1) newFee
-        initFee = Coin 0
-     in case go 0 initFee of
-            Left err -> Left err
-            Right fee ->
-                let Coin available = inputCoin
-                    Coin required = fee
-                    changeAmount =
-                        available - required - origAda
-                 in if changeAmount < 0
-                        then
-                            Left
-                                ( InsufficientFee
-                                    fee
-                                    inputCoin
-                                )
-                        else
-                            let result = buildTx fee
-                                chIdx =
-                                    length origOutputs
-                             in Right
-                                    ( BalanceResult
-                                        result
-                                        chIdx
+balanceTx pp inputUtxos refUtxos changeAddr =
+    balanceTxWith pp inputUtxos [] refUtxos changeAddr Nothing
+
+{- | Like 'balanceTx', but also populates the Conway
+@total_collateral@ and @collateral_return@ body
+fields whenever the tx has at least one redeemer
+(a script witness) and at least one collateral
+input. See issue #124.
+
+The third argument is the resolution map for the
+body's @collateral_inputs@ — the TxOuts the body
+already references via 'collateral'. These UTxOs are
+NOT added to @inputs@ (they only contribute lovelace
+to the @total_collateral@ / @collateral_return@
+arithmetic). When the same UTxO is used as both a
+regular spend AND collateral, it's enough to list it
+in @inputUtxos@: this function resolves collateral
+lovelace from the union of both lists.
+
+The fourth-from-last argument is an optional
+override for the @collateral_return@ output's
+address; when 'Nothing', the change address is
+reused. When the body has no redeemers, both fields
+stay absent — this preserves existing behaviour for
+non-script flows.
+-}
+balanceTxWith ::
+    PParams ConwayEra ->
+    -- | Regular spend input UTxOs (added to the body).
+    [(TxIn, TxOut ConwayEra)] ->
+    -- | Collateral-only input UTxOs. Used to look up
+    --     lovelace for @total_collateral@ /
+    --     @collateral_return@ arithmetic; not added
+    --     to the body's @inputs@. Pass @[]@ when no
+    --     collateral resolution is needed (or when
+    --     collateral UTxOs are already in
+    --     @inputUtxos@ because they double as spends).
+    [(TxIn, TxOut ConwayEra)] ->
+    [(TxIn, TxOut ConwayEra)] ->
+    Addr ->
+    -- | Optional collateral-return address override.
+    --     When 'Nothing', the change address is reused.
+    Maybe Addr ->
+    ConwayTx ->
+    Either BalanceError BalanceResult
+balanceTxWith
+    pp
+    inputUtxos
+    collateralUtxos
+    refUtxos
+    changeAddr
+    mCollReturnAddr
+    tx =
+        let body = tx ^. bodyTxL
+            refScriptBytes =
+                refScriptsSize
+                    (body ^. referenceInputsTxBodyL)
+                    refUtxos
+            valueOf o = let MaryValue c m = o ^. valueTxOutL in (c, m)
+            sumValues ::
+                (Foldable t) =>
+                t (TxOut ConwayEra) ->
+                (Coin, MultiAsset)
+            sumValues =
+                foldl'
+                    ( \(Coin a, ma) o ->
+                        let (Coin c, m) = valueOf o
+                         in (Coin (a + c), ma <> m)
+                    )
+                    (Coin 0, mempty)
+            (inputCoin, inputMA) = sumValues (map snd inputUtxos)
+            newInputs =
+                foldl'
+                    (\s (tin, _) -> Set.insert tin s)
+                    (body ^. inputsTxBodyL)
+                    inputUtxos
+            origOutputs = body ^. outputsTxBodyL
+            -- Sum ADA / multi-assets already committed
+            -- in existing outputs (e.g. asteria + ship
+            -- outputs in a spawn-ship tx).
+            (Coin origAda, origMA) = sumValues origOutputs
+            bodyMint :: MultiAsset
+            bodyMint = body ^. mintTxBodyL
+            -- Residual multi-assets that no existing
+            -- output absorbed: input + mint − output.
+            -- A positive residual indicates minted tokens
+            -- (e.g. a PILOT NFT) or unspent input assets
+            -- that must land in the change output to
+            -- satisfy the ledger's value-conservation
+            -- equation.
+            --
+            -- Negative entries — output references assets
+            -- the balancer wasn't told about — are
+            -- filtered out: the caller has already
+            -- balanced those via inputs not surfaced in
+            -- @inputUtxos@, and the ledger checks
+            -- conservation against the real UTxO state
+            -- at submission time.
+            changeMA :: MultiAsset
+            changeMA =
+                filterMultiAsset
+                    (\_ _ q -> q > 0)
+                    ( inputMA
+                        <> bodyMint
+                        <> mapMaybeMultiAsset
+                            (\_ _ q -> Just (negate q))
+                            origMA
+                    )
+            bodyCollIns = body ^. collateralInputsTxBodyL
+            hasRedeemers =
+                let Redeemers rdmrs =
+                        tx ^. witsTxL . rdmrsTxWitsL
+                 in not (null rdmrs)
+            -- Whether the tx requires explicit Conway
+            -- collateral arithmetic (CIP-40).
+            needsCollateralFields =
+                not (Set.null bodyCollIns) && hasRedeemers
+            -- Lovelace sum of the UTxOs referenced by the
+            -- collateral input set. Resolved from the
+            -- union of @collateralUtxos@ and @inputUtxos@
+            -- (the same UTxO can legitimately appear in
+            -- both, e.g. a fee UTxO that is also offered
+            -- as collateral; 'Set'-deduplication of TxIns
+            -- via the membership test prevents
+            -- double-counting).
+            collateralLovelace =
+                let lookupSum =
+                        foldl'
+                            ( \(seen, Coin acc) (tin, o) ->
+                                if Set.member tin bodyCollIns
+                                    && not (Set.member tin seen)
+                                    then
+                                        let Coin c =
+                                                o ^. coinTxOutL
+                                         in ( Set.insert tin seen
+                                            , Coin (acc + c)
+                                            )
+                                    else (seen, Coin acc)
+                            )
+                            (Set.empty, Coin 0)
+                    (_, total) =
+                        lookupSum (collateralUtxos ++ inputUtxos)
+                 in total
+            collReturnAddr = fromMaybe changeAddr mCollReturnAddr
+            -- Compute total_collateral for a given fee:
+            -- ceil(fee × collateralPercent / 100). The
+            -- ledger requires this exact formula.
+            collateralPercent :: Integer
+            collateralPercent =
+                fromIntegral (pp ^. ppCollateralPercentageL)
+            ceilDiv a b = (a + b - 1) `div` b
+            totalCollateralFor (Coin f) =
+                Coin (ceilDiv (f * collateralPercent) 100)
+            -- Apply the Conway collateral fields to a
+            -- body (or leave them absent). Returns the
+            -- result so the fee loop can spot a shortfall
+            -- and abort.
+            applyCollateralFields f b =
+                if needsCollateralFields
+                    then
+                        let totalColl@(Coin tc) =
+                                totalCollateralFor f
+                            Coin avail = collateralLovelace
+                         in if avail < tc
+                                then
+                                    Left
+                                        ( CollateralShortfall
+                                            totalColl
+                                            collateralLovelace
+                                        )
+                                else
+                                    let returnOut =
+                                            mkBasicTxOut
+                                                collReturnAddr
+                                                ( MaryValue
+                                                    (Coin (avail - tc))
+                                                    mempty
+                                                )
+                                     in Right $
+                                            b
+                                                & totalCollateralTxBodyL
+                                                    .~ SJust totalColl
+                                                & collateralReturnTxBodyL
+                                                    .~ SJust returnOut
+                    else Right b
+            -- Build a candidate tx for a given fee.
+            -- Change is clamped to 0 so fee estimation
+            -- works even when funds are insufficient.
+            buildTx f =
+                let Coin avail = inputCoin
+                    Coin req = f
+                    change =
+                        max
+                            0
+                            (avail - req - origAda)
+                    changeOut =
+                        mkBasicTxOut
+                            changeAddr
+                            (MaryValue (Coin change) changeMA)
+                    baseBody =
+                        body
+                            & inputsTxBodyL
+                                .~ newInputs
+                            & outputsTxBodyL
+                                .~ ( origOutputs
+                                        |> changeOut
+                                   )
+                            & feeTxBodyL .~ f
+                 in case applyCollateralFields f baseBody of
+                        Left err -> Left err
+                        Right finalBody ->
+                            Right (tx & bodyTxL .~ finalBody)
+            -- Iterate until the fee stabilises.
+            go !n currentFee
+                | n > (10 :: Int) =
+                    Left FeeNotConverged
+                | otherwise =
+                    case buildTx currentFee of
+                        Left err -> Left err
+                        Right candidate ->
+                            let newFee =
+                                    estimateMinFeeTx
+                                        pp
+                                        candidate
+                                        1 -- key witnesses
+                                        0 -- Byron witnesses
+                                        refScriptBytes
+                             in if newFee <= currentFee
+                                    then Right currentFee
+                                    else go (n + 1) newFee
+            initFee = Coin 0
+         in case go 0 initFee of
+                Left err -> Left err
+                Right fee ->
+                    let Coin available = inputCoin
+                        Coin required = fee
+                        changeAmount =
+                            available - required - origAda
+                     in if changeAmount < 0
+                            then
+                                Left
+                                    ( InsufficientFee
+                                        fee
+                                        inputCoin
                                     )
+                            else case buildTx fee of
+                                Left err -> Left err
+                                Right result ->
+                                    let chIdx =
+                                            length origOutputs
+                                     in Right
+                                            ( BalanceResult
+                                                result
+                                                chIdx
+                                            )
 
 {- | Output function rejected the fee, or the
 iteration did not converge.
