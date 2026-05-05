@@ -9,14 +9,16 @@
   inputs = {
     haskellNix = {
       url =
-        "github:input-output-hk/haskell.nix/ef52c36b9835c77a255befe2a20075ba71e3bfab";
+        "github:input-output-hk/haskell.nix/8b447d7f57d62fab9249f79bb916bc891e29b9d0";
       inputs.hackage.follows = "hackageNix";
     };
     hackageNix = {
-      url = "github:input-output-hk/hackage.nix/55ba0ca4bcc9690f2ea45335cb2b9e95d8219a04";
+      url = "github:input-output-hk/hackage.nix/b6b4aa4bd699f743238da45c7f43da5a26a822f7";
       flake = false;
     };
     nixpkgs.follows = "haskellNix/nixpkgs-unstable";
+    lintNixpkgs.url =
+      "github:NixOS/nixpkgs/647e5c14cbd5067f44ac86b74f014962df460840";
     flake-parts.url = "github:hercules-ci/flake-parts";
     iohkNix = {
       url =
@@ -34,8 +36,8 @@
     };
   };
 
-  outputs = inputs@{ self, nixpkgs, flake-parts, haskellNix, hackageNix
-    , iohkNix, CHaP, mkdocs, cardano-node, ... }:
+  outputs = inputs@{ self, nixpkgs, lintNixpkgs, flake-parts, haskellNix
+    , hackageNix, iohkNix, CHaP, mkdocs, cardano-node, ... }:
     let
       imageTag =
         self.dirtyShortRev or self.shortRev or "unknown";
@@ -56,6 +58,7 @@
             ];
             inherit system;
           };
+          lintPkgs = import lintNixpkgs { inherit system; };
           indexState = "2026-02-17T10:15:41Z";
           indexTool = { index-state = indexState; };
           fix-libs = { lib, pkgs, ... }: {
@@ -80,16 +83,16 @@
           project = pkgs.haskell-nix.cabalProject' {
             name = "cardano-node-clients";
             src = ./.;
-            compiler-nix-name = "ghc9122";
+            compiler-nix-name = "ghc9123";
             shell = {
-              withHoogle = false;
+              withHoogle = true;
               tools = {
                 cabal = indexTool;
               };
               buildInputs = [
-                pkgs.haskellPackages.cabal-fmt
-                pkgs.haskellPackages.fourmolu
-                pkgs.haskellPackages.hlint
+                lintPkgs.haskellPackages.cabal-fmt
+                lintPkgs.haskellPackages.fourmolu
+                lintPkgs.haskellPackages.hlint
                 pkgs.just
                 pkgs.mkdocs
                 pkgs.curl
@@ -110,7 +113,7 @@
           };
           components = project.hsPkgs.cardano-node-clients.components;
           checks = import ./nix/checks.nix {
-            inherit pkgs components;
+            inherit pkgs components lintPkgs;
             cardanoNode = cardano-node.packages.${system}.cardano-node;
             src = ./.;
           };
