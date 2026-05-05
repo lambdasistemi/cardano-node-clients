@@ -59,6 +59,7 @@ module Cardano.Node.Client.TxBuild (
     -- * Constraints
     validFrom,
     validTo,
+    setCollateralReturn,
     requireSignature,
     attachScript,
 
@@ -195,7 +196,7 @@ import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Balance (
     BalanceError,
     BalanceResult (..),
-    balanceTx,
+    balanceTxWith,
     computeScriptIntegrity,
     evalBudgetExUnits,
     refScriptsSize,
@@ -470,6 +471,23 @@ validFrom = singleton . SetValidFrom
 -- | Set the upper validity bound.
 validTo :: SlotNo -> TxBuild q e ()
 validTo = singleton . SetValidTo
+
+{- | Override the address that receives the
+collateral-return output emitted by 'build' for
+script-bearing Conway txs.
+
+Defaults to the @changeAddr@ argument of 'build'
+when the program never calls this combinator.
+Last-write-wins: calling this multiple times keeps
+only the final address, matching 'validFrom' /
+'validTo'.
+
+For non-script txs (no redeemers) this combinator
+has no effect: 'build' does not emit
+@collateral_return@ regardless. See issue #124.
+-}
+setCollateralReturn :: Addr -> TxBuild q e ()
+setCollateralReturn = singleton . SetCollReturn
 
 -- | Require a key signature.
 requireSignature ::
@@ -891,7 +909,7 @@ the Tx body stabilizes:
 will be added here without breaking 'build', whose
 default behaviour is preserved by 'defaultBuildOptions'.
 -}
-newtype BuildOptions = BuildOptions
+data BuildOptions = BuildOptions
     { boExUnitsMargin :: ExUnits -> ExUnits
     -- ^ Transform each redeemer's evaluated 'ExUnits'
     -- before the integrity hash is recomputed and the
@@ -906,11 +924,30 @@ newtype BuildOptions = BuildOptions
     -- newer side, and that delta lands as
     -- 'PlutusFailure' at submit time even though the
     -- shape of the tx is correct.
+    , boCollateralUtxos :: [(TxIn, TxOut ConwayEra)]
+    -- ^ Resolution map for the body's collateral
+    -- inputs (issue #124). Used to compute the
+    -- @total_collateral@ / @collateral_return@
+    -- arithmetic during balancing. These UTxOs are
+    -- NOT added to the body's @inputs@ — they only
+    -- contribute lovelace to the collateral fields.
+    --
+    -- Pass @[]@ (the default) when the program uses
+    -- the same UTxO for both a regular @spend@ and a
+    -- @collateral@ instruction, since 'inputUtxos'
+    -- already covers both lookups in that case.
+    -- Pass the collateral-only UTxOs here when the
+    -- collateral inputs are different from the
+    -- regular spend inputs.
     }
 
 -- | All defaults preserve pre-'buildWith' behaviour.
 defaultBuildOptions :: BuildOptions
-defaultBuildOptions = BuildOptions{boExUnitsMargin = id}
+defaultBuildOptions =
+    BuildOptions
+        { boExUnitsMargin = id
+        , boCollateralUtxos = []
+        }
 
 build ::
     PParams ConwayEra ->
@@ -1019,12 +1056,23 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
             Map.toList evalResult
         ]
 
-    balanceWithEval tx evalResult =
-        balanceTx
+    -- \| Resolve the collateral-return override
+    -- address from interpreter state. Threaded into
+    -- 'balanceTxWith' so the Conway @collateral_return@
+    -- output's address respects 'setCollateralReturn'
+    -- when the caller used it.
+    collReturnFor st = case tsCollReturnAddr st of
+        SJust a -> Just a
+        SNothing -> Nothing
+
+    balanceWithEval st tx evalResult =
+        balanceTxWith
             pp
             inputUtxos
+            (boCollateralUtxos opts)
             refUtxos
             changeAddr
+            (collReturnFor st)
             (patchExUnits tx evalResult)
 
     -- \| One iteration: interpret, assemble, eval,
@@ -1090,11 +1138,13 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                                         patchExUnits
                                             tx
                                             prevEUs
-                                case balanceTx
+                                case balanceTxWith
                                     pp
                                     inputUtxos
+                                    (boCollateralUtxos opts)
                                     refUtxos
                                     changeAddr
+                                    (collReturnFor st)
                                     patchedTx of
                                     Left err ->
                                         pure $
@@ -1143,7 +1193,7 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                 --    pre-balance evaluation, then
                 --    evaluate the balanced body that
                 --    validators will actually see.
-                case balanceWithEval tx evalResult of
+                case balanceWithEval st tx evalResult of
                     Left err ->
                         pure $
                             Left $
@@ -1217,7 +1267,7 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
             -- again so fee and change account for
             -- those final costs without appending a
             -- second change output.
-            case balanceWithEval tx balancedEvalResult of
+            case balanceWithEval st tx balancedEvalResult of
                 Left err ->
                     pure $
                         Left $
@@ -1345,11 +1395,13 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                                 & bodyTxL . feeTxBodyL
                                     .~ mid
                     -- Balance to get change output
-                    case balanceTx
+                    case balanceTxWith
                         pp
                         inputUtxos
+                        (boCollateralUtxos opts)
                         refUtxos
                         changeAddr
+                        (collReturnFor st')
                         tx' of
                         Left _ ->
                             -- Can't balance at mid
@@ -1420,11 +1472,13 @@ buildWith opts pp interpret evaluateTx inputUtxos refUtxos changeAddr prog =
                     & bodyTxL . feeTxBodyL .~ fee
             patched =
                 patchExUnits tx' evalResult
-        case balanceTx
+        case balanceTxWith
             pp
             inputUtxos
+            (boCollateralUtxos opts)
             refUtxos
             changeAddr
+            (collReturnFor st')
             patched of
             Left err ->
                 pure $ Left $ BalanceFailed err

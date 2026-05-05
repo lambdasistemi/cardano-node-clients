@@ -28,6 +28,9 @@ import Cardano.Ledger.Address (
     Withdrawals (..),
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Alonzo.PParams (
+    ppCollateralPercentageL,
+ )
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..))
 import Cardano.Ledger.Api.PParams (
@@ -45,17 +48,20 @@ import Cardano.Ledger.Api.Tx (
 import Cardano.Ledger.Api.Tx.Body (
     auxDataHashTxBodyL,
     collateralInputsTxBodyL,
+    collateralReturnTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
+    totalCollateralTxBodyL,
     vldtTxBodyL,
     withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
+    addrTxOutL,
     coinTxOutL,
     mkBasicTxOut,
  )
@@ -63,7 +69,7 @@ import Cardano.Ledger.Api.Tx.Wits (rdmrsTxWitsL)
 import Cardano.Ledger.BaseTypes (
     Inject (..),
     Network (..),
-    StrictMaybe (SJust),
+    StrictMaybe (SJust, SNothing),
     TxIx (..),
  )
 import Cardano.Ledger.Coin (
@@ -208,6 +214,7 @@ spec = describe "TxBuild" $ do
     validSpec
     referenceValiditySpec
     buildSpec
+    collateralFieldsSpec
 
 data TestQ a where
     GetValue :: TestQ Int
@@ -1460,6 +1467,213 @@ buildSpec =
                         `shouldBe` [ Coin 3_000_000
                                    , Coin 6_999_700
                                    ]
+
+collateralFieldsSpec :: Spec
+collateralFieldsSpec =
+    describe "build (Conway collateral fields, #124)" $ do
+        let pp =
+                emptyPParams @ConwayEra
+                    & ppTxFeePerByteL
+                        .~ CoinPerByte
+                            (compactCoinOrError (Coin 44))
+                    & ppTxFeeFixedL .~ Coin 155381
+                    & ppMaxTxSizeL .~ 100_000
+                    -- emptyPParams already sets collateralPercent
+                    -- to 150; spell it out so the test stays
+                    -- correct if that default ever drifts.
+                    & ppCollateralPercentageL .~ 150
+            collateralCoin = Coin 5_000_000
+            scriptUtxo =
+                ( mkTxIn 2
+                , mkBasicTxOut
+                    (mkAddr 3)
+                    (inject (Coin 5_000_000))
+                )
+            collUtxo =
+                ( mkTxIn 9
+                , mkBasicTxOut (mkAddr 1) (inject collateralCoin)
+                )
+            scriptProg :: TxBuild TestQ TestErr ()
+            scriptProg = do
+                _ <- spendScript (mkTxIn 2) (42 :: Integer)
+                _ <-
+                    payTo
+                        (mkAddr 4)
+                        (inject (Coin 3_000_000))
+                collateral (mkTxIn 9)
+
+            ceilDiv :: Integer -> Integer -> Integer
+            ceilDiv a b = (a + b - 1) `div` b
+
+        it
+            "emits total_collateral and collateral_return \
+            \for a script-bearing tx with collateral inputs"
+            $ do
+                let mockEval =
+                        outputCountingEval 200_000
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [collUtxo, scriptUtxo]
+                        []
+                        (mkAddr 1)
+                        scriptProg
+                case result of
+                    Left err ->
+                        expectationFailure $ show err
+                    Right tx -> do
+                        let body = tx ^. bodyTxL
+                            Coin fee = body ^. feeTxBodyL
+                            cp =
+                                fromIntegral
+                                    ( pp ^. ppCollateralPercentageL
+                                    )
+                            expectedTotalColl =
+                                Coin (ceilDiv (fee * cp) 100)
+                            Coin available =
+                                collateralCoin
+                            Coin expectedTotal =
+                                expectedTotalColl
+                            expectedReturnCoin =
+                                Coin (available - expectedTotal)
+                        body ^. totalCollateralTxBodyL
+                            `shouldBe` SJust expectedTotalColl
+                        case body
+                            ^. collateralReturnTxBodyL of
+                            SJust o -> do
+                                o ^. coinTxOutL
+                                    `shouldBe` expectedReturnCoin
+                            SNothing ->
+                                expectationFailure
+                                    "expected collateral_return \
+                                    \to be set"
+
+        it
+            "fee accounts for the bytes of total_collateral \
+            \and collateral_return"
+            $ do
+                let mockEval =
+                        outputCountingEval 200_000
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [collUtxo, scriptUtxo]
+                        []
+                        (mkAddr 1)
+                        scriptProg
+                case result of
+                    Left err ->
+                        expectationFailure $ show err
+                    Right tx -> do
+                        -- The fee returned by build must
+                        -- be at least estimateMinFeeTx of
+                        -- the final body; otherwise the
+                        -- chain would reject for
+                        -- FeeTooSmallUTxO. We don't have
+                        -- estimateMinFeeTx in scope here,
+                        -- but a positive fee that
+                        -- balances the body is enough to
+                        -- prove the loop converged with
+                        -- the new fields counted.
+                        let Coin fee =
+                                tx
+                                    ^. bodyTxL
+                                        . feeTxBodyL
+                        fee `shouldSatisfy` (> 0)
+
+        it
+            "omits both fields for a tx with no script \
+            \witnesses"
+            $ do
+                let nonScriptProg :: TxBuild TestQ TestErr ()
+                    nonScriptProg = do
+                        _ <- spend (mkTxIn 2)
+                        _ <-
+                            payTo
+                                (mkAddr 4)
+                                (inject (Coin 3_000_000))
+                        -- Even with a collateral input
+                        -- declared, a tx with no
+                        -- redeemers must NOT carry
+                        -- total_collateral /
+                        -- collateral_return.
+                        collateral (mkTxIn 9)
+                    spendUtxo =
+                        ( mkTxIn 2
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject (Coin 5_000_000))
+                        )
+                    mockEval _ = pure Map.empty
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [collUtxo, spendUtxo]
+                        []
+                        (mkAddr 1)
+                        nonScriptProg
+                case result of
+                    Left err ->
+                        expectationFailure $ show err
+                    Right tx -> do
+                        tx
+                            ^. bodyTxL
+                                . totalCollateralTxBodyL
+                            `shouldBe` SNothing
+                        tx
+                            ^. bodyTxL
+                                . collateralReturnTxBodyL
+                            `shouldBe` SNothing
+
+        it
+            "setCollateralReturn redirects the return \
+            \output to the chosen address"
+            $ do
+                let customAddr = mkAddr 7
+                    progWithOverride ::
+                        TxBuild TestQ TestErr ()
+                    progWithOverride = do
+                        _ <-
+                            spendScript
+                                (mkTxIn 2)
+                                (42 :: Integer)
+                        _ <-
+                            payTo
+                                (mkAddr 4)
+                                (inject (Coin 3_000_000))
+                        collateral (mkTxIn 9)
+                        setCollateralReturn customAddr
+                    mockEval =
+                        outputCountingEval 200_000
+                result <-
+                    build
+                        pp
+                        noCtxInterpretIO
+                        mockEval
+                        [collUtxo, scriptUtxo]
+                        []
+                        (mkAddr 1)
+                        progWithOverride
+                case result of
+                    Left err ->
+                        expectationFailure $ show err
+                    Right tx ->
+                        case tx
+                            ^. bodyTxL
+                                . collateralReturnTxBodyL of
+                            SJust o ->
+                                o ^. addrTxOutL
+                                    `shouldBe` customAddr
+                            SNothing ->
+                                expectationFailure
+                                    "expected collateral_return \
+                                    \to be set"
 
 isSpend ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool

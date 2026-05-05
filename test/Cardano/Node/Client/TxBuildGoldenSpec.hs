@@ -102,11 +102,13 @@ import Cardano.Ledger.TxIn (
  )
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxBuild (
+    BuildOptions (..),
     InterpretIO (..),
     TxBuild,
     attachScript,
-    build,
+    buildWith,
     collateral,
+    defaultBuildOptions,
     draft,
     mint,
     output,
@@ -429,7 +431,8 @@ mkTxInFromText txHashText indexText = do
 
 buildGoldenTx :: ConwayTx -> [(TxIn, Coin)] -> IO ConwayTx
 buildGoldenTx expected inputCoins =
-    build
+    buildWith
+        goldenBuildOptions
         goldenBuildPParams
         noCtxInterpretIO
         (\_ -> pure (expectedExUnits expected))
@@ -444,12 +447,38 @@ buildGoldenTx expected inputCoins =
             Right tx ->
                 pure tx
   where
-    expectedOutputs = toList (expected ^. bodyTxL . outputsTxBodyL)
+    expectedBody = expected ^. bodyTxL
+    expectedOutputs = toList (expectedBody ^. outputsTxBodyL)
     changeAddr = selectChangeAddr expectedOutputs
+    -- Synthesise a generous lovelace value for each
+    -- collateral input so the collateral arithmetic
+    -- in 'balanceTxWith' has enough budget to balance
+    -- @total_collateral@ + @collateral_return@. The
+    -- exact value does not affect the assertions in
+    -- 'assertBalancedStructurallyEquivalent' (which
+    -- ignore @total_collateral@ and
+    -- @collateral_return@); what matters is that the
+    -- balancer can complete without
+    -- 'CollateralShortfall'. 100 ADA is large enough
+    -- for any realistic fee × 1.5 (issue #124).
+    collateralIns = Set.toAscList (expectedBody ^. collateralInputsTxBodyL)
+    perCollateralUtxoLovelace = Coin 100_000_000
+    syntheticCollateralUtxos =
+        [ ( txIn
+          , mkBasicTxOut
+                changeAddr
+                (inject perCollateralUtxoLovelace)
+          )
+        | txIn <- collateralIns
+        ]
     inputUtxos =
         [ (txIn, mkBasicTxOut changeAddr (inject coin))
         | (txIn, coin) <- inputCoins
         ]
+    goldenBuildOptions =
+        defaultBuildOptions
+            { boCollateralUtxos = syntheticCollateralUtxos
+            }
 
 selectChangeAddr ::
     [TxOut ConwayEra] ->
