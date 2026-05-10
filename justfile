@@ -16,6 +16,7 @@ e2e:
 
 unit:
     cabal test cardano-node-clients:unit-tests -O0 --test-show-details=direct
+    cabal test cardano-node-clients:tx-build-tests -O0 --test-show-details=direct
 
 ci:
     just build
