@@ -36,14 +36,40 @@ common warnings
     TypeOperators
     ViewPatterns
 
-library
+library tx-build
   import:           warnings
-  hs-source-dirs:   lib
+  visibility:       public
+  hs-source-dirs:   lib-tx-build
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.Balance
-    Cardano.Node.Client.Evaluate
     Cardano.Node.Client.Ledger
+    Cardano.Node.Client.TxBuild
+
+  build-depends:
+    , base
+    , bytestring
+    , cardano-binary
+    , cardano-ledger-allegra
+    , cardano-ledger-alonzo
+    , cardano-ledger-api
+    , cardano-ledger-conway
+    , cardano-ledger-core
+    , cardano-ledger-mary
+    , cardano-slotting
+    , cardano-strict-containers
+    , containers
+    , microlens
+    , operational
+    , plutus-core
+    , plutus-tx
+
+library
+  import:             warnings
+  hs-source-dirs:     lib
+  default-language:   GHC2021
+  exposed-modules:
+    Cardano.Node.Client.Evaluate
     Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
@@ -58,7 +84,6 @@ library
     Cardano.Node.Client.Provider
     Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
-    Cardano.Node.Client.TxBuild
     Cardano.Node.Client.TxGenerator.Build
     Cardano.Node.Client.TxGenerator.Daemon
     Cardano.Node.Client.TxGenerator.Fanout
@@ -72,6 +97,11 @@ library
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
     Cardano.Node.Client.UTxOIndexer.Server
+
+  reexported-modules:
+    Cardano.Node.Client.Balance
+    , Cardano.Node.Client.Ledger
+    , Cardano.Node.Client.TxBuild
 
   build-depends:
     , aeson
@@ -92,6 +122,7 @@ library
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-ledger-read
+    , cardano-node-clients:tx-build
     , cardano-node-clients:utxo-indexer-lib
     , cardano-prelude
     , cardano-slotting
@@ -255,6 +286,7 @@ test-suite unit-tests
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-node-clients
+    , cardano-node-clients:tx-build
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting
     , cardano-strict-containers
@@ -269,6 +301,40 @@ test-suite unit-tests
     , QuickCheck
     , random
     , temporary
+    , text
+
+test-suite tx-build-tests
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          tx-build-main.hs
+  default-language: GHC2021
+  other-modules:
+    Cardano.Node.Client.BalanceSpec
+    Cardano.Node.Client.TxBuildGoldenSpec
+
+  build-depends:
+    , base
+    , base16-bytestring
+    , bytestring
+    , cardano-binary
+    , cardano-crypto-class
+    , cardano-ledger-allegra
+    , cardano-ledger-alonzo
+    , cardano-ledger-api
+    , cardano-ledger-binary
+    , cardano-ledger-conway
+    , cardano-ledger-core
+    , cardano-ledger-mary
+    , cardano-node-clients:tx-build
+    , cardano-slotting
+    , cardano-strict-containers
+    , containers
+    , hspec
+    , microlens
+    , plutus-core
+    , plutus-tx
+    , QuickCheck
     , text
 
 test-suite e2e-tests

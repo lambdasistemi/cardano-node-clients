@@ -12,6 +12,13 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 - **TxBuild** -- Conway-era transaction builder DSL with `Peek`, `Ctx`, and `Valid`
 - **N2C** -- LocalStateQuery + LocalTxSubmission over Unix socket
 
+`Balance`, `TxBuild`, and the shared Conway transaction alias are also
+available from the public `cardano-node-clients:tx-build` sublibrary.
+That component is intentionally free of N2C, chain-follower, indexer,
+daemon, socket, and RocksDB dependencies. The main
+`cardano-node-clients` library re-exports the same module names for
+existing users.
+
 ## Executables
 
 - [`utxo-indexer`](app/utxo-indexer/) -- address->UTxO indexer daemon
@@ -40,6 +47,7 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 ```bash
 nix develop -c just build
 nix develop -c just ci       # format + lint + build
+nix develop -c cabal build lib:tx-build -O0
 ```
 
 ## License

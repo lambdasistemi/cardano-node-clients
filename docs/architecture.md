@@ -6,12 +6,17 @@ The library separates **protocol-agnostic interfaces** from
 **protocol-specific implementations**.
 
 ```
-Cardano.Node.Client
+cardano-node-clients:tx-build
+├── Ledger         -- ConwayTx alias
+├── Balance        -- transaction balancing
+└── TxBuild        -- transaction builder DSL
+
+cardano-node-clients
 ├── Types          -- Block, BlockPoint aliases
 ├── Provider       -- query interface (record-of-functions)
 ├── Submitter      -- submit interface (record-of-functions)
-├── Balance        -- transaction balancing
-├── TxBuild        -- transaction builder DSL
+├── Balance        -- re-export from tx-build
+├── TxBuild        -- re-export from tx-build
 └── N2C
     ├── Types              -- LSQChannel, LTxSChannel
     ├── Codecs             -- N2C codec config
@@ -52,6 +57,11 @@ with `async`.
 
 ## Transaction balancing
 
+`Cardano.Node.Client.Balance` is implemented by the public
+`cardano-node-clients:tx-build` sublibrary and re-exported by the main
+library for compatibility. It has no node-communication, indexer,
+daemon, socket, or RocksDB dependency.
+
 `balanceTx` iteratively computes the exact ledger fee with
 `getMinFeeTx`, then adds VKey witness padding for the unsigned
 transaction before adding fee-paying inputs and a change output.
@@ -61,8 +71,11 @@ supported; multi-asset coin selection is out of scope.
 ## Transaction builder DSL
 
 `Cardano.Node.Client.TxBuild` sits one layer above raw transaction
-assembly. It lets callers describe a transaction as a monadic program
-instead of manually building lens-heavy `TxBody` values.
+assembly. It lives in `cardano-node-clients:tx-build`, and the main
+library re-exports the same module for existing import paths. The
+builder accepts a caller-supplied script evaluator, so the extracted
+component does not need Provider, N2C, ChainSync, indexer, devnet, or
+RocksDB dependencies.
 
 Current implemented pieces:
 

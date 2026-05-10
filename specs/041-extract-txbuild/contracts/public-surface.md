@@ -40,7 +40,7 @@ The extracted component must not own:
 ## Compatibility Contract
 
 The main cardano-node-clients library must continue exposing the current
-transaction-building module names as compatibility wrappers. Existing
+transaction-building module names as compatibility re-exports. Existing
 users should be able to keep importing the old module names while new
 dependency-minimal users can depend on the extracted component.
 

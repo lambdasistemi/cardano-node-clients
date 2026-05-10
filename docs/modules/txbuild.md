@@ -6,6 +6,18 @@
 
 Operational transaction builder DSL for Conway-era transactions.
 
+The implementation lives in the public
+`cardano-node-clients:tx-build` sublibrary together with
+`Cardano.Node.Client.Balance` and `Cardano.Node.Client.Ledger`. The
+main `cardano-node-clients` library re-exports the same module names for
+existing users, so current imports keep working while transaction-only
+consumers can depend on the smaller component.
+
+The extracted component intentionally excludes N2C, ChainSync, live
+Provider/Submitter implementations, UTxO indexer daemons, socket
+servers, devnet helpers, and RocksDB persistence. Script evaluation is
+provided to `build` as a caller-supplied function.
+
 ## What exists today
 
 The current implementation covers the first six slices of the DSL:
