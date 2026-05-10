@@ -112,12 +112,15 @@
             };
           };
           components = project.hsPkgs.cardano-node-clients.components;
-          checks = import ./nix/checks.nix {
+          checkSuite = import ./nix/checks.nix {
             inherit pkgs components lintPkgs;
             cardanoNode = cardano-node.packages.${system}.cardano-node;
             src = ./.;
           };
-          checkApps = import ./nix/apps.nix { inherit pkgs checks; };
+          checkApps = import ./nix/apps.nix {
+            inherit pkgs;
+            inherit (checkSuite) scripts;
+          };
         in {
           packages = {
             devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
@@ -131,7 +134,7 @@
                 inherit pkgs components imageTag;
               };
           };
-          inherit checks;
+          checks = checkSuite.checks;
           apps = checkApps // {
             cardano-tx-generator = {
               type = "app";

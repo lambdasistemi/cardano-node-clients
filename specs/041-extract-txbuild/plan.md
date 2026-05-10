@@ -30,10 +30,17 @@ remains outside this feature work.
 - `nix develop --quiet -c cabal build cardano-node-clients:cardano-tx-generator -O0`: passed.
 - `nix develop --quiet -c just format`: passed.
 - `nix develop --quiet -c just hlint`: passed, no hints.
-- `nix develop --quiet -c just unit`: passed, 217 examples, 0 failures.
+- `nix develop --quiet -c just unit`: passed, 222 main-suite
+  examples and 34 `tx-build-tests` examples, 0 failures.
 - `nix develop --quiet -c just build`: passed.
 - `nix develop --quiet -c just ci`: passed; build, E2E, unit,
   cabal-fmt, fourmolu, and hlint checks completed successfully.
+- `nix build --quiet .#checks.x86_64-linux.build .#checks.x86_64-linux.unit .#checks.x86_64-linux.lint .#checks.x86_64-linux.e2e`:
+  passed after converting flake checks to real `runCommand`
+  derivations backed by shared app scripts.
+- `nix flake check --quiet --no-build`: passed; reported only existing
+  flake metadata warnings and omitted incompatible `aarch64-darwin`
+  builds on the Linux host.
 
 ## Summary
 
