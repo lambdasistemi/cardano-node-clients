@@ -3,6 +3,38 @@
 **Branch**: `041-extract-txbuild` | **Date**: 2026-05-10 | **Spec**: [spec.md](./spec.md)
 **Input**: Feature specification from `/specs/041-extract-txbuild/spec.md`
 
+## Status
+
+**Completed**: Created the public `tx-build` sublibrary, moved
+`Ledger`, `Balance`, and `TxBuild` implementation modules into
+`lib-tx-build`, added main-library re-exports for the existing module
+names, added a focused `tx-build-tests` suite, added the dependency
+boundary check, and documented the split in README and docs. All tasks
+in `tasks.md` are complete.
+
+**Current**: Ready for external PR review; final gate run passed.
+
+**Blockers**: None. The unrelated staged `test/fixtures/pparams.json`
+remains outside this feature work.
+
+**Verification**:
+
+- `scripts/check-tx-build-boundary.sh`: passed.
+- Negative boundary smoke with temporary `network` dependency: failed as
+  expected, then passed after removal.
+- `nix develop --quiet -c cabal build lib:tx-build -O0`: passed.
+- `nix develop --quiet -c cabal test cardano-node-clients:tx-build-tests -O0 --test-show-details=direct`: passed, 34 examples, 0 failures.
+- `nix develop --quiet -c cabal build cardano-node-clients -O0`: passed.
+- `nix develop --quiet -c cabal test cardano-node-clients:unit-tests -O0 --test-options='--match /TxBuild/' --test-show-details=direct`: passed, 36 examples, 0 failures.
+- `nix develop --quiet -c cabal test cardano-node-clients:unit-tests -O0 --test-options='--match /balanceTx/' --test-show-details=direct`: passed, 2 examples, 0 failures.
+- `nix develop --quiet -c cabal build cardano-node-clients:cardano-tx-generator -O0`: passed.
+- `nix develop --quiet -c just format`: passed.
+- `nix develop --quiet -c just hlint`: passed, no hints.
+- `nix develop --quiet -c just unit`: passed, 217 examples, 0 failures.
+- `nix develop --quiet -c just build`: passed.
+- `nix develop --quiet -c just ci`: passed; build, E2E, unit,
+  cabal-fmt, fourmolu, and hlint checks completed successfully.
+
 ## Summary
 
 Extract the TxBuild and Balance implementation into a small public
@@ -31,7 +63,7 @@ consumers
 move N2C, devnet, tx-generator daemon, UTxO indexer, or RocksDB into the
 extracted component  
 **Scale/Scope**: One extracted transaction-building component, main
-library compatibility wrappers, focused tests and docs
+library compatibility re-exports, focused tests and docs
 
 ## Constitution Check
 
@@ -79,9 +111,6 @@ lib-tx-build/
     └── TxBuild.hs
 lib/
 └── Cardano/Node/Client/
-    ├── Balance.hs        # compatibility wrapper
-    ├── Ledger.hs         # compatibility wrapper
-    ├── TxBuild.hs        # compatibility wrapper
     ├── Evaluate.hs       # remains in main library
     └── ...
 test/
@@ -97,7 +126,7 @@ docs/
 **Structure Decision**: Use a public Cabal sublibrary in this repository
 for the first extraction. This proves the boundary and lets downstreams
 depend on only the transaction-building component while preserving the
-current package and module names through wrappers in the main library.
+current package and module names through main-library re-exports.
 
 ## Phase 0 Research Summary
 
@@ -109,7 +138,7 @@ Key decisions:
   together.
 - Keep `Evaluate` in the main library for now because it depends on the
   provider abstraction.
-- Preserve old module names via wrapper modules.
+- Preserve old module names via main-library re-exported modules.
 - Add a focused boundary check over the extracted component's
   dependencies.
 

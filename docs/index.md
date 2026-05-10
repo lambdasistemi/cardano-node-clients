@@ -12,6 +12,12 @@ Cardano node:
 - **Balance** -- exact-fee balancing and fee-dependent output convergence
 - **TxBuild** -- Conway-era transaction builder DSL with `Peek` fixpoints and pluggable `Ctx` queries
 
+`Balance` and `TxBuild` are implemented by the public
+`cardano-node-clients:tx-build` sublibrary. The main library re-exports
+those modules for compatibility, while transaction-only consumers can
+depend on the smaller component without node communication, indexer,
+daemon, socket, or RocksDB dependencies.
+
 The interfaces are protocol-agnostic records-of-functions. Each transport
 protocol supplies its own constructor:
 

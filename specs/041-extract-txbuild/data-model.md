@@ -32,7 +32,7 @@ Fields:
 - Provider-backed evaluation helper.
 - Tx-generator daemon and control server.
 - UTxO indexer integration.
-- Compatibility wrappers for transaction-building modules.
+- Compatibility re-exports for transaction-building modules.
 
 Validation rules:
 
@@ -40,14 +40,14 @@ Validation rules:
 - Must consume the extracted component rather than duplicate it.
 - May depend on network and indexer packages.
 
-## Compatibility Wrapper
+## Compatibility Re-Export
 
 Represents a module that preserves an existing public import path.
 
 Fields:
 
 - Existing module name.
-- Re-exported implementation module.
+- Re-exported implementation module from the extracted component.
 - Export list matching current public behavior.
 
 Validation rules:
