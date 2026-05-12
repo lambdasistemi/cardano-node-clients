@@ -26,12 +26,12 @@ Added to `TxInstr q e` (in `TxBuild.hs`, internal GADT):
 Certify
     :: ConwayTxCert ConwayEra
     -> CertWitness
-    -> TxInstr q e Word32
+    -> TxInstr q e ()
 
 Propose
     :: ProposalProcedure ConwayEra
     -> ProposalWitness
-    -> TxInstr q e Word32
+    -> TxInstr q e ()
 ```
 
 Each instruction is followed by a `Peek` node that resolves the final

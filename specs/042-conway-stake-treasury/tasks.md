@@ -51,9 +51,9 @@ fixtures under `test/fixtures/mainnet-txbuild/`. Quality gate at
 **Purpose**: Confirm the gate runs and the cabal stanzas exist before
 slice work begins. No production code yet.
 
-- [ ] T001 Run `llm/reviews/132/gate.sh` once on the current `HEAD` to baseline the inner loop green. This is the slice gate; the constitution-level `just ci` gate is run in Phase 9.
-- [ ] T002 [P] Confirm `tx-build` library stanza in `cardano-node-clients.cabal` lists `cardano-ledger-conway` and `cardano-ledger-api` under `build-depends`.
-- [ ] T003 [P] Confirm `tx-build-tests` and `e2e-tests` stanzas in `cardano-node-clients.cabal` have the same deps and an `other-modules` block we can extend.
+- [x] T001 Run `llm/reviews/132/gate.sh` once on the current `HEAD` to baseline the inner loop green. This is the slice gate; the constitution-level `just ci` gate is run in Phase 9.
+- [x] T002 [P] Confirm `tx-build` library stanza in `cardano-node-clients.cabal` lists `cardano-ledger-conway` and `cardano-ledger-api` under `build-depends`.
+- [x] T003 [P] Confirm `tx-build-tests` and `e2e-tests` stanzas in `cardano-node-clients.cabal` have the same deps and an `other-modules` block we can extend.
 
 ---
 
@@ -66,7 +66,7 @@ across slices A–F.
 
 **⚠️ CRITICAL**: Slices may not start until T004 is in place.
 
-- [ ] T004 Add a shared Conway fixture helper module `test/Cardano/Node/Client/ConwayFixtures.hs` (deterministic `Credential 'Staking`, `RewardAccount`, `Anchor`, `ScriptHash`, `Coin` builders). Wired into `tx-build-tests` and `e2e-tests` `other-modules:` lists in `cardano-node-clients.cabal`. Used by slices A–F.
+- [x] T004 Add a shared Conway fixture helper module `test/Cardano/Node/Client/ConwayFixtures.hs` (deterministic `Credential 'Staking`, `RewardAccount`, `Anchor`, `ScriptHash`, `Coin` builders). Wired into `tx-build-tests` and `e2e-tests` `other-modules:` lists in `cardano-node-clients.cabal`. Used by slices A–F.
 
 **Checkpoint**: Foundation ready — slice work can begin.
 
@@ -82,15 +82,15 @@ across slices A–F.
 
 ### Tests for Slice A ⚠️ RED first
 
-- [ ] T005 [USA] Add property tests to `test/Cardano/Node/Client/TxBuildSpec.hs`: (a) script-witnessed cert produces exactly one `ConwayCertifying (AsIx i)` redeemer at the index found by reading back the final `certsTxBodyL` `StrictSeq`, against a generated list of mixed pub-key / script certs; (b) pub-key-witnessed cert produces no redeemer. Use `mkHash28`, `mkRewardAccount`, and the new `ConwayFixtures` helpers.
+- [x] T005 [USA] Add property tests to `test/Cardano/Node/Client/TxBuildSpec.hs`: (a) script-witnessed cert produces exactly one `ConwayCertifying (AsIx i)` redeemer at the index found by reading back the final `certsTxBodyL` `StrictSeq`, against a generated list of mixed pub-key / script certs; (b) pub-key-witnessed cert produces no redeemer. Use `mkHash28`, `mkRewardAccount`, and the new `ConwayFixtures` helpers.
 
 ### Implementation for Slice A
 
-- [ ] T006 [USA] Add `CertWitness` ADT to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` mirroring `SpendWitness` shape (existential `ToData r`). Place next to the other witness types around `TxBuild.hs:247`.
-- [ ] T007 [USA] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Certify` constructor returning `Word32` (around `TxBuild.hs:280-331`).
-- [ ] T008 [USA] Add `tsCerts :: [(ConwayTxCert ConwayEra, CertWitness)]` field to the internal `TxState` and thread accumulation through `interpretWith` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs`.
-- [ ] T009 [USA] Add `collectCertRedeemers` helper to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` next to `collectSpendRedeemers` (around `TxBuild.hs:1630-1643`). Index is the position in the final `certsTxBodyL` `StrictSeq`.
-- [ ] T010 [USA] Patch `assembleTx` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (around `TxBuild.hs:749-832`) to populate `certsTxBodyL` and fold the new redeemer list into the `Redeemers` map. Add `certify` smart constructor with the `Peek` fixpoint to return the final body-field `Word32`.
+- [x] T006 [USA] Add `CertWitness` ADT to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` mirroring `SpendWitness` shape (existential `ToData r`). Place next to the other witness types around `TxBuild.hs:247`.
+- [x] T007 [USA] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Certify` constructor returning `()`; the public smart constructor returns `Word32` through `Peek` (around `TxBuild.hs:280-331`).
+- [x] T008 [USA] Add `tsCerts :: [(ConwayTxCert ConwayEra, CertWitness)]` field to the internal `TxState` and thread accumulation through `interpretWith` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs`.
+- [x] T009 [USA] Add `collectCertRedeemers` helper to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` next to `collectSpendRedeemers` (around `TxBuild.hs:1630-1643`). Index is the position in the final `certsTxBodyL` `StrictSeq`.
+- [x] T010 [USA] Patch `assembleTx` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (around `TxBuild.hs:749-832`) to populate `certsTxBodyL` and fold the new redeemer list into the `Redeemers` map. Add `certify` smart constructor with the `Peek` fixpoint to return the final body-field `Word32`.
 
 **Checkpoint**: Slice A commit is one object; gate (`./llm/reviews/132/gate.sh`) is green; the new property tests pass and the rest of `tx-build-tests` is unchanged. Acceptance criteria 1 and 2 satisfied.
 
@@ -135,7 +135,7 @@ across slices A–F.
 ### Implementation for Slice C
 
 - [ ] T014 [USC] Add `ProposalWitness` ADT to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with `NoProposalScript` and existential `GuardrailProposal r`.
-- [ ] T015 [USC] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Propose` constructor returning `Word32`.
+- [ ] T015 [USC] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Propose` constructor returning `()`; the public smart constructor returns `Word32` through `Peek`.
 - [ ] T016 [USC] Add `tsProposals :: [(ProposalProcedure ConwayEra, ProposalWitness)]` to `TxState` and thread accumulation through `interpretWith` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs`.
 - [ ] T017 [USC] Add `collectProposalRedeemers` helper to `lib-tx-build/Cardano/Node/Client/TxBuild.hs`. Index is the position in the final `proposalProceduresTxBodyL` `OSet`.
 - [ ] T018 [USC] Extend `assembleTx` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` to populate `proposalProceduresTxBodyL` and fold the new redeemer list into the `Redeemers` map. Add `propose` smart constructor with the `Peek` fixpoint.

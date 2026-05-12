@@ -36,6 +36,7 @@ module Cardano.Node.Client.TxBuild (
     SpendWitness (..),
     MintWitness (..),
     WithdrawWitness (..),
+    CertWitness (..),
 
     -- * Input combinators
     spend,
@@ -55,6 +56,9 @@ module Cardano.Node.Client.TxBuild (
     withdraw,
     withdrawScript,
     setMetadata,
+
+    -- * Certificates
+    certify,
 
     -- * Constraints
     validFrom,
@@ -137,6 +141,7 @@ import Cardano.Ledger.Api.Tx (
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
+    certsTxBodyL,
     collateralInputsTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
@@ -168,6 +173,7 @@ import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
+import Cardano.Ledger.Conway.TxCert (ConwayTxCert)
 import Cardano.Ledger.Core (
     PParams,
     Script,
@@ -262,6 +268,13 @@ data WithdrawWitness
     | -- | Script withdrawal with a typed redeemer.
       forall r. (ToData r) => ScriptWithdraw r
 
+-- | How a Conway certificate is witnessed.
+data CertWitness
+    = -- | Pub-key certificate, no redeemer needed.
+      PubKeyCert
+    | -- | Script certificate with a typed redeemer.
+      forall r. (ToData r) => ScriptCert r
+
 -- | Pure query interpreter.
 newtype Interpret q = Interpret
     { runInterpret :: forall x. q x -> x
@@ -300,6 +313,11 @@ data TxInstr q e a where
         AccountAddress ->
         Coin ->
         WithdrawWitness ->
+        TxInstr q e ()
+    -- | Add a Conway certificate.
+    Certify ::
+        ConwayTxCert ConwayEra ->
+        CertWitness ->
         TxInstr q e ()
     -- | Set transaction metadata for a label.
     SetMetadata ::
@@ -462,6 +480,21 @@ withdrawScript rewardAccount amount redeemer =
             amount
             (ScriptWithdraw redeemer)
 
+{- | Emit a Conway certificate. Returns the certificate index in the
+final transaction body field.
+-}
+certify ::
+    ConwayTxCert ConwayEra ->
+    CertWitness ->
+    TxBuild q e Word32
+certify cert witness = do
+    singleton $ Certify cert witness
+    singleton $ Peek $ \tx ->
+        let certs = tx ^. bodyTxL . certsTxBodyL
+         in if cert `elem` toList certs
+                then Ok (certIndex cert certs)
+                else Iterate 0
+
 -- | Set transaction metadata for a label.
 setMetadata :: Word64 -> Metadatum -> TxBuild q e ()
 setMetadata label = singleton . SetMetadata label
@@ -573,6 +606,8 @@ data TxState e = TxState
         ]
     , tsWithdrawals ::
         [(AccountAddress, Coin, WithdrawWitness)]
+    , tsCerts ::
+        [(ConwayTxCert ConwayEra, CertWitness)]
     , tsMetadata :: Map Word64 Metadatum
     , tsSigners :: Set (KeyHash Guard)
     , tsScripts ::
@@ -592,6 +627,7 @@ emptyState =
         , tsOuts = []
         , tsMints = []
         , tsWithdrawals = []
+        , tsCerts = []
         , tsMetadata = Map.empty
         , tsSigners = Set.empty
         , tsScripts = Map.empty
@@ -674,6 +710,14 @@ interpretWithM runCtx currentTx = go emptyState True
                     { tsWithdrawals =
                         tsWithdrawals st
                             ++ [(rewardAccount, amount, w)]
+                    }
+                conv
+                (k ())
+        Certify cert w :>>= k ->
+            go
+                st
+                    { tsCerts =
+                        tsCerts st ++ [(cert, w)]
                     }
                 conv
                 (k ())
@@ -771,6 +815,9 @@ assembleTxWith extraIns pp st =
         withdrawals =
             Withdrawals
                 (Map.map fst withdrawalEntries)
+        certs =
+            StrictSeq.fromList $
+                map fst (tsCerts st)
         -- Build redeemers
         spendRdmrs =
             collectSpendRedeemers
@@ -781,10 +828,15 @@ assembleTxWith extraIns pp st =
             collectWithdrawalRedeemers
                 withdrawals
                 withdrawalEntries
+        certRdmrs =
+            collectCertRedeemers
+                certs
+                (tsCerts st)
         rdmrList =
             spendRdmrs
                 ++ mintRdmrs
                 ++ withdrawalRdmrs
+                ++ certRdmrs
         allRdmrs = Redeemers $ Map.fromList rdmrList
         auxData =
             if Map.null (tsMetadata st)
@@ -811,6 +863,7 @@ assembleTxWith extraIns pp st =
                 & collateralInputsTxBodyL .~ collIns
                 & mintTxBodyL .~ mintMA
                 & withdrawalsTxBodyL .~ withdrawals
+                & certsTxBodyL .~ certs
                 & reqSignerHashesTxBodyL
                     .~ tsSigners st
                 & vldtTxBodyL
@@ -1626,6 +1679,19 @@ withdrawalIndex needle (Withdrawals withdrawals) =
         | x == needle = n
         | otherwise = go (n + 1) xs
 
+certIndex ::
+    ConwayTxCert ConwayEra ->
+    StrictSeq.StrictSeq (ConwayTxCert ConwayEra) ->
+    Word32
+certIndex needle certs =
+    go 0 (toList certs)
+  where
+    go _ [] =
+        error "certIndex: certificate not in body"
+    go n (x : xs)
+        | x == needle = n
+        | otherwise = go (n + 1) xs
+
 -- | Collect spending redeemers from steps.
 collectSpendRedeemers ::
     Set TxIn ->
@@ -1699,6 +1765,20 @@ collectWithdrawalRedeemers withdrawals entries =
       )
     | (rewardAccount, (_, Just redeemer)) <-
         Map.toList entries
+    ]
+
+collectCertRedeemers ::
+    StrictSeq.StrictSeq (ConwayTxCert ConwayEra) ->
+    [(ConwayTxCert ConwayEra, CertWitness)] ->
+    [ ( ConwayPlutusPurpose AsIx ConwayEra
+      , (Data ConwayEra, ExUnits)
+      )
+    ]
+collectCertRedeemers certs entries =
+    [ ( ConwayCertifying (AsIx (certIndex cert certs))
+      , (toLedgerData redeemer, ExUnits 0 0)
+      )
+    | (cert, ScriptCert redeemer) <- entries
     ]
 
 -- | Accumulate 'MultiAsset' from mint entries.

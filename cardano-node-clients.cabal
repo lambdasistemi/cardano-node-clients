@@ -255,6 +255,7 @@ test-suite unit-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.BalanceSpec
+    Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
     Cardano.Node.Client.TxBuildGoldenSpec
@@ -316,6 +317,7 @@ test-suite tx-build-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.BalanceSpec
+    Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.TxBuildGoldenSpec
 
   build-depends:
@@ -349,6 +351,7 @@ test-suite e2e-tests
   main-is:          main.hs
   default-language: GHC2021
   other-modules:
+    Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.E2E.BalanceSpec
     Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
