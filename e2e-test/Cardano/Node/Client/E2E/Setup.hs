@@ -50,6 +50,7 @@ module Cardano.Node.Client.E2E.Setup (
 
     -- * Devnet bracket
     withDevnet,
+    withDevnetFromGenesis,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -207,6 +208,17 @@ withDevnet ::
     IO a
 withDevnet action = do
     gDir <- genesisDir
+    withDevnetFromGenesis gDir action
+
+{- | Start a cardano-node devnet from a specific
+genesis directory, connect via N2C, run an action,
+and tear down.
+-}
+withDevnetFromGenesis ::
+    FilePath ->
+    (LSQChannel -> LTxSChannel -> IO a) ->
+    IO a
+withDevnetFromGenesis gDir action =
     withCardanoNode gDir $ \sock _startMs -> do
         lsqCh <- newLSQChannel 16
         ltxsCh <- newLTxSChannel 16
