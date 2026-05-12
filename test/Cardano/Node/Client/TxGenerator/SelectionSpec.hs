@@ -318,6 +318,8 @@ stubProvider tip =
                 pure (unused "posixMsToSlot")
             , posixMsCeilSlot = \_ ->
                 pure (unused "posixMsCeilSlot")
+            , queryUpperBoundSlot = \_ ->
+                pure (unused "queryUpperBoundSlot")
             }
     unused name =
         error

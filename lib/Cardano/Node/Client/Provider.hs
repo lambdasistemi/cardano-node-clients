@@ -53,6 +53,7 @@ import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Plutus (ExUnits)
 import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Ledger (ConwayTx)
+import Cardano.Node.Client.Validity (HorizonError, ValidityChoice)
 import Cardano.Slotting.Slot (SlotNo (..))
 
 -- | Per-script evaluation result.
@@ -227,4 +228,11 @@ data Provider m = Provider
     -- ^ Convert POSIX time (milliseconds) to 'SlotNo',
     --     rounding up (ceiling).
     --     Use for lower validity bounds (@entirely_after@).
+    , queryUpperBoundSlot ::
+        ValidityChoice ->
+        m (Either HorizonError SlotNo)
+    -- ^ Compute an @invalid-hereafter@ slot under a
+    --     'ValidityChoice'. Queries the chain tip and the
+    --     hard-fork interpreter and delegates to
+    --     'Cardano.Node.Client.Validity.selectUpperBound'.
     }

@@ -1792,6 +1792,10 @@ outputCountingProvider pp perOutput =
                 pure . SlotNo . fromIntegral
             , posixMsCeilSlot =
                 pure . SlotNo . fromIntegral
+            , queryUpperBoundSlot = \_ ->
+                error
+                    "outputCountingProvider: \
+                    \queryUpperBoundSlot unused"
             }
 
 redeemerExUnits ::
