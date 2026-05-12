@@ -3,6 +3,7 @@ module Cardano.Node.Client.BalanceSpec (spec) where
 import Data.List (nub, sort)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust, fromMaybe)
+import Data.OSet.Strict qualified as OSet
 import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set qualified as Set
 import Lens.Micro ((&), (.~), (^.))
@@ -10,7 +11,11 @@ import Test.Hspec
 import Test.QuickCheck
 
 import Cardano.Crypto.Hash (hashFromStringAsHex)
-import Cardano.Ledger.Address (Addr (..))
+import Cardano.Ledger.Address (
+    AccountAddress (..),
+    AccountId (..),
+    Addr (..),
+ )
 import Cardano.Ledger.Alonzo.Scripts (
     AsIx (..),
     fromPlutusScript,
@@ -27,10 +32,12 @@ import Cardano.Ledger.Api.Tx (
     mkBasicTx,
  )
 import Cardano.Ledger.Api.Tx.Body (
+    certsTxBodyL,
     feeTxBodyL,
     mintTxBodyL,
     mkBasicTxBody,
     outputsTxBodyL,
+    proposalProceduresTxBodyL,
     referenceInputsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
@@ -45,6 +52,7 @@ import Cardano.Ledger.BaseTypes (
     StrictMaybe (..),
     TxIx (..),
     boundRational,
+    textToUrl,
  )
 import Cardano.Ledger.Coin (
     Coin (..),
@@ -53,25 +61,37 @@ import Cardano.Ledger.Coin (
  )
 import Cardano.Ledger.Compactible (fromCompact)
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Conway.Governance (
+    Anchor (..),
+    GovAction (..),
+    ProposalProcedure (..),
+ )
 import Cardano.Ledger.Conway.PParams (
     ppMinFeeRefScriptCostPerByteL,
  )
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
+import Cardano.Ledger.Conway.TxCert (
+    ConwayDelegCert (..),
+    ConwayTxCert (..),
+    Delegatee (..),
+ )
 import Cardano.Ledger.Core (
     Script,
     emptyPParams,
     getMinFeeTx,
+    ppKeyDepositL,
  )
 import Cardano.Ledger.Credential (
     Credential (KeyHashObj),
     StakeReference (StakeRefNull),
  )
+import Cardano.Ledger.DRep (DRep (..))
 import Cardano.Ledger.Hashes (ScriptHash (..), unsafeMakeSafeHash)
 import Cardano.Ledger.Keys (
     KeyHash (..),
-    KeyRole (Payment),
+    KeyRole (Payment, Staking),
  )
 import Cardano.Ledger.Mary.Value (
     AssetName (..),
@@ -107,6 +127,7 @@ spec = describe "Balance helpers" $ do
     computeScriptIntegritySpec
     placeholderExUnitsSpec
     balanceTxSpec
+    balanceTxDepositSpec
     balanceTxMultiAssetSpec
     refScriptsSizeSpec
     balanceTxRefScriptFeeSpec
@@ -155,6 +176,40 @@ mkAddr n =
     hexDigit d
         | d < 10 = toEnum (fromEnum '0' + d)
         | otherwise = toEnum (fromEnum 'a' + d - 10)
+
+mkStakeCredential :: Int -> Credential Staking
+mkStakeCredential n =
+    let hexStr =
+            replicate 52 '0'
+                ++ hexByte (n `div` 256)
+                ++ hexByte (n `mod` 256)
+        h = fromJust (hashFromStringAsHex hexStr)
+     in KeyHashObj (KeyHash h :: KeyHash Staking)
+  where
+    hexByte b =
+        let (hi, lo) = b `divMod` 16
+         in [hexDigit hi, hexDigit lo]
+    hexDigit d
+        | d < 10 = toEnum (fromEnum '0' + d)
+        | otherwise = toEnum (fromEnum 'a' + d - 10)
+
+mkRewardAccount :: Int -> AccountAddress
+mkRewardAccount n =
+    AccountAddress Testnet (AccountId (mkStakeCredential n))
+
+mkAnchor :: Anchor
+mkAnchor =
+    Anchor
+        (fromJust $ textToUrl 128 "https://example.invalid/balance.json")
+        ( unsafeMakeSafeHash $
+            fromJust $
+                hashFromStringAsHex $
+                    replicate 63 '0' ++ "1"
+        )
+
+minusCoin :: Coin -> Coin -> Coin
+minusCoin (Coin a) (Coin b) =
+    Coin (a - b)
 
 -- -----------------------------------------------------------
 -- spendingIndex
@@ -371,6 +426,99 @@ balanceTxSpec =
                 Right _ ->
                     expectationFailure
                         "expected InsufficientFee"
+
+balanceTxDepositSpec :: Spec
+balanceTxDepositSpec =
+    describe "balanceTx deposit accounting" $
+        it "subtracts certificate and proposal deposits from change" $ do
+            let stakeDeposit =
+                    Coin 400_000
+                pp =
+                    emptyPParams @ConwayEra
+                        & ppTxFeePerByteL
+                            .~ CoinPerByte
+                                (compactCoinOrError (Coin 44))
+                        & ppTxFeeFixedL .~ Coin 155381
+                        & ppKeyDepositL .~ stakeDeposit
+                stakeCredential =
+                    mkStakeCredential 4
+                legacyStakeCredential =
+                    mkStakeCredential 5
+                returnAccount =
+                    mkRewardAccount 4
+                proposalDeposit =
+                    Coin 1_000_000
+                inputCoin =
+                    Coin 10_000_000
+                outputCoin =
+                    Coin 3_000_000
+                inputUtxos =
+                    [
+                        ( mkTxIn 1
+                        , mkBasicTxOut
+                            (mkAddr 1)
+                            (inject inputCoin)
+                        )
+                    ]
+                cert =
+                    ConwayTxCertDeleg $
+                        ConwayRegDelegCert
+                            stakeCredential
+                            (DelegVote DRepAlwaysAbstain)
+                            stakeDeposit
+                legacyCert =
+                    ConwayTxCertDeleg $
+                        ConwayRegCert
+                            legacyStakeCredential
+                            SNothing
+                proposal =
+                    ProposalProcedure
+                        proposalDeposit
+                        returnAccount
+                        ( TreasuryWithdrawals
+                            (Map.singleton returnAccount (Coin 1))
+                            SNothing
+                        )
+                        mkAnchor
+                template =
+                    mkBasicTx $
+                        mkBasicTxBody
+                            & outputsTxBodyL
+                                .~ StrictSeq.singleton
+                                    ( mkBasicTxOut
+                                        (mkAddr 2)
+                                        (inject outputCoin)
+                                    )
+                            & certsTxBodyL
+                                .~ StrictSeq.fromList
+                                    [ cert
+                                    , legacyCert
+                                    ]
+                            & proposalProceduresTxBodyL
+                                .~ OSet.singleton proposal
+            case balanceTx
+                pp
+                inputUtxos
+                []
+                (mkAddr 3)
+                template of
+                Left err ->
+                    expectationFailure (show err)
+                Right BalanceResult{balancedTx = tx} -> do
+                    let outs =
+                            foldr
+                                (:)
+                                []
+                                (tx ^. bodyTxL . outputsTxBodyL)
+                        fee =
+                            tx ^. bodyTxL . feeTxBodyL
+                    last outs ^. coinTxOutL
+                        `shouldBe` inputCoin
+                            `minusCoin` outputCoin
+                            `minusCoin` fee
+                            `minusCoin` stakeDeposit
+                            `minusCoin` stakeDeposit
+                            `minusCoin` proposalDeposit
 
 -- -----------------------------------------------------------
 -- refScriptsSize + balanceTx ref-script fee accounting (#74)

@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 
 {- |
 Module      : Cardano.Node.Client.Balance
@@ -13,9 +14,9 @@ estimated iteratively via 'estimateMinFeeTx' from
 dummy VKey witnesses for correct size estimation.
 
 The change output absorbs both the residual ADA
-(@input − fee − sum(existing output ADA)@) and any
-residual multi-assets (@sum(input MA) + mint −
-sum(existing output MA)@). This lets callers mint
+(@input + refunds - fee - deposits - outputs@)
+and any residual multi-assets (@sum(input MA) +
+mint - sum(existing output MA)@). This lets callers mint
 NFTs without emitting an explicit recipient output:
 the minted asset lands in the change output along
 with the ADA leftovers, matching the convention of
@@ -47,13 +48,20 @@ module Cardano.Node.Client.Balance (
 ) where
 
 import Data.ByteString qualified as BS
+import Data.Foldable (toList)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
 import Data.Word (Word32)
 import Lens.Micro ((&), (.~), (^.))
 
-import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Address (
+    AccountAddress (..),
+    AccountId (..),
+    Addr (..),
+    Withdrawals (..),
+ )
 import Cardano.Ledger.Alonzo.PParams (
     LangDepView,
     getLanguageView,
@@ -74,17 +82,24 @@ import Cardano.Ledger.Api.Tx (
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
+    TxBody,
+    certsTxBodyL,
     collateralInputsTxBodyL,
     collateralReturnTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
+    proposalProceduresTxBodyL,
     referenceInputsTxBodyL,
+    reqSignerHashesTxBodyL,
     totalCollateralTxBodyL,
+    votingProceduresTxBodyL,
+    withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
+    addrTxOutL,
     coinTxOutL,
     getMinCoinTxOut,
     mkBasicTxOut,
@@ -99,8 +114,26 @@ import Cardano.Ledger.BaseTypes (
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Core (PParams)
+import Cardano.Ledger.Conway.Governance (
+    ProposalProcedure (..),
+    Voter (..),
+    VotingProcedures (..),
+ )
+import Cardano.Ledger.Conway.TxCert (
+    ConwayDelegCert (..),
+    ConwayGovCert (..),
+    ConwayTxCert (..),
+    getVKeyWitnessConwayTxCert,
+ )
+import Cardano.Ledger.Core (
+    PParams,
+    getTotalDepositsTxCerts,
+ )
+import Cardano.Ledger.Credential (
+    Credential (..),
+ )
 import Cardano.Ledger.Hashes (originalBytes)
+import Cardano.Ledger.Keys (KeyHash (..))
 import Cardano.Ledger.Mary.Value (
     MaryValue (..),
     MultiAsset (..),
@@ -256,11 +289,15 @@ balanceTxWith
                     (\s (tin, _) -> Set.insert tin s)
                     (body ^. inputsTxBodyL)
                     inputUtxos
+            keyWitnesses =
+                estimatedKeyWitnessCount body newInputs inputUtxos
             origOutputs = body ^. outputsTxBodyL
             -- Sum ADA / multi-assets already committed
             -- in existing outputs (e.g. asteria + ship
             -- outputs in a spawn-ship tx).
             (Coin origAda, origMA) = sumValues origOutputs
+            depositDelta =
+                bodyDepositDelta pp body
             bodyMint :: MultiAsset
             bodyMint = body ^. mintTxBodyL
             -- Residual multi-assets that no existing
@@ -410,7 +447,7 @@ balanceTxWith
                     change =
                         max
                             0
-                            (avail - req - origAda)
+                            (avail - req - origAda - depositDelta)
                     changeOut =
                         mkBasicTxOut
                             changeAddr
@@ -443,7 +480,7 @@ balanceTxWith
                                     estimateMinFeeTx
                                         pp
                                         candidate
-                                        1 -- key witnesses
+                                        keyWitnesses
                                         0 -- Byron witnesses
                                         refScriptBytes
                              in if newFee <= currentFee
@@ -458,7 +495,10 @@ balanceTxWith
                     let Coin available = inputCoin
                         Coin required = fee
                         changeAmount =
-                            available - required - origAda
+                            available
+                                - required
+                                - origAda
+                                - depositDelta
                      in if changeAmount < 0
                             then
                                 Left
@@ -472,6 +512,140 @@ balanceTxWith
                                         result
                                         (length origOutputs)
                                     )
+
+bodyDepositDelta ::
+    PParams ConwayEra ->
+    TxBody l ConwayEra ->
+    Integer
+bodyDepositDelta pp body =
+    coinInteger
+        ( getTotalDepositsTxCerts
+            pp
+            (const False)
+            (body ^. certsTxBodyL)
+        )
+        - sum (certRefund <$> toList (body ^. certsTxBodyL))
+        + sum
+            ( proposalDeposit
+                <$> toList (body ^. proposalProceduresTxBodyL)
+            )
+
+estimatedKeyWitnessCount ::
+    TxBody l ConwayEra ->
+    Set.Set TxIn ->
+    [(TxIn, TxOut ConwayEra)] ->
+    Int
+estimatedKeyWitnessCount body bodyInputs inputUtxos =
+    max 1 $
+        Set.size $
+            inputWitnesses
+                <> certWitnesses
+                <> requiredSignerWitnesses
+                <> votingWitnesses
+                <> withdrawalWitnesses
+  where
+    inputWitnesses =
+        Set.fromList
+            [ kh
+            | (txIn, txOut) <- inputUtxos
+            , Set.member txIn bodyInputs
+            , Just kh <- [addrPaymentKeyHashBytes (txOut ^. addrTxOutL)]
+            ]
+    certWitnesses =
+        Set.fromList
+            [ keyHashBytes kh
+            | cert <- toList (body ^. certsTxBodyL)
+            , Just kh <- [getVKeyWitnessConwayTxCert cert]
+            ]
+    requiredSignerWitnesses =
+        Set.fromList
+            [ keyHashBytes kh
+            | kh <- Set.toList (body ^. reqSignerHashesTxBodyL)
+            ]
+    votingWitnesses =
+        let VotingProcedures procedures =
+                body ^. votingProceduresTxBodyL
+         in Set.fromList
+                [ bytes
+                | voter <- Map.keys procedures
+                , Just bytes <- [voterKeyHashBytes voter]
+                ]
+    withdrawalWitnesses =
+        let Withdrawals withdrawals =
+                body ^. withdrawalsTxBodyL
+         in Set.fromList
+                [ kh
+                | account <- Map.keys withdrawals
+                , Just kh <- [accountKeyHashBytes account]
+                ]
+
+addrPaymentKeyHashBytes :: Addr -> Maybe BS.ByteString
+addrPaymentKeyHashBytes =
+    \case
+        Addr _ (KeyHashObj kh) _ ->
+            Just (keyHashBytes kh)
+        Addr _ (ScriptHashObj _) _ ->
+            Nothing
+        AddrBootstrap _ ->
+            Nothing
+
+accountKeyHashBytes :: AccountAddress -> Maybe BS.ByteString
+accountKeyHashBytes =
+    \case
+        AccountAddress _ (AccountId (KeyHashObj kh)) ->
+            Just (keyHashBytes kh)
+        AccountAddress _ (AccountId (ScriptHashObj _)) ->
+            Nothing
+
+voterKeyHashBytes :: Voter -> Maybe BS.ByteString
+voterKeyHashBytes =
+    \case
+        CommitteeVoter credential ->
+            credentialKeyHashBytes credential
+        DRepVoter credential ->
+            credentialKeyHashBytes credential
+        StakePoolVoter kh ->
+            Just (keyHashBytes kh)
+
+credentialKeyHashBytes :: Credential kd -> Maybe BS.ByteString
+credentialKeyHashBytes =
+    \case
+        KeyHashObj kh ->
+            Just (keyHashBytes kh)
+        ScriptHashObj _ ->
+            Nothing
+
+keyHashBytes :: KeyHash kd -> BS.ByteString
+keyHashBytes (KeyHash h) =
+    originalBytes h
+
+certRefund ::
+    ConwayTxCert ConwayEra ->
+    Integer
+certRefund =
+    \case
+        ConwayTxCertDeleg (ConwayUnRegCert _ refund) ->
+            strictMaybeCoin refund
+        ConwayTxCertGov (ConwayUnRegDRep _ refund) ->
+            coinInteger refund
+        _ ->
+            0
+
+proposalDeposit :: ProposalProcedure ConwayEra -> Integer
+proposalDeposit (ProposalProcedure deposit _ _ _) =
+    coinInteger deposit
+
+strictMaybeCoin :: StrictMaybe Coin -> Integer
+strictMaybeCoin =
+    \case
+        SJust coin ->
+            coinInteger coin
+        SNothing ->
+            0
+
+coinInteger :: Coin -> Integer
+coinInteger (Coin value) =
+    value
 
 {- | Output function rejected the fee, or the
 iteration did not converge.

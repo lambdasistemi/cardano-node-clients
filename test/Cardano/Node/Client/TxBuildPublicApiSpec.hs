@@ -47,6 +47,14 @@ _proposeTreasuryWithdrawal ::
     TxBuild q e Word32
 _proposeTreasuryWithdrawal = proposeTreasuryWithdrawal
 
+_vote ::
+    Voter ->
+    GovActionId ->
+    Vote ->
+    StrictMaybe Anchor ->
+    TxBuild q e ()
+_vote = vote
+
 _pubKeyCertWitness :: CertWitness
 _pubKeyCertWitness = PubKeyCert
 
