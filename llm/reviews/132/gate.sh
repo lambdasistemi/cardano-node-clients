@@ -30,7 +30,19 @@ cabal-fmt -c cardano-node-clients.cabal
 # The reviewer must require GATE_FULL=1 on the final approval round.
 if [[ "${GATE_FULL:-0}" == "1" ]]; then
     echo "== e2e (devnet, includes Conway cert + treasury proposal smoke) =="
-    cabal test cardano-node-clients:e2e-tests -O0 --test-show-details=direct \
-        --test-option=--match \
-        --test-option='/Cardano.Node.Client.E2E.TxBuildConwaySpec/'
+    smoke_status=0
+    smoke_output=$(
+        cabal test cardano-node-clients:e2e-tests -O0 --test-show-details=direct \
+            --test-option=--match \
+            --test-option='/Cardano.Node.Client.E2E.TxBuildConwaySpec/' \
+            2>&1
+    ) || smoke_status=$?
+    printf '%s\n' "$smoke_output"
+    if [[ "$smoke_status" -ne 0 ]]; then
+        exit "$smoke_status"
+    fi
+    if grep -Eq '^[[:space:]]*0 examples,' <<<"$smoke_output"; then
+        echo "GATE_FULL=1 Conway smoke selector matched 0 examples" >&2
+        exit 1
+    fi
 fi
