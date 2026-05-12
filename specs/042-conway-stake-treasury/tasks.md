@@ -87,10 +87,10 @@ across slices A–F.
 ### Implementation for Slice A
 
 - [x] T006 [USA] Add `CertWitness` ADT to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` mirroring `SpendWitness` shape (existential `ToData r`). Place next to the other witness types around `TxBuild.hs:247`.
-- [x] T007 [USA] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Certify` constructor returning `()`; the public smart constructor returns `Word32` through `Peek` (around `TxBuild.hs:280-331`).
+- [x] T007 [USA] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Certify` constructor returning `()`; the public smart constructor returns `Word32` through `Peek` against the final body field (around `TxBuild.hs:280-331`).
 - [x] T008 [USA] Add `tsCerts :: [(ConwayTxCert ConwayEra, CertWitness)]` field to the internal `TxState` and thread accumulation through `interpretWith` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs`.
 - [x] T009 [USA] Add `collectCertRedeemers` helper to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` next to `collectSpendRedeemers` (around `TxBuild.hs:1630-1643`). Index is the position in the final `certsTxBodyL` `StrictSeq`.
-- [x] T010 [USA] Patch `assembleTx` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (around `TxBuild.hs:749-832`) to populate `certsTxBodyL` and fold the new redeemer list into the `Redeemers` map. Add `certify` smart constructor with the `Peek` fixpoint to return the final body-field `Word32`.
+- [x] T010 [USA] Patch `assembleTx` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (around `TxBuild.hs:749-832`) to populate `certsTxBodyL` and fold the new redeemer list into the `Redeemers` map. Add `certify` smart constructor with the `Peek` fixpoint to return the final body-field `Word32`; duplicate equal certs coalesce to one final body index.
 
 **Checkpoint**: Slice A commit is one object; gate (`./llm/reviews/132/gate.sh`) is green; the new property tests pass and the rest of `tx-build-tests` is unchanged. Acceptance criteria 1 and 2 satisfied.
 

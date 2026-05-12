@@ -36,7 +36,10 @@ Propose
 
 Each instruction is followed by a `Peek` node that resolves the final
 body-field index from the assembled body — same mechanism that
-`spend` / `payTo` already use.
+`spend` / `payTo` already use. Conway exposes `certsTxBodyL` as a
+`StrictSeq`, but its body stores certificates as an ordered set; equal
+certificate values coalesce to one final body entry, and script redeemers are
+collected once per final body index.
 
 ## Witness types (public)
 
