@@ -50,6 +50,7 @@ library tx-build
     , base
     , bytestring
     , cardano-binary
+    , cardano-data
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
@@ -281,6 +282,7 @@ test-suite unit-tests
     , base16-bytestring
     , bytestring
     , cardano-crypto-class
+    , cardano-data
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
@@ -319,6 +321,7 @@ test-suite tx-build-tests
     Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.TxBuildGoldenSpec
+    Cardano.Node.Client.TxBuildPublicApiSpec
 
   build-depends:
     , base
@@ -326,6 +329,7 @@ test-suite tx-build-tests
     , bytestring
     , cardano-binary
     , cardano-crypto-class
+    , cardano-data
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api

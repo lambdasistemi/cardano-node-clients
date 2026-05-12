@@ -1,0 +1,21 @@
+cardano-cli 10.15.1.0
+network: testnet
+governance-action-deposit: 100000000
+deposit-return-stake-script-file: stake.script
+deposit-return-stake-script-hash: 9dcfe5a661b6bc3af0999d06416d95842ba7c693dc0e246f5e0a5e33
+anchor-url: https://example.invalid/conway-042.json
+anchor-data-text: conway-042 treasury withdrawal
+anchor-data-hash: dbc647b70b3f39b6f399e60e7be4559459500285eeea7fe07c496314065bcc88
+funds-receiving-stake-script-file: payee.script
+funds-receiving-stake-script-hash: 2cea18e1ddb0a92ec666484f9da83af49e272b8f8d1bd992505f60e6
+transfer: 1000000
+command:
+  cardano-cli conway governance action create-treasury-withdrawal \
+    --testnet \
+    --governance-action-deposit 100000000 \
+    --deposit-return-stake-script-file stake.script \
+    --anchor-url "https://example.invalid/conway-042.json" \
+    --anchor-data-hash dbc647b70b3f39b6f399e60e7be4559459500285eeea7fe07c496314065bcc88 \
+    --funds-receiving-stake-script-file payee.script \
+    --transfer 1000000 \
+    --out-file treasury-withdrawal.json

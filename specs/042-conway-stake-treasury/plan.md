@@ -10,6 +10,20 @@ of a numeric Spec Kit branch name. If `.specify/scripts/bash/check-prerequisites
 rejects the branch, use `specs/042-conway-stake-treasury/` as the
 feature directory explicitly.
 
+## Status
+
+**Completed**: Slices A-E. Certificate support, duplicate cert
+coalescing, `registerAndVoteAbstain`, generic proposal support,
+`proposeTreasuryWithdrawal`, CLI golden parity, and public export
+coverage are implemented on the stacked branch
+`042-upstream-proposal-slices`.
+
+**Current**: Run the full `just ci` gate, then open a draft PR stacked
+on `feat/conway-stake-treasury-withdrawal` without merging.
+
+**Blockers**: Slice F remains pending. The Conway devnet smoke is still
+outside this stacked PR slice.
+
 ## Summary
 
 Extend the TxBuild DSL with two new instruction families — Conway

@@ -12,6 +12,8 @@ import Data.Bifunctor (first)
 import Data.Foldable (for_, toList)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromJust)
+import Data.OSet.Strict qualified as OSet
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Word (Word32, Word64)
@@ -20,7 +22,8 @@ import Test.Hspec
 
 import Cardano.Crypto.Hash (hashFromStringAsHex)
 import Cardano.Ledger.Address (
-    AccountAddress,
+    AccountAddress (..),
+    AccountId (..),
     Addr,
     Withdrawals (..),
  )
@@ -48,11 +51,13 @@ import Cardano.Ledger.Api.Tx (
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
+    certsTxBodyL,
     collateralInputsTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
+    proposalProceduresTxBodyL,
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
     vldtTxBodyL,
@@ -69,8 +74,10 @@ import Cardano.Ledger.Api.Tx.Wits (
  )
 import Cardano.Ledger.BaseTypes (
     Inject (..),
+    Network (Testnet),
     StrictMaybe (SJust, SNothing),
     TxIx (..),
+    textToUrl,
  )
 import Cardano.Ledger.Binary (
     Annotator,
@@ -84,13 +91,24 @@ import Cardano.Ledger.Coin (
     compactCoinOrError,
  )
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Conway.Governance (
+    Anchor (..),
+    ProposalProcedure,
+ )
 import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
+import Cardano.Ledger.Conway.TxCert (ConwayTxCert)
 import Cardano.Ledger.Core (
     PParams,
     addrTxOutL,
     metadataTxAuxDataL,
  )
-import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
+import Cardano.Ledger.Credential (Credential (..))
+import Cardano.Ledger.Hashes (
+    SafeHash,
+    ScriptHash (..),
+    unsafeMakeSafeHash,
+ )
+import Cardano.Ledger.Keys (KeyRole (Staking))
 import Cardano.Ledger.Mary.Value (
     MultiAsset (..),
  )
@@ -104,7 +122,9 @@ import Cardano.Node.Client.Balance (CollateralUtxos (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxBuild (
     BuildOptions (..),
+    CertWitness (..),
     InterpretIO (..),
+    ProposalWitness (..),
     TxBuild,
     attachScript,
     buildWith,
@@ -113,7 +133,9 @@ import Cardano.Node.Client.TxBuild (
     draft,
     mint,
     output,
+    proposeTreasuryWithdrawal,
     reference,
+    registerAndVoteAbstain,
     requireSignature,
     setMetadata,
     spend,
@@ -130,7 +152,7 @@ import PlutusTx.IsData.Class (ToData (..))
 import Text.Read (readMaybe)
 
 spec :: Spec
-spec =
+spec = do
     describe "TxBuild mainnet golden vectors" $
         for_ goldenCases $ \golden ->
             it (goldenName golden <> " draft/build") $ do
@@ -141,6 +163,40 @@ spec =
                 assertStructurallyEquivalent expected actual
                 built <- buildGoldenTx expected inputCoins
                 assertBalancedStructurallyEquivalent expected built
+    describe "TxBuild Conway CLI artifact parity" $ do
+        it "registerAndVoteAbstain matches cardano-cli certificate CBOR" $ do
+            expected <-
+                loadGoldenCert "register-and-vote-abstain"
+            let tx =
+                    draft goldenBuildPParams $
+                        void $
+                            registerAndVoteAbstain
+                                conway042StakeCredential
+                                (Coin 2_000_000)
+                                (ScriptCert (101 :: Integer))
+            toList (tx ^. bodyTxL . certsTxBodyL)
+                `shouldBe` [expected]
+
+        it "proposeTreasuryWithdrawal matches cardano-cli proposal CBOR" $ do
+            expected <- loadGoldenProposal "treasury-withdrawal"
+            let tx =
+                    draft goldenBuildPParams $
+                        void $
+                            proposeTreasuryWithdrawal
+                                (Coin 100_000_000)
+                                conway042StakeRewardAccount
+                                conway042Anchor
+                                ( Map.singleton
+                                    conway042PayeeRewardAccount
+                                    (Coin 1_000_000)
+                                )
+                                SNothing
+                                NoProposalScript
+            toList
+                ( OSet.toStrictSeq $
+                    tx ^. bodyTxL . proposalProceduresTxBodyL
+                )
+                `shouldBe` [expected]
 
 data GoldenCase = GoldenCase
     { goldenName :: String
@@ -183,9 +239,96 @@ loadGoldenTx golden = do
         Right tx ->
             pure tx
 
+loadGoldenCert :: String -> IO (ConwayTxCert ConwayEra)
+loadGoldenCert name =
+    loadConwayArtifact
+        (conway042FixturePath name)
+        "Conway tx certificate"
+        (decCBOR :: forall s. Decoder s (ConwayTxCert ConwayEra))
+
+loadGoldenProposal :: String -> IO (ProposalProcedure ConwayEra)
+loadGoldenProposal name =
+    loadConwayArtifact
+        (conway042FixturePath name)
+        "Conway proposal procedure"
+        (decCBOR :: forall s. Decoder s (ProposalProcedure ConwayEra))
+
+loadConwayArtifact ::
+    FilePath ->
+    String ->
+    (forall s. Decoder s a) ->
+    IO a
+loadConwayArtifact path label decoder = do
+    hex <- T.strip . T.pack <$> readFile path
+    case decodeFullAnnotatorFromHexText
+        (natVersion @11)
+        (T.pack label)
+        (pure <$> decoder)
+        hex of
+        Left err ->
+            expectationFailure
+                ("failed to decode fixture " <> path <> ": " <> show err)
+                >> fail "fixture decode failed"
+        Right artifact ->
+            pure artifact
+
 fixturePath :: String -> FilePath
 fixturePath hash =
     "test/fixtures/mainnet-txbuild/" <> hash <> ".cbor.hex"
+
+conway042FixturePath :: String -> FilePath
+conway042FixturePath name =
+    "test/fixtures/mainnet-txbuild/conway-042/"
+        <> name
+        <> ".cbor.hex"
+
+conway042StakeCredential :: Credential Staking
+conway042StakeCredential =
+    ScriptHashObj conway042StakeScriptHash
+
+conway042StakeRewardAccount :: AccountAddress
+conway042StakeRewardAccount =
+    AccountAddress Testnet (AccountId conway042StakeCredential)
+
+conway042PayeeRewardAccount :: AccountAddress
+conway042PayeeRewardAccount =
+    AccountAddress
+        Testnet
+        (AccountId (ScriptHashObj conway042PayeeScriptHash))
+
+conway042Anchor :: Anchor
+conway042Anchor =
+    Anchor
+        ( fromJust $
+            textToUrl
+                128
+                "https://example.invalid/conway-042.json"
+        )
+        ( safeHashFromHex
+            "dbc647b70b3f39b6f399e60e7be4559459500285eeea7fe07c496314065bcc88"
+        )
+
+conway042StakeScriptHash :: ScriptHash
+conway042StakeScriptHash =
+    scriptHashFromHex
+        "9dcfe5a661b6bc3af0999d06416d95842ba7c693dc0e246f5e0a5e33"
+
+conway042PayeeScriptHash :: ScriptHash
+conway042PayeeScriptHash =
+    scriptHashFromHex
+        "2cea18e1ddb0a92ec666484f9da83af49e272b8f8d1bd992505f60e6"
+
+scriptHashFromHex :: String -> ScriptHash
+scriptHashFromHex text =
+    ScriptHash $
+        fromJust $
+            hashFromStringAsHex text
+
+safeHashFromHex :: String -> SafeHash i
+safeHashFromHex text =
+    unsafeMakeSafeHash $
+        fromJust $
+            hashFromStringAsHex text
 
 inputFixturePath :: String -> FilePath
 inputFixturePath hash =

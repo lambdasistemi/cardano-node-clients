@@ -108,11 +108,11 @@ across slices A–F.
 
 ### Tests for Slice B ⚠️ RED first
 
-- [ ] T011 [USB] Generate the golden fixture pair using the `cardano-cli` invocation recorded in `quickstart.md`; commit it as `test/fixtures/mainnet-txbuild/conway-042/register-and-vote-abstain.cbor.hex` + `register-and-vote-abstain.inputs`. Add a golden case to `test/Cardano/Node/Client/TxBuildGoldenSpec.hs` that decodes the fixture as `ConwayTxCert ConwayEra`, builds the same cert via `registerAndVoteAbstain`, and compares the emitted `certsTxBodyL` entry with the decoded artifact.
+- [x] T011 [USB] Generate the golden fixture pair using the `cardano-cli` invocation recorded in `quickstart.md`; commit it as `test/fixtures/mainnet-txbuild/conway-042/register-and-vote-abstain.cbor.hex` + `register-and-vote-abstain.inputs`. Add a golden case to `test/Cardano/Node/Client/TxBuildGoldenSpec.hs` that decodes the fixture as `ConwayTxCert ConwayEra`, builds the same cert via `registerAndVoteAbstain`, and compares the emitted `certsTxBodyL` entry with the decoded artifact.
 
 ### Implementation for Slice B
 
-- [ ] T012 [USB] Add `registerAndVoteAbstain` smart constructor to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (delegates to `certify` with a hand-rolled `ConwayTxCert ConwayEra` value combining stake-credential registration and `DRepAlwaysAbstain` vote-delegation, with the deposit Coin from the caller).
+- [x] T012 [USB] Add `registerAndVoteAbstain` smart constructor to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (delegates to `certify` with a hand-rolled `ConwayTxCert ConwayEra` value combining stake-credential registration and `DRepAlwaysAbstain` vote-delegation, with the deposit Coin from the caller).
 
 **Checkpoint**: Slice B commit is one object; gate is green; new golden case passes. Acceptance criterion 3 satisfied.
 
@@ -130,15 +130,15 @@ across slices A–F.
 
 ### Tests for Slice C ⚠️ RED first
 
-- [ ] T013 [USC] Add a property test to `test/Cardano/Node/Client/TxBuildSpec.hs`: `propose` with `GuardrailProposal r` and a proposal carrying `SJust guardrailScriptHash` produces a body entry plus a `ConwayProposing (AsIx i)` redeemer at the index found by reading back the final `proposalProceduresTxBodyL` `OSet`, for a generated list of proposals. `NoProposalScript` with `SNothing` guardrail produces no proposal redeemer.
+- [x] T013 [USC] Add a property test to `test/Cardano/Node/Client/TxBuildSpec.hs`: `propose` with `GuardrailProposal r` and a proposal carrying `SJust guardrailScriptHash` produces a body entry plus a `ConwayProposing (AsIx i)` redeemer at the index found by reading back the final `proposalProceduresTxBodyL` `OSet`, for a generated list of proposals. `NoProposalScript` with `SNothing` guardrail produces no proposal redeemer.
 
 ### Implementation for Slice C
 
-- [ ] T014 [USC] Add `ProposalWitness` ADT to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with `NoProposalScript` and existential `GuardrailProposal r`.
-- [ ] T015 [USC] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Propose` constructor returning `()`; the public smart constructor returns `Word32` through `Peek`.
-- [ ] T016 [USC] Add `tsProposals :: [(ProposalProcedure ConwayEra, ProposalWitness)]` to `TxState` and thread accumulation through `interpretWith` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs`.
-- [ ] T017 [USC] Add `collectProposalRedeemers` helper to `lib-tx-build/Cardano/Node/Client/TxBuild.hs`. Index is the position in the final `proposalProceduresTxBodyL` `OSet`.
-- [ ] T018 [USC] Extend `assembleTx` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` to populate `proposalProceduresTxBodyL` and fold the new redeemer list into the `Redeemers` map. Add `propose` smart constructor with the `Peek` fixpoint.
+- [x] T014 [USC] Add `ProposalWitness` ADT to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with `NoProposalScript` and existential `GuardrailProposal r`.
+- [x] T015 [USC] Extend `TxInstr q e` GADT in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` with the `Propose` constructor returning `()`; the public smart constructor returns `Word32` through `Peek`.
+- [x] T016 [USC] Add `tsProposals :: [(ProposalProcedure ConwayEra, ProposalWitness)]` to `TxState` and thread accumulation through `interpretWith` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs`.
+- [x] T017 [USC] Add `collectProposalRedeemers` helper to `lib-tx-build/Cardano/Node/Client/TxBuild.hs`. Index is the position in the final `proposalProceduresTxBodyL` `OSet`.
+- [x] T018 [USC] Extend `assembleTx` in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` to populate `proposalProceduresTxBodyL` and fold the new redeemer list into the `Redeemers` map. Add `propose` smart constructor with the `Peek` fixpoint.
 
 **Checkpoint**: Slice C commit is one object; gate green; property test passes. Acceptance criterion 4 satisfied.
 
@@ -156,11 +156,11 @@ across slices A–F.
 
 ### Tests for Slice D ⚠️ RED first
 
-- [ ] T019 [USD] Generate the golden fixture pair using the `cardano-cli` invocation recorded in `quickstart.md`; commit it as `test/fixtures/mainnet-txbuild/conway-042/treasury-withdrawal.cbor.hex` + `treasury-withdrawal.inputs`. Add a golden case to `test/Cardano/Node/Client/TxBuildGoldenSpec.hs` that decodes the fixture as `ProposalProcedure ConwayEra`, builds the same proposal procedure via `proposeTreasuryWithdrawal` with `SNothing` and `NoProposalScript`, and compares the emitted `proposalProceduresTxBodyL` entry with the decoded artifact.
+- [x] T019 [USD] Generate the golden fixture pair using the `cardano-cli` invocation recorded in `quickstart.md`; commit it as `test/fixtures/mainnet-txbuild/conway-042/treasury-withdrawal.cbor.hex` + `treasury-withdrawal.inputs`. Add a golden case to `test/Cardano/Node/Client/TxBuildGoldenSpec.hs` that decodes the fixture as `ProposalProcedure ConwayEra`, builds the same proposal procedure via `proposeTreasuryWithdrawal` with `SNothing` and `NoProposalScript`, and compares the emitted `proposalProceduresTxBodyL` entry with the decoded artifact.
 
 ### Implementation for Slice D
 
-- [ ] T020 [USD] Add `proposeTreasuryWithdrawal` smart constructor to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (delegates to `propose` with a `TreasuryWithdrawals` `GovAction` carrying the supplied payee map and optional guardrail script hash; the consumer path passes `SNothing` with `NoProposalScript`).
+- [x] T020 [USD] Add `proposeTreasuryWithdrawal` smart constructor to `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (delegates to `propose` with a `TreasuryWithdrawals` `GovAction` carrying the supplied payee map and optional guardrail script hash; the consumer path passes `SNothing` with `NoProposalScript`).
 
 **Checkpoint**: Slice D commit is one object; gate green; new golden case passes. Acceptance criterion 5 satisfied.
 
@@ -178,12 +178,12 @@ across slices A–F.
 
 ### Tests for Slice E ⚠️ RED first
 
-- [ ] T021 [USE] Add `test/Cardano/Node/Client/TxBuildPublicApiSpec.hs`: a compile-only test module that imports `Cardano.Node.Client.TxBuild` and references every new public symbol and every new re-exported Conway ledger type from `contracts/txbuild-conway-api.md`. Wire it into the `tx-build-tests` `other-modules` block in `cardano-node-clients.cabal`.
+- [x] T021 [USE] Add `test/Cardano/Node/Client/TxBuildPublicApiSpec.hs`: a compile-only test module that imports `Cardano.Node.Client.TxBuild` and references every new public symbol and every new re-exported Conway ledger type from `contracts/txbuild-conway-api.md`. Wire it into the `tx-build-tests` `other-modules` block in `cardano-node-clients.cabal`.
 
 ### Implementation for Slice E
 
-- [ ] T022 [USE] Extend the explicit export list at the top of `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (`TxBuild.hs:21-90`) with `CertWitness (..)`, `ProposalWitness (..)`, including `NoProposalScript` and `GuardrailProposal`, `certify`, `registerAndVoteAbstain`, `propose`, `proposeTreasuryWithdrawal`, and the Conway ledger re-exports listed in `contracts/txbuild-conway-api.md`.
-- [ ] T023 [USE] Add haddock to every new symbol in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` per the `haskell` skill (one-line summary; explicit invariant for the returned `Word32` being the final body-field index for the four index-returning combinators).
+- [x] T022 [USE] Extend the explicit export list at the top of `lib-tx-build/Cardano/Node/Client/TxBuild.hs` (`TxBuild.hs:21-90`) with `CertWitness (..)`, `ProposalWitness (..)`, including `NoProposalScript` and `GuardrailProposal`, `certify`, `registerAndVoteAbstain`, `propose`, `proposeTreasuryWithdrawal`, and the Conway ledger re-exports listed in `contracts/txbuild-conway-api.md`.
+- [x] T023 [USE] Add haddock to every new symbol in `lib-tx-build/Cardano/Node/Client/TxBuild.hs` per the `haskell` skill (one-line summary; explicit invariant for the returned `Word32` being the final body-field index for the four index-returning combinators).
 
 **Checkpoint**: Slice E commit is one object; gate green; the public-API import-surface module compiles. Acceptance criterion 7 satisfied.
 

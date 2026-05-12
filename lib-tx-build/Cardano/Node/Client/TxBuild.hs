@@ -37,6 +37,7 @@ module Cardano.Node.Client.TxBuild (
     MintWitness (..),
     WithdrawWitness (..),
     CertWitness (..),
+    ProposalWitness (..),
 
     -- * Input combinators
     spend,
@@ -59,6 +60,11 @@ module Cardano.Node.Client.TxBuild (
 
     -- * Certificates
     certify,
+    registerAndVoteAbstain,
+
+    -- * Proposals
+    propose,
+    proposeTreasuryWithdrawal,
 
     -- * Constraints
     validFrom,
@@ -87,6 +93,25 @@ module Cardano.Node.Client.TxBuild (
     -- * Errors
     BuildError (..),
 
+    -- * Conway ledger types
+    ConwayEra,
+    AccountAddress (..),
+    AccountId (..),
+    pattern RewardAccount,
+    Anchor (..),
+    Coin (..),
+    ConwayDelegCert (..),
+    ConwayGovCert (..),
+    ConwayTxCert (..),
+    Credential (..),
+    Delegatee (..),
+    DRep (..),
+    GovAction (..),
+    KeyRole (..),
+    ProposalProcedure (..),
+    ScriptHash (..),
+    StrictMaybe (..),
+
     -- * Internal (for testing)
     interpretWith,
     assembleTx,
@@ -108,6 +133,7 @@ import Data.Functor.Identity (
 import Data.List (elemIndex)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.OSet.Strict qualified as OSet
 import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -115,9 +141,11 @@ import Data.Word (Word32, Word64)
 import Numeric.Natural (Natural)
 
 import Cardano.Ledger.Address (
-    AccountAddress,
+    AccountAddress (..),
+    AccountId (..),
     Addr,
     Withdrawals (..),
+    pattern RewardAccount,
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
@@ -148,6 +176,7 @@ import Cardano.Ledger.Api.Tx.Body (
     mintTxBodyL,
     mkBasicTxBody,
     outputsTxBodyL,
+    proposalProceduresTxBodyL,
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
     vldtTxBodyL,
@@ -170,10 +199,20 @@ import Cardano.Ledger.BaseTypes (
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Conway.Governance (
+    Anchor (..),
+    GovAction (..),
+    ProposalProcedure (..),
+ )
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
-import Cardano.Ledger.Conway.TxCert (ConwayTxCert)
+import Cardano.Ledger.Conway.TxCert (
+    ConwayDelegCert (..),
+    ConwayGovCert (..),
+    ConwayTxCert (..),
+    Delegatee (..),
+ )
 import Cardano.Ledger.Core (
     PParams,
     Script,
@@ -183,7 +222,9 @@ import Cardano.Ledger.Core (
     metadataTxAuxDataL,
     mkBasicTxAuxData,
  )
-import Cardano.Ledger.Hashes (ScriptHash)
+import Cardano.Ledger.Credential (Credential (..))
+import Cardano.Ledger.DRep (DRep (..))
+import Cardano.Ledger.Hashes (ScriptHash (..))
 import Cardano.Ledger.Keys (
     KeyHash,
     KeyRole (..),
@@ -275,6 +316,13 @@ data CertWitness
     | -- | Script certificate with a typed redeemer.
       forall r. (ToData r) => ScriptCert r
 
+-- | How a Conway proposal procedure is witnessed.
+data ProposalWitness
+    = -- | No guardrail script, no redeemer needed.
+      NoProposalScript
+    | -- | Guardrail script with a typed redeemer.
+      forall r. (ToData r) => GuardrailProposal r
+
 -- | Pure query interpreter.
 newtype Interpret q = Interpret
     { runInterpret :: forall x. q x -> x
@@ -318,6 +366,11 @@ data TxInstr q e a where
     Certify ::
         ConwayTxCert ConwayEra ->
         CertWitness ->
+        TxInstr q e ()
+    -- | Add a Conway proposal procedure.
+    Propose ::
+        ProposalProcedure ConwayEra ->
+        ProposalWitness ->
         TxInstr q e ()
     -- | Set transaction metadata for a label.
     SetMetadata ::
@@ -495,6 +548,62 @@ certify cert witness = do
                 then Ok (certIndex cert certs)
                 else Iterate 0
 
+{- | Register a stake credential and delegate its vote to the
+always-abstain DRep. Returns the final certificate body-field index.
+-}
+registerAndVoteAbstain ::
+    Credential Staking ->
+    Coin ->
+    CertWitness ->
+    TxBuild q e Word32
+registerAndVoteAbstain credential deposit =
+    certify $
+        ConwayTxCertDeleg $
+            ConwayRegDelegCert
+                credential
+                (DelegVote DRepAlwaysAbstain)
+                deposit
+
+{- | Emit a Conway proposal procedure. Returns the proposal index in
+the final transaction body field.
+-}
+propose ::
+    ProposalProcedure ConwayEra ->
+    ProposalWitness ->
+    TxBuild q e Word32
+propose proposal witness = do
+    singleton $ Propose proposal witness
+    singleton $ Peek $ \tx ->
+        let proposals =
+                tx ^. bodyTxL . proposalProceduresTxBodyL
+         in if OSet.member proposal proposals
+                then Ok (proposalIndex proposal proposals)
+                else Iterate 0
+
+{- | Emit a treasury-withdrawal governance action as a proposal
+procedure. Returns the final proposal body-field index.
+-}
+proposeTreasuryWithdrawal ::
+    Coin ->
+    AccountAddress ->
+    Anchor ->
+    Map AccountAddress Coin ->
+    StrictMaybe ScriptHash ->
+    ProposalWitness ->
+    TxBuild q e Word32
+proposeTreasuryWithdrawal
+    deposit
+    returnAccount
+    anchor
+    withdrawals
+    guardrail =
+        propose $
+            ProposalProcedure
+                deposit
+                returnAccount
+                (TreasuryWithdrawals withdrawals guardrail)
+                anchor
+
 -- | Set transaction metadata for a label.
 setMetadata :: Word64 -> Metadatum -> TxBuild q e ()
 setMetadata label = singleton . SetMetadata label
@@ -608,6 +717,8 @@ data TxState e = TxState
         [(AccountAddress, Coin, WithdrawWitness)]
     , tsCerts ::
         [(ConwayTxCert ConwayEra, CertWitness)]
+    , tsProposals ::
+        [(ProposalProcedure ConwayEra, ProposalWitness)]
     , tsMetadata :: Map Word64 Metadatum
     , tsSigners :: Set (KeyHash Guard)
     , tsScripts ::
@@ -628,6 +739,7 @@ emptyState =
         , tsMints = []
         , tsWithdrawals = []
         , tsCerts = []
+        , tsProposals = []
         , tsMetadata = Map.empty
         , tsSigners = Set.empty
         , tsScripts = Map.empty
@@ -718,6 +830,14 @@ interpretWithM runCtx currentTx = go emptyState True
                 st
                     { tsCerts =
                         tsCerts st ++ [(cert, w)]
+                    }
+                conv
+                (k ())
+        Propose proposal w :>>= k ->
+            go
+                st
+                    { tsProposals =
+                        tsProposals st ++ [(proposal, w)]
                     }
                 conv
                 (k ())
@@ -818,6 +938,9 @@ assembleTxWith extraIns pp st =
         certs =
             StrictSeq.fromList $
                 map fst (tsCerts st)
+        proposals =
+            OSet.fromList $
+                map fst (tsProposals st)
         -- Build redeemers
         spendRdmrs =
             collectSpendRedeemers
@@ -832,11 +955,16 @@ assembleTxWith extraIns pp st =
             collectCertRedeemers
                 certs
                 (tsCerts st)
+        proposalRdmrs =
+            collectProposalRedeemers
+                proposals
+                (tsProposals st)
         rdmrList =
             spendRdmrs
                 ++ mintRdmrs
                 ++ withdrawalRdmrs
                 ++ certRdmrs
+                ++ proposalRdmrs
         allRdmrs = Redeemers $ Map.fromList rdmrList
         auxData =
             if Map.null (tsMetadata st)
@@ -864,6 +992,7 @@ assembleTxWith extraIns pp st =
                 & mintTxBodyL .~ mintMA
                 & withdrawalsTxBodyL .~ withdrawals
                 & certsTxBodyL .~ certs
+                & proposalProceduresTxBodyL .~ proposals
                 & reqSignerHashesTxBodyL
                     .~ tsSigners st
                 & vldtTxBodyL
@@ -1692,6 +1821,19 @@ certIndex needle certs =
         | x == needle = n
         | otherwise = go (n + 1) xs
 
+proposalIndex ::
+    ProposalProcedure ConwayEra ->
+    OSet.OSet (ProposalProcedure ConwayEra) ->
+    Word32
+proposalIndex needle proposals =
+    go 0 (toList (OSet.toStrictSeq proposals))
+  where
+    go _ [] =
+        error "proposalIndex: proposal not in body"
+    go n (x : xs)
+        | x == needle = n
+        | otherwise = go (n + 1) xs
+
 -- | Collect spending redeemers from steps.
 collectSpendRedeemers ::
     Set TxIn ->
@@ -1791,6 +1933,43 @@ collectCertRedeemers certs =
     addScriptCert acc _ = acc
 
     keepExisting _ existing = existing
+
+collectProposalRedeemers ::
+    OSet.OSet (ProposalProcedure ConwayEra) ->
+    [(ProposalProcedure ConwayEra, ProposalWitness)] ->
+    [ ( ConwayPlutusPurpose AsIx ConwayEra
+      , (Data ConwayEra, ExUnits)
+      )
+    ]
+collectProposalRedeemers proposals =
+    Map.toList . foldl' addGuardrailProposal Map.empty
+  where
+    finalProposals = toList (OSet.toStrictSeq proposals)
+
+    addGuardrailProposal acc (proposal, GuardrailProposal redeemer)
+        | not (proposalHasGuardrail proposal) = acc
+        | otherwise =
+            case elemIndex proposal finalProposals of
+                Nothing -> acc
+                Just proposalIx ->
+                    Map.insertWith
+                        keepExisting
+                        ( ConwayProposing
+                            (AsIx (fromIntegral proposalIx))
+                        )
+                        (toLedgerData redeemer, ExUnits 0 0)
+                        acc
+    addGuardrailProposal acc _ = acc
+
+    keepExisting _ existing = existing
+
+proposalHasGuardrail ::
+    ProposalProcedure ConwayEra -> Bool
+proposalHasGuardrail (ProposalProcedure _ _ action _) =
+    case action of
+        ParameterChange _ _ (SJust _) -> True
+        TreasuryWithdrawals _ (SJust _) -> True
+        _ -> False
 
 -- | Accumulate 'MultiAsset' from mint entries.
 addMint ::
