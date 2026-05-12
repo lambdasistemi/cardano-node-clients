@@ -97,6 +97,7 @@ library
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
     Cardano.Node.Client.UTxOIndexer.Server
+    Cardano.Node.Client.Validity
 
   reexported-modules:
     Cardano.Node.Client.Balance
@@ -269,6 +270,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
+    Cardano.Node.Client.ValiditySpec
     Data.List.SampleFibonacciSpec
 
   build-depends:
@@ -296,12 +298,15 @@ test-suite unit-tests
     , hspec
     , microlens
     , network
+    , ouroboros-consensus
     , plutus-core
     , plutus-tx
     , QuickCheck
     , random
+    , sop-extras
     , temporary
     , text
+    , time
 
 test-suite tx-build-tests
   import:           warnings
