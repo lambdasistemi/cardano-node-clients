@@ -565,6 +565,35 @@ certifySpec =
                     , ExUnits 0 0
                     )
 
+        it "coalesces duplicate certificate redeemers by final body index" $ do
+            let cert =
+                    mkVoteAbstainCert
+                        (ConwayFixtures.mkScriptStakeCredential 4)
+                (tx, indices) =
+                    runDraft $ do
+                        firstIx <-
+                            certify
+                                cert
+                                (ScriptCert (101 :: Integer))
+                        secondIx <-
+                            certify
+                                cert
+                                (ScriptCert (202 :: Integer))
+                        pure (firstIx, secondIx)
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            indices `shouldBe` (0, 0)
+            toList (tx ^. bodyTxL . certsTxBodyL)
+                `shouldBe` [cert]
+            Map.lookup
+                (ConwayCertifying (AsIx 0))
+                rdmrs
+                `shouldBe` Just
+                    ( Data (PLC.I 101)
+                    , ExUnits 0 0
+                    )
+            Map.size rdmrs `shouldBe` 1
+
 metadataSpec :: Spec
 metadataSpec =
     describe "setMetadata" $ do

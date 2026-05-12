@@ -1774,12 +1774,23 @@ collectCertRedeemers ::
       , (Data ConwayEra, ExUnits)
       )
     ]
-collectCertRedeemers certs entries =
-    [ ( ConwayCertifying (AsIx (certIndex cert certs))
-      , (toLedgerData redeemer, ExUnits 0 0)
-      )
-    | (cert, ScriptCert redeemer) <- entries
-    ]
+collectCertRedeemers certs =
+    Map.toList . foldl' addScriptCert Map.empty
+  where
+    finalCerts = toList certs
+
+    addScriptCert acc (cert, ScriptCert redeemer) =
+        case elemIndex cert finalCerts of
+            Nothing -> acc
+            Just certIx ->
+                Map.insertWith
+                    keepExisting
+                    (ConwayCertifying (AsIx (fromIntegral certIx)))
+                    (toLedgerData redeemer, ExUnits 0 0)
+                    acc
+    addScriptCert acc _ = acc
+
+    keepExisting _ existing = existing
 
 -- | Accumulate 'MultiAsset' from mint entries.
 addMint ::
