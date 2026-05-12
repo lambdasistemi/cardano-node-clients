@@ -138,8 +138,9 @@ constructors aren't exported in a stable way), but we do require:
   * the chain-sync 'Async' resolved with a 'Left' (i.e.
     the exception escaped 'runChainSyncN2C''s own catch path), and
 
-  * the rendered exception text contains @"bearer closed"@ or
-    @"BearerClosed"@.
+  * the rendered exception text contains @"bearer closed"@,
+    @"BearerClosed"@, or the socket-level broken-pipe text now
+    emitted by newer network stacks for the same peer close.
 -}
 isBearerClosedFailure :: Either SomeException a -> Bool
 isBearerClosedFailure (Right _) = False
@@ -150,6 +151,8 @@ isBearerClosedFailure (Left e) =
             map toLowerAscii s
      in "bearer closed" `isInfixOf` cleaned
             || "bearerclosed" `isInfixOf` cleaned
+            || "broken pipe" `isInfixOf` cleaned
+            || "resource vanished" `isInfixOf` cleaned
             || hasMuxRuntime e
   where
     toLowerAscii c
