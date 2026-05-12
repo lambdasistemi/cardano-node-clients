@@ -5,6 +5,7 @@ import Test.Hspec (hspec)
 import Cardano.Node.Client.E2E.BalanceSpec qualified as BalanceSpec
 import Cardano.Node.Client.E2E.ChainPopulatorSpec qualified as ChainPopulatorSpec
 import Cardano.Node.Client.E2E.ChainSyncSpec qualified as ChainSyncSpec
+import Cardano.Node.Client.E2E.GovernanceSmokeSpec qualified as GovernanceSmokeSpec
 import Cardano.Node.Client.E2E.HorizonSpec qualified as HorizonSpec
 import Cardano.Node.Client.E2E.Issue97ReproSpec qualified as Issue97ReproSpec
 import Cardano.Node.Client.E2E.MultiAssetChangeSpec qualified as MultiAssetChangeSpec
@@ -26,6 +27,7 @@ import Cardano.Node.Client.E2E.UTxOIndexerSpec qualified as UTxOIndexerSpec
 main :: IO ()
 main = hspec $ do
     ProviderSpec.spec
+    GovernanceSmokeSpec.spec
     BalanceSpec.spec
     TxBuildSpec.spec
     MultiAssetChangeSpec.spec
