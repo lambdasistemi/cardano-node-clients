@@ -45,11 +45,16 @@ import Cardano.Ledger.State (UTxO (..))
 import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.EpochInfo (hoistEpochInfo)
+import Cardano.Slotting.Slot qualified as Slotting
 import Cardano.Slotting.Time (
     RelativeTime (..),
     toRelativeTime,
  )
 
+import Ouroboros.Consensus.Block.Abstract (
+    fromWithOrigin,
+    pointSlot,
+ )
 import Ouroboros.Consensus.Cardano.Block (
     pattern QueryIfCurrentConway,
  )
@@ -65,7 +70,7 @@ import Ouroboros.Consensus.HardFork.History.Qry (
     wallclockToSlot,
  )
 import Ouroboros.Consensus.Ledger.Query (
-    Query (BlockQuery, GetSystemStart),
+    Query (BlockQuery, GetChainPoint, GetSystemStart),
  )
 import Ouroboros.Consensus.Shelley.Ledger.Query (
     pattern GetCurrentPParams,
@@ -93,6 +98,7 @@ import Cardano.Node.Client.Provider (
     queryUTxOsH,
  )
 import Cardano.Node.Client.Types (Block)
+import Cardano.Node.Client.Validity qualified as Validity
 
 {- | Create a 'Provider IO' backed by the N2C
 LocalStateQuery protocol.
@@ -121,6 +127,11 @@ mkN2CProvider ch =
         , posixMsCeilSlot = \ms ->
             withAcquiredN2C $ \handle ->
                 posixMsCeilSlotH handle ms
+        , queryUpperBoundSlot = \choice ->
+            withAcquiredLSQ ch $ \acquired ->
+                let runQuery :: forall result. Query Block result -> IO result
+                    runQuery = queryAcquiredLSQ acquired
+                 in queryUpperBoundSlotN2C runQuery choice
         }
   where
     withAcquiredN2C ::
@@ -293,6 +304,24 @@ evaluateTxN2C runQuery tx = do
             utxo
             epochInfo
             systemStart
+
+queryUpperBoundSlotN2C ::
+    (forall result. Query Block result -> IO result) ->
+    Validity.ValidityChoice ->
+    IO (Either Validity.HorizonError SlotNo)
+queryUpperBoundSlotN2C runQuery choice = do
+    interpreter <-
+        runQuery $
+            BlockQuery $
+                QueryHardFork GetInterpreter
+    chainPoint <-
+        runQuery GetChainPoint
+    let tipSlot = fromWithOrigin (Slotting.SlotNo 0) (pointSlot chainPoint)
+    pure $
+        Validity.selectUpperBound
+            interpreter
+            tipSlot
+            choice
 
 posixMsToSlotN2C ::
     (forall result. Query Block result -> IO result) ->
