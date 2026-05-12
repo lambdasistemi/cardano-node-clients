@@ -46,6 +46,8 @@ import Control.Concurrent.STM (
  )
 import Control.Exception (
     BlockedIndefinitelyOnSTM,
+    SomeException,
+    catch,
     handle,
     mask,
     onException,
@@ -64,6 +66,7 @@ import Ouroboros.Network.Protocol.LocalStateQuery.Client (
 import Ouroboros.Network.Protocol.LocalStateQuery.Type (
     Target (..),
  )
+import System.Timeout (timeout)
 
 {- | Per-session command queue capacity.
 
@@ -277,7 +280,7 @@ withAcquiredLSQ ch action =
         takeTMVarOrConnectionLost acquiredVar
         result <-
             restore (action acquired)
-                `onException` releaseAcquiredLSQ acquired
+                `onException` releaseAcquiredLSQBestEffort acquired
         releaseAcquiredLSQ acquired
         pure result
 
@@ -307,6 +310,13 @@ releaseAcquiredLSQ acquired = do
             (AcquiredLSQRelease releaseVar)
     void $
         takeTMVarOrConnectionLost releaseVar
+
+releaseAcquiredLSQBestEffort ::
+    AcquiredLSQ ->
+    IO ()
+releaseAcquiredLSQBestEffort acquired =
+    void (timeout 1000000 (releaseAcquiredLSQ acquired))
+        `catch` \(_ :: SomeException) -> pure ()
 
 takeTMVarOrConnectionLost ::
     TMVar a ->

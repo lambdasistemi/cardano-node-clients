@@ -140,6 +140,7 @@ import Cardano.Node.Client.ConwayFixtures qualified as ConwayFixtures
 import Cardano.Node.Client.Evaluate (evaluateAndBalance)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Provider (
+    LedgerSnapshot (..),
     Provider (..),
     singleShotWithAcquired,
  )
@@ -160,7 +161,7 @@ import Cardano.Node.Client.TxBuild hiding (
     ScriptHash (..),
     StrictMaybe (..),
  )
-import Cardano.Slotting.Slot (SlotNo (..))
+import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
 import PlutusCore.Data qualified as PLC
 
@@ -2062,6 +2063,33 @@ outputCountingProvider pp perOutput =
             , queryUTxOs = const (pure [])
             , queryUTxOByTxIn = const (pure Map.empty)
             , queryProtocolParams = pure pp
+            , queryLedgerSnapshot =
+                pure
+                    LedgerSnapshot
+                        { ledgerCurrentEra =
+                            T.pack "Conway"
+                        , ledgerChainPoint =
+                            error
+                                "outputCountingProvider: \
+                                \ledgerChainPoint unused"
+                        , ledgerTipSlot =
+                            SlotNo 0
+                        , ledgerEpoch =
+                            EpochNo 0
+                        }
+            , queryStakeRewards = \_ ->
+                pure Map.empty
+            , queryRewardAccounts = \_ ->
+                pure Map.empty
+            , queryVoteDelegatees = \_ ->
+                pure Map.empty
+            , queryTreasury =
+                pure (Coin 0)
+            , queryGovernanceState =
+                pure $
+                    error
+                        "outputCountingProvider: \
+                        \governanceState unused"
             , evaluateTx =
                 pure
                     . Map.singleton

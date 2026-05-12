@@ -5,7 +5,7 @@ License     : Apache-2.0
 
 Codec configuration shared between the N2C mini-protocols:
 LocalStateQuery, LocalTxSubmission, and ChainSync.
-Uses @CardanoNodeToClientVersion16@ and a configurable
+Uses @CardanoNodeToClientVersion19@ and a configurable
 'EpochSlots' value (default 42 for devnet).
 -}
 module Cardano.Node.Client.N2C.Codecs (
@@ -40,7 +40,7 @@ import Ouroboros.Consensus.Cardano.Block (
  )
 import Ouroboros.Consensus.Cardano.Block qualified as Consensus
 import Ouroboros.Consensus.Cardano.Node (
-    pattern CardanoNodeToClientVersion16,
+    pattern CardanoNodeToClientVersion19,
  )
 import Ouroboros.Consensus.HardFork.Combinator.NetworkVersion (
     HardForkNodeToClientVersion,
@@ -89,7 +89,7 @@ n2cVersion ::
             : Consensus.CardanoShelleyEras
                 Consensus.StandardCrypto
         )
-n2cVersion = CardanoNodeToClientVersion16
+n2cVersion = CardanoNodeToClientVersion19
 
 -- | N2C ChainSync protocol type (block-level).
 type N2CChainSync =

@@ -20,16 +20,25 @@ module Cardano.Node.Client.N2C.Provider (
 ) where
 
 import Data.Bifunctor (first)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Coerce (coerce)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time.Clock (NominalDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 
+import Cardano.Binary (
+    Decoder,
+    DecoderError,
+    decodeFullDecoder,
+    decodeInteger,
+    decodeListLen,
+ )
 import Control.Monad.Trans.Except (runExcept)
 import Lens.Micro ((^.))
 
-import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Address (AccountAddress, Addr)
 import Cardano.Ledger.Alonzo.Plutus.Evaluate (
     evalTxExUnits,
  )
@@ -39,10 +48,19 @@ import Cardano.Ledger.Api.Tx.Body (
     referenceInputsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (TxOut, addrTxOutL)
+import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams, bodyTxL)
-import Cardano.Ledger.State (UTxO (..))
+import Cardano.Ledger.Credential (Credential)
+import Cardano.Ledger.DRep (DRep)
+import Cardano.Ledger.Keys (KeyRole (Staking))
+import Cardano.Ledger.State (
+    ChainAccountState,
+    GovState,
+    UTxO (..),
+ )
 import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Address (rewardAccountCredential)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.EpochInfo (hoistEpochInfo)
 import Cardano.Slotting.Slot qualified as Slotting
@@ -58,8 +76,12 @@ import Ouroboros.Consensus.Block.Abstract (
 import Ouroboros.Consensus.Cardano.Block (
     pattern QueryIfCurrentConway,
  )
+import Ouroboros.Consensus.HardFork.Combinator.Abstract.SingleEraBlock (
+    EraIndex,
+    eraIndexToInt,
+ )
 import Ouroboros.Consensus.HardFork.Combinator.Ledger.Query (
-    QueryHardFork (GetInterpreter),
+    QueryHardFork (GetCurrentEra, GetInterpreter),
     pattern QueryHardFork,
  )
 import Ouroboros.Consensus.HardFork.History.EpochInfo (
@@ -73,9 +95,19 @@ import Ouroboros.Consensus.Ledger.Query (
     Query (BlockQuery, GetChainPoint, GetSystemStart),
  )
 import Ouroboros.Consensus.Shelley.Ledger.Query (
+    pattern GetAccountState,
+    pattern GetCBOR,
     pattern GetCurrentPParams,
+    pattern GetEpochNo,
+    pattern GetFilteredDelegationsAndRewardAccounts,
+    pattern GetFilteredVoteDelegatees,
+    pattern GetGovState,
     pattern GetUTxOByAddress,
     pattern GetUTxOByTxIn,
+ )
+import Ouroboros.Network.Block (
+    Serialised,
+    fromSerialised,
  )
 
 import Cardano.Node.Client.N2C.LocalStateQuery (
@@ -85,6 +117,7 @@ import Cardano.Node.Client.N2C.LocalStateQuery (
 import Cardano.Node.Client.N2C.Types (LSQChannel)
 import Cardano.Node.Client.Provider (
     EvaluateTxResult,
+    LedgerSnapshot (..),
     Provider (..),
     QueryHandle,
     QueryHandleBackend (..),
@@ -93,9 +126,15 @@ import Cardano.Node.Client.Provider (
     mkQueryHandle,
     posixMsCeilSlotH,
     posixMsToSlotH,
+    queryGovernanceStateH,
+    queryLedgerSnapshotH,
     queryProtocolParamsH,
+    queryRewardAccountsH,
+    queryStakeRewardsH,
+    queryTreasuryH,
     queryUTxOByTxInH,
     queryUTxOsH,
+    queryVoteDelegateesH,
  )
 import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.Validity qualified as Validity
@@ -112,6 +151,21 @@ mkN2CProvider ch =
         { withAcquired = withAcquiredN2C
         , queryProtocolParams =
             withAcquiredN2C queryProtocolParamsH
+        , queryLedgerSnapshot =
+            withAcquiredN2C queryLedgerSnapshotH
+        , queryStakeRewards = \credentials ->
+            withAcquiredN2C $ \handle ->
+                queryStakeRewardsH handle credentials
+        , queryRewardAccounts = \accounts ->
+            withAcquiredN2C $ \handle ->
+                queryRewardAccountsH handle accounts
+        , queryVoteDelegatees = \credentials ->
+            withAcquiredN2C $ \handle ->
+                queryVoteDelegateesH handle credentials
+        , queryTreasury =
+            withAcquiredN2C queryTreasuryH
+        , queryGovernanceState =
+            withAcquiredN2C queryGovernanceStateH
         , queryUTxOs = \addr ->
             withAcquiredN2C $ \handle ->
                 queryUTxOsH handle addr
@@ -154,6 +208,18 @@ mkN2CQueryHandle runQuery =
             , backendQueryUTxOsAt = queryUTxOsAtN2C runQuery
             , backendQueryUTxOByTxIn = queryUTxOByTxInN2C runQuery
             , backendQueryProtocolParams = queryProtocolParamsN2C runQuery
+            , backendQueryLedgerSnapshot =
+                queryLedgerSnapshotN2C runQuery
+            , backendQueryStakeRewards =
+                queryStakeRewardsN2C runQuery
+            , backendQueryRewardAccounts =
+                queryRewardAccountsN2C runQuery
+            , backendQueryVoteDelegatees =
+                queryVoteDelegateesN2C runQuery
+            , backendQueryTreasury =
+                queryTreasuryN2C runQuery
+            , backendQueryGovernanceState =
+                queryGovernanceStateN2C runQuery
             , backendEvaluateTx = evaluateTxN2C runQuery
             , backendPosixMsToSlot = posixMsToSlotN2C runQuery
             , backendPosixMsCeilSlot = posixMsCeilSlotN2C runQuery
@@ -164,6 +230,19 @@ mkN2CQueryHandle runQuery =
             <$> queryUTxOsAtN2C
                 runQuery
                 (Set.singleton addr)
+
+eraIndexName :: EraIndex xs -> T.Text
+eraIndexName eraIndex =
+    case eraIndexToInt eraIndex of
+        0 -> "Byron"
+        1 -> "Shelley"
+        2 -> "Allegra"
+        3 -> "Mary"
+        4 -> "Alonzo"
+        5 -> "Babbage"
+        6 -> "Conway"
+        7 -> "Dijkstra"
+        n -> "Unknown era index " <> T.pack (show n)
 
 queryProtocolParamsN2C ::
     (forall result. Query Block result -> IO result) ->
@@ -180,6 +259,165 @@ queryProtocolParamsN2C runQuery = do
             error
                 "queryProtocolParams: era \
                 \mismatch — node not in Conway"
+
+queryLedgerSnapshotN2C ::
+    (forall result. Query Block result -> IO result) ->
+    IO LedgerSnapshot
+queryLedgerSnapshotN2C runQuery = do
+    currentEra <-
+        runQuery $
+            BlockQuery $
+                QueryHardFork GetCurrentEra
+    chainPoint <-
+        runQuery GetChainPoint
+    epochResult <-
+        runQuery $
+            BlockQuery $
+                QueryIfCurrentConway
+                    GetEpochNo
+    epoch <-
+        expectConway
+            "queryLedgerSnapshot"
+            epochResult
+    pure
+        LedgerSnapshot
+            { ledgerCurrentEra =
+                eraIndexName currentEra
+            , ledgerChainPoint =
+                chainPoint
+            , ledgerTipSlot =
+                fromWithOrigin
+                    (Slotting.SlotNo 0)
+                    (pointSlot chainPoint)
+            , ledgerEpoch =
+                epoch
+            }
+
+queryStakeRewardsN2C ::
+    (forall result. Query Block result -> IO result) ->
+    Set.Set (Credential Staking) ->
+    IO (Map.Map (Credential Staking) Coin)
+queryStakeRewardsN2C runQuery credentials = do
+    result <-
+        runQuery $
+            BlockQuery $
+                QueryIfCurrentConway $
+                    GetFilteredDelegationsAndRewardAccounts
+                        credentials
+    (_delegations, rewards) <-
+        expectConway
+            "queryStakeRewards"
+            result
+    pure rewards
+
+queryRewardAccountsN2C ::
+    (forall result. Query Block result -> IO result) ->
+    Set.Set AccountAddress ->
+    IO (Map.Map AccountAddress Coin)
+queryRewardAccountsN2C runQuery accounts = do
+    rewards <-
+        queryStakeRewardsN2C
+            runQuery
+            credentials
+    pure $
+        Map.fromList
+            [ (account, reward)
+            | account <- accountList
+            , let credential =
+                    rewardAccountCredential account
+            , Just reward <- [Map.lookup credential rewards]
+            ]
+  where
+    accountList =
+        Set.toList accounts
+    credentials =
+        Set.fromList $
+            rewardAccountCredential <$> accountList
+
+queryVoteDelegateesN2C ::
+    (forall result. Query Block result -> IO result) ->
+    Set.Set (Credential Staking) ->
+    IO (Map.Map (Credential Staking) DRep)
+queryVoteDelegateesN2C runQuery credentials = do
+    result <-
+        runQuery $
+            BlockQuery $
+                QueryIfCurrentConway $
+                    GetFilteredVoteDelegatees credentials
+    expectConway
+        "queryVoteDelegatees"
+        result
+
+queryTreasuryN2C ::
+    (forall result. Query Block result -> IO result) ->
+    IO Coin
+queryTreasuryN2C runQuery = do
+    result <-
+        runQuery $
+            BlockQuery $
+                QueryIfCurrentConway $
+                    GetCBOR GetAccountState
+    serialisedAccountState <-
+        expectConway
+            "queryTreasury"
+            result
+    decodeTreasury
+        serialisedAccountState
+
+decodeTreasury ::
+    Serialised ChainAccountState ->
+    IO Coin
+decodeTreasury serialised =
+    case decodeFullDecoder
+        "queryTreasury serialised account state"
+        (fromSerialised decodeTreasuryPayload (coerce serialised))
+        mempty of
+        Right treasury ->
+            pure treasury
+        Left err ->
+            error $
+                "queryTreasury: failed to decode treasury: "
+                    <> show err
+
+decodeTreasuryPayload ::
+    forall s.
+    Decoder s (LBS.ByteString -> Either DecoderError Coin)
+decodeTreasuryPayload = do
+    len <- decodeListLen
+    if len == 2
+        then do
+            treasury <-
+                Coin <$> decodeInteger
+            _reserves <-
+                decodeInteger
+            pure $ \_payload ->
+                Right treasury
+        else
+            fail $
+                "expected ChainAccountState with 2 fields, got "
+                    <> show len
+
+queryGovernanceStateN2C ::
+    (forall result. Query Block result -> IO result) ->
+    IO (GovState ConwayEra)
+queryGovernanceStateN2C runQuery = do
+    result <-
+        runQuery $
+            BlockQuery $
+                QueryIfCurrentConway
+                    GetGovState
+    expectConway
+        "queryGovernanceState"
+        result
+
+expectConway :: String -> Either mismatch a -> IO a
+expectConway name result =
+    case result of
+        Right value ->
+            pure value
+        Left _mismatch ->
+            error $
+                name <> ": era mismatch - node not in Conway"
 
 queryUTxOsAtN2C ::
     (forall result. Query Block result -> IO result) ->

@@ -312,6 +312,18 @@ stubProvider tip =
             , queryUTxOByTxIn = pure . Map.restrictKeys tip
             , queryProtocolParams =
                 pure (unused "queryProtocolParams")
+            , queryLedgerSnapshot =
+                pure (unused "queryLedgerSnapshot")
+            , queryStakeRewards = \_ ->
+                pure (unused "queryStakeRewards")
+            , queryRewardAccounts = \_ ->
+                pure (unused "queryRewardAccounts")
+            , queryVoteDelegatees = \_ ->
+                pure (unused "queryVoteDelegatees")
+            , queryTreasury =
+                pure (unused "queryTreasury")
+            , queryGovernanceState =
+                pure (unused "queryGovernanceState")
             , evaluateTx = \_ ->
                 pure (unused "evaluateTx")
             , posixMsToSlot = \_ ->
