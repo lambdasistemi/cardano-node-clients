@@ -2,6 +2,6 @@ state: WaitingForCode
 pr: 132
 branch: feat/conway-stake-treasury-withdrawal
 sha:
-review_file: llm/reviews/132/2b79dc9d755c2eb22f97f563cabe202659e9769f.md
+review_file: llm/reviews/132/059ed82d2b556ce2e728cbdaf22cacd24c14bf52.md
 updated_by: reviewer
-notes: "Slice A certificate instructions approved; issue #97 e2e predicate stabilized after full CI finding; Slice B treasury withdrawals next."
+notes: "Review findings P1/P2 addressed; normal slice gate green; GATE_FULL now correctly rejects the missing Conway smoke until Slice F."
