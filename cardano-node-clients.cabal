@@ -70,6 +70,7 @@ library
   hs-source-dirs:     lib
   default-language:   GHC2021
   exposed-modules:
+    Cardano.Node.Client.Address
     Cardano.Node.Client.Evaluate
     Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
@@ -255,6 +256,7 @@ test-suite unit-tests
   main-is:          unit-main.hs
   default-language: GHC2021
   other-modules:
+    Cardano.Node.Client.AddressSpec
     Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.N2C.ProbeSpec
