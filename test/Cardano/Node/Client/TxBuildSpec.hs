@@ -41,6 +41,7 @@ import Cardano.Ledger.Api.PParams (
     ppTxFeeFixedL,
     ppTxFeePerByteL,
  )
+import Cardano.Ledger.Api.Scripts.Data (Data (..))
 import Cardano.Ledger.Api.Tx (
     auxDataTxL,
     estimateMinFeeTx,
@@ -48,6 +49,7 @@ import Cardano.Ledger.Api.Tx (
  )
 import Cardano.Ledger.Api.Tx.Body (
     auxDataHashTxBodyL,
+    certsTxBodyL,
     collateralInputsTxBodyL,
     collateralReturnTxBodyL,
     feeTxBodyL,
@@ -81,6 +83,11 @@ import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
+import Cardano.Ledger.Conway.TxCert (
+    ConwayDelegCert (..),
+    ConwayTxCert (..),
+    Delegatee (..),
+ )
 import Cardano.Ledger.Core (
     PParams,
     bodyTxL,
@@ -92,13 +99,14 @@ import Cardano.Ledger.Credential (
     Credential (..),
     StakeReference (..),
  )
+import Cardano.Ledger.DRep (DRep (DRepAlwaysAbstain))
 import Cardano.Ledger.Hashes (
     ScriptHash (..),
     unsafeMakeSafeHash,
  )
 import Cardano.Ledger.Keys (
     KeyHash (..),
-    KeyRole (Guard),
+    KeyRole (Guard, Staking),
  )
 import Cardano.Ledger.Mary.Value (
     AssetName (..),
@@ -119,6 +127,7 @@ import Cardano.Node.Client.Balance (
     BalanceResult (..),
     balanceTx,
  )
+import Cardano.Node.Client.ConwayFixtures qualified as ConwayFixtures
 import Cardano.Node.Client.Evaluate (evaluateAndBalance)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Provider (
@@ -128,6 +137,7 @@ import Cardano.Node.Client.Provider (
 import Cardano.Node.Client.TxBuild
 import Cardano.Slotting.Slot (SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
+import PlutusCore.Data qualified as PLC
 
 import Cardano.Crypto.Hash (
     Hash,
@@ -214,6 +224,7 @@ spec = describe "TxBuild" $ do
     scriptSpendSpec
     mintSpec
     withdrawSpec
+    certifySpec
     metadataSpec
     ctxSpec
     validSpec
@@ -493,6 +504,66 @@ withdrawSpec =
                     (Map.singleton rewardAccount (Coin 2_000_000))
             Map.keys rdmrs
                 `shouldBe` [ConwayRewarding (AsIx 0)]
+
+certifySpec :: Spec
+certifySpec =
+    describe "certify" $ do
+        it "adds a pub-key certificate without a certifying redeemer" $ do
+            let cert =
+                    mkVoteAbstainCert
+                        (ConwayFixtures.mkStakeCredential 1)
+                (tx, ix) =
+                    runDraft $
+                        certify cert PubKeyCert
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            ix `shouldBe` 0
+            toList (tx ^. bodyTxL . certsTxBodyL)
+                `shouldBe` [cert]
+            any isCertifying (Map.keys rdmrs)
+                `shouldBe` False
+
+        it "adds script certificate redeemers at final body-field indices" $ do
+            let pubCert =
+                    mkVoteAbstainCert
+                        (ConwayFixtures.mkStakeCredential 1)
+                scriptCert =
+                    mkVoteAbstainCert
+                        (ConwayFixtures.mkScriptStakeCredential 2)
+                laterScriptCert =
+                    mkVoteAbstainCert
+                        (ConwayFixtures.mkScriptStakeCredential 3)
+                (tx, scriptIx) =
+                    runDraft $ do
+                        _ <- certify pubCert PubKeyCert
+                        ix <-
+                            certify
+                                scriptCert
+                                (ScriptCert (99 :: Integer))
+                        _ <-
+                            certify
+                                laterScriptCert
+                                (ScriptCert (100 :: Integer))
+                        pure ix
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            scriptIx `shouldBe` 1
+            toList (tx ^. bodyTxL . certsTxBodyL)
+                `shouldBe` [pubCert, scriptCert, laterScriptCert]
+            Map.lookup
+                (ConwayCertifying (AsIx scriptIx))
+                rdmrs
+                `shouldBe` Just
+                    ( Data (PLC.I 99)
+                    , ExUnits 0 0
+                    )
+            Map.lookup
+                (ConwayCertifying (AsIx 2))
+                rdmrs
+                `shouldBe` Just
+                    ( Data (PLC.I 100)
+                    , ExUnits 0 0
+                    )
 
 metadataSpec :: Spec
 metadataSpec =
@@ -1741,6 +1812,20 @@ isMint ::
     ConwayPlutusPurpose AsIx ConwayEra -> Bool
 isMint (ConwayMinting _) = True
 isMint _ = False
+
+isCertifying ::
+    ConwayPlutusPurpose AsIx ConwayEra -> Bool
+isCertifying (ConwayCertifying _) = True
+isCertifying _ = False
+
+mkVoteAbstainCert ::
+    Credential Staking ->
+    ConwayTxCert ConwayEra
+mkVoteAbstainCert cred =
+    ConwayTxCertDeleg $
+        ConwayDelegCert
+            cred
+            (DelegVote DRepAlwaysAbstain)
 
 outputCountExUnits :: Int -> ConwayTx -> ExUnits
 outputCountExUnits perOutput tx =
