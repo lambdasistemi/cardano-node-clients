@@ -1,0 +1,10 @@
+cardano-cli 10.15.1.0
+stake-script-file: stake.script
+stake-script-hash: 9dcfe5a661b6bc3af0999d06416d95842ba7c693dc0e246f5e0a5e33
+key-reg-deposit-amt: 2000000
+command:
+  cardano-cli conway stake-address registration-and-vote-delegation-certificate \
+    --stake-script-file stake.script \
+    --always-abstain \
+    --key-reg-deposit-amt 2000000 \
+    --out-file register-and-vote-abstain.json

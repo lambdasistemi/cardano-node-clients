@@ -18,7 +18,9 @@ import Data.IORef (
     newIORef,
     readIORef,
  )
+import Data.OSet.Strict qualified as OSet
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Test.Hspec
 
 import Cardano.Ledger.Address (
@@ -56,6 +58,7 @@ import Cardano.Ledger.Api.Tx.Body (
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
+    proposalProceduresTxBodyL,
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
     totalCollateralTxBodyL,
@@ -74,12 +77,18 @@ import Cardano.Ledger.BaseTypes (
     Network (..),
     StrictMaybe (SJust, SNothing),
     TxIx (..),
+    textToUrl,
  )
 import Cardano.Ledger.Coin (
     Coin (..),
     compactCoinOrError,
  )
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Conway.Governance (
+    Anchor (..),
+    GovAction (..),
+    ProposalProcedure (..),
+ )
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
  )
@@ -134,7 +143,23 @@ import Cardano.Node.Client.Provider (
     Provider (..),
     singleShotWithAcquired,
  )
-import Cardano.Node.Client.TxBuild
+import Cardano.Node.Client.TxBuild hiding (
+    AccountAddress (..),
+    AccountId (..),
+    Anchor (..),
+    Coin (..),
+    ConwayDelegCert (..),
+    ConwayEra,
+    ConwayTxCert (..),
+    Credential (..),
+    DRep (..),
+    Delegatee (..),
+    GovAction (..),
+    KeyRole (..),
+    ProposalProcedure (..),
+    ScriptHash (..),
+    StrictMaybe (..),
+ )
 import Cardano.Slotting.Slot (SlotNo (..))
 import Lens.Micro ((&), (.~), (^.))
 import PlutusCore.Data qualified as PLC
@@ -225,6 +250,7 @@ spec = describe "TxBuild" $ do
     mintSpec
     withdrawSpec
     certifySpec
+    proposeSpec
     metadataSpec
     ctxSpec
     validSpec
@@ -590,6 +616,111 @@ certifySpec =
                 rdmrs
                 `shouldBe` Just
                     ( Data (PLC.I 101)
+                    , ExUnits 0 0
+                    )
+            Map.size rdmrs `shouldBe` 1
+
+proposeSpec :: Spec
+proposeSpec =
+    describe "propose" $ do
+        it "adds guardrail proposal redeemers at final body-field indices" $ do
+            let noScriptProposal =
+                    mkTreasuryProposal 10 SNothing
+                guardedProposal =
+                    mkTreasuryProposal
+                        11
+                        (SJust (ConwayFixtures.mkScriptHash 11))
+                laterGuardedProposal =
+                    mkTreasuryProposal
+                        12
+                        (SJust (ConwayFixtures.mkScriptHash 12))
+                (tx, guardedIx) =
+                    runDraft $ do
+                        _ <-
+                            propose
+                                noScriptProposal
+                                NoProposalScript
+                        ix <-
+                            propose
+                                guardedProposal
+                                (GuardrailProposal (303 :: Integer))
+                        _ <-
+                            propose
+                                laterGuardedProposal
+                                (GuardrailProposal (404 :: Integer))
+                        pure ix
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            guardedIx `shouldBe` 1
+            toList
+                ( OSet.toStrictSeq $
+                    tx ^. bodyTxL . proposalProceduresTxBodyL
+                )
+                `shouldBe` [ noScriptProposal
+                           , guardedProposal
+                           , laterGuardedProposal
+                           ]
+            Map.lookup
+                (ConwayProposing (AsIx guardedIx))
+                rdmrs
+                `shouldBe` Just
+                    ( Data (PLC.I 303)
+                    , ExUnits 0 0
+                    )
+            Map.lookup
+                (ConwayProposing (AsIx 2))
+                rdmrs
+                `shouldBe` Just
+                    ( Data (PLC.I 404)
+                    , ExUnits 0 0
+                    )
+
+        it "omits proposal redeemers when there is no guardrail script" $ do
+            let proposal =
+                    mkTreasuryProposal 13 SNothing
+                (tx, ix) =
+                    runDraft $
+                        propose proposal NoProposalScript
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            ix `shouldBe` 0
+            toList
+                ( OSet.toStrictSeq $
+                    tx ^. bodyTxL . proposalProceduresTxBodyL
+                )
+                `shouldBe` [proposal]
+            any isProposing (Map.keys rdmrs)
+                `shouldBe` False
+
+        it "coalesces duplicate proposal redeemers by final body index" $ do
+            let proposal =
+                    mkTreasuryProposal
+                        14
+                        (SJust (ConwayFixtures.mkScriptHash 14))
+                (tx, indices) =
+                    runDraft $ do
+                        firstIx <-
+                            propose
+                                proposal
+                                (GuardrailProposal (505 :: Integer))
+                        secondIx <-
+                            propose
+                                proposal
+                                (GuardrailProposal (606 :: Integer))
+                        pure (firstIx, secondIx)
+                Redeemers rdmrs =
+                    tx ^. witsTxL . rdmrsTxWitsL
+            indices `shouldBe` (0, 0)
+            toList
+                ( OSet.toStrictSeq $
+                    tx ^. bodyTxL . proposalProceduresTxBodyL
+                )
+                `shouldBe` [proposal]
+            Map.lookup
+                (ConwayProposing (AsIx 0))
+                rdmrs
+                `shouldBe` Just
+                    ( Data (PLC.I 505)
                     , ExUnits 0 0
                     )
             Map.size rdmrs `shouldBe` 1
@@ -1847,6 +1978,11 @@ isCertifying ::
 isCertifying (ConwayCertifying _) = True
 isCertifying _ = False
 
+isProposing ::
+    ConwayPlutusPurpose AsIx ConwayEra -> Bool
+isProposing (ConwayProposing _) = True
+isProposing _ = False
+
 mkVoteAbstainCert ::
     Credential Staking ->
     ConwayTxCert ConwayEra
@@ -1855,6 +1991,36 @@ mkVoteAbstainCert cred =
         ConwayDelegCert
             cred
             (DelegVote DRepAlwaysAbstain)
+
+mkTreasuryProposal ::
+    Word8 ->
+    StrictMaybe ScriptHash ->
+    ProposalProcedure ConwayEra
+mkTreasuryProposal n guardrail =
+    ProposalProcedure
+        (Coin (100_000 + fromIntegral n))
+        (mkScriptRewardAccount (30 + n))
+        ( TreasuryWithdrawals
+            ( Map.singleton
+                (mkScriptRewardAccount (60 + n))
+                (Coin (200_000 + fromIntegral n))
+            )
+            guardrail
+        )
+        (mkAnchor n)
+
+mkAnchor :: Word8 -> Anchor
+mkAnchor n =
+    Anchor
+        ( fromJust $
+            textToUrl
+                128
+                ( "https://example.invalid/proposal-"
+                    <> T.pack (show n)
+                    <> ".json"
+                )
+        )
+        (unsafeMakeSafeHash (mkHash32 n))
 
 outputCountExUnits :: Int -> ConwayTx -> ExUnits
 outputCountExUnits perOutput tx =
