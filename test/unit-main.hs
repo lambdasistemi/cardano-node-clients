@@ -18,6 +18,7 @@ import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.PersistenceSpec qualified as UTxOIndexerPersistenceSpec
 import Cardano.Node.Client.UTxOIndexer.ServerSpec qualified as UTxOIndexerServerSpec
 import Cardano.Node.Client.UTxOIndexer.TypesSpec qualified as UTxOIndexerTypesSpec
+import Cardano.Node.Client.ValiditySpec qualified as ValiditySpec
 import Data.List.SampleFibonacciSpec qualified as SampleFibonacciSpec
 
 main :: IO ()
@@ -39,3 +40,4 @@ main = hspec $ do
     TxGeneratorSelectionSpec.spec
     TxGeneratorServerSpec.spec
     TxGeneratorSnapshotSpec.spec
+    ValiditySpec.spec
