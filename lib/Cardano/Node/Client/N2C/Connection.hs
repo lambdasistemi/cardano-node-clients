@@ -153,7 +153,7 @@ runNodeClient magic socketPath lsqCh ltxsCh =
             (localSnocket ioManager)
             nullNetworkConnectTracers
             ( simpleSingletonVersions
-                NodeToClientV_20
+                NodeToClientV_23
                 NodeToClientVersionData
                     { networkMagic = magic
                     , query = False
@@ -226,7 +226,7 @@ mkN2CApp lsqCh ltxsCh =
             (decodeNodeToClient @Block ccfg n2cVersion)
     lsqCodec =
         codecLocalStateQuery
-            NodeToClientV_20
+            NodeToClientV_23
             (encodePoint (encodeRawHash (Proxy @Block)))
             (decodePoint (decodeRawHash (Proxy @Block)))
             ( queryEncodeNodeToClient
@@ -245,7 +245,7 @@ mkN2CApp lsqCh ltxsCh =
             (decodeResult ccfg n2cVersion)
     qv =
         nodeToClientVersionToQueryVersion
-            NodeToClientV_20
+            NodeToClientV_23
 
 {- | Connect to a Cardano node via Unix socket and run
 ChainSync + LocalStateQuery + LocalTxSubmission clients
@@ -290,7 +290,7 @@ runNodeClientFull magic epochSlots socketPath chainSyncApp lsqCh ltxsCh =
             (localSnocket ioManager)
             nullNetworkConnectTracers
             ( simpleSingletonVersions
-                NodeToClientV_20
+                NodeToClientV_23
                 NodeToClientVersionData
                     { networkMagic = magic
                     , query = False
@@ -303,7 +303,7 @@ runNodeClientFull magic epochSlots socketPath chainSyncApp lsqCh ltxsCh =
 {- | Build the N2C application with ChainSync (num 5),
 LocalTxSubmission (num 6), and LocalStateQuery (num 7) on
 the same 'OuroborosApplication'. The handshake at
-'NodeToClientV_20' admits all three together.
+'NodeToClientV_23' admits all three together.
 -}
 mkN2CFullApp ::
     EpochSlots ->
@@ -383,7 +383,7 @@ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh =
             (decodeNodeToClient @Block ccfg n2cVersion)
     lsqCodec =
         codecLocalStateQuery
-            NodeToClientV_20
+            NodeToClientV_23
             (encodePoint (encodeRawHash (Proxy @Block)))
             (decodePoint (decodeRawHash (Proxy @Block)))
             ( queryEncodeNodeToClient
@@ -402,7 +402,7 @@ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh =
             (decodeResult ccfg n2cVersion)
     qv =
         nodeToClientVersionToQueryVersion
-            NodeToClientV_20
+            NodeToClientV_23
 
 {- | Create a new 'LSQChannel' with the given queue
 capacity.
