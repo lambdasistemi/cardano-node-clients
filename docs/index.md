@@ -11,6 +11,7 @@ Cardano node:
 - **Submitter** -- submit signed transactions
 - **Balance** -- exact-fee balancing and fee-dependent output convergence
 - **TxBuild** -- Conway-era transaction builder DSL with `Peek` fixpoints and pluggable `Ctx` queries
+- **Validity** -- pick an `invalid-hereafter` slot inside the chain's plutus-translation horizon ([details](modules/validity.md))
 
 `Balance` and `TxBuild` are implemented by the public
 `cardano-node-clients:tx-build` sublibrary. The main library re-exports

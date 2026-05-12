@@ -40,3 +40,4 @@ nav:
       - Balance: modules/balance.md
       - TxBuild: modules/txbuild.md
       - N2C: modules/n2c.md
+      - Validity: modules/validity.md
