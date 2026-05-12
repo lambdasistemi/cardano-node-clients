@@ -66,6 +66,9 @@ module Cardano.Node.Client.TxBuild (
     propose,
     proposeTreasuryWithdrawal,
 
+    -- * Votes
+    vote,
+
     -- * Constraints
     validFrom,
     validTo,
@@ -107,10 +110,16 @@ module Cardano.Node.Client.TxBuild (
     Delegatee (..),
     DRep (..),
     GovAction (..),
+    GovActionId (..),
+    GovActionIx (..),
     KeyRole (..),
     ProposalProcedure (..),
     ScriptHash (..),
     StrictMaybe (..),
+    Vote (..),
+    Voter (..),
+    VotingProcedure (..),
+    VotingProcedures (..),
 
     -- * Internal (for testing)
     interpretWith,
@@ -180,6 +189,7 @@ import Cardano.Ledger.Api.Tx.Body (
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
     vldtTxBodyL,
+    votingProceduresTxBodyL,
     withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
@@ -202,7 +212,13 @@ import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Governance (
     Anchor (..),
     GovAction (..),
+    GovActionId (..),
+    GovActionIx (..),
     ProposalProcedure (..),
+    Vote (..),
+    Voter (..),
+    VotingProcedure (..),
+    VotingProcedures (..),
  )
 import Cardano.Ledger.Conway.Scripts (
     ConwayPlutusPurpose (..),
@@ -371,6 +387,12 @@ data TxInstr q e a where
     Propose ::
         ProposalProcedure ConwayEra ->
         ProposalWitness ->
+        TxInstr q e ()
+    -- | Add a Conway voting procedure.
+    VoteI ::
+        Voter ->
+        GovActionId ->
+        VotingProcedure ConwayEra ->
         TxInstr q e ()
     -- | Set transaction metadata for a label.
     SetMetadata ::
@@ -604,6 +626,20 @@ proposeTreasuryWithdrawal
                 (TreasuryWithdrawals withdrawals guardrail)
                 anchor
 
+-- | Vote on a Conway governance action.
+vote ::
+    Voter ->
+    GovActionId ->
+    Vote ->
+    StrictMaybe Anchor ->
+    TxBuild q e ()
+vote voter actionId voteChoice anchor =
+    singleton $
+        VoteI
+            voter
+            actionId
+            (VotingProcedure voteChoice anchor)
+
 -- | Set transaction metadata for a label.
 setMetadata :: Word64 -> Metadatum -> TxBuild q e ()
 setMetadata label = singleton . SetMetadata label
@@ -719,6 +755,8 @@ data TxState e = TxState
         [(ConwayTxCert ConwayEra, CertWitness)]
     , tsProposals ::
         [(ProposalProcedure ConwayEra, ProposalWitness)]
+    , tsVotes ::
+        [(Voter, GovActionId, VotingProcedure ConwayEra)]
     , tsMetadata :: Map Word64 Metadatum
     , tsSigners :: Set (KeyHash Guard)
     , tsScripts ::
@@ -740,6 +778,7 @@ emptyState =
         , tsWithdrawals = []
         , tsCerts = []
         , tsProposals = []
+        , tsVotes = []
         , tsMetadata = Map.empty
         , tsSigners = Set.empty
         , tsScripts = Map.empty
@@ -838,6 +877,15 @@ interpretWithM runCtx currentTx = go emptyState True
                 st
                     { tsProposals =
                         tsProposals st ++ [(proposal, w)]
+                    }
+                conv
+                (k ())
+        VoteI voter actionId procedure :>>= k ->
+            go
+                st
+                    { tsVotes =
+                        tsVotes st
+                            ++ [(voter, actionId, procedure)]
                     }
                 conv
                 (k ())
@@ -941,6 +989,15 @@ assembleTxWith extraIns pp st =
         proposals =
             OSet.fromList $
                 map fst (tsProposals st)
+        votes =
+            VotingProcedures $
+                Map.fromListWith
+                    Map.union
+                    [ ( voter
+                      , Map.singleton actionId procedure
+                      )
+                    | (voter, actionId, procedure) <- tsVotes st
+                    ]
         -- Build redeemers
         spendRdmrs =
             collectSpendRedeemers
@@ -993,6 +1050,7 @@ assembleTxWith extraIns pp st =
                 & withdrawalsTxBodyL .~ withdrawals
                 & certsTxBodyL .~ certs
                 & proposalProceduresTxBodyL .~ proposals
+                & votingProceduresTxBodyL .~ votes
                 & reqSignerHashesTxBodyL
                     .~ tsSigners st
                 & vldtTxBodyL
