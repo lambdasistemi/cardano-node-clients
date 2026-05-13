@@ -71,7 +71,7 @@ implemented. Blueprint handling has started with the parser subset.
 - [x] T019 Parse the required Plutus blueprint subset.
 - [x] T020 Match blueprints at datum/redeemer leaves using available
   validator context.
-- [ ] T021 Convert matched Plutus data into the open application value tree.
+- [x] T021 Convert matched Plutus data into the open application value tree.
 - [ ] T022 Apply the same equality-first diff to open application values.
 - [ ] T023 Report missing and ambiguous blueprint matches explicitly.
 

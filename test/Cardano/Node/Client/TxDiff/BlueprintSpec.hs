@@ -2,10 +2,14 @@
 
 module Cardano.Node.Client.TxDiff.BlueprintSpec (spec) where
 
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
+import Cardano.Ledger.Api.Scripts.Data (Data (..))
+import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Node.Client.TxDiff (OpenValue (..))
 import Cardano.Node.Client.TxDiff.Blueprint (
     Blueprint (..),
     BlueprintArgument (..),
@@ -15,9 +19,11 @@ import Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintSchema (..),
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
+    decodeBlueprintData,
     matchBlueprintArgument,
     parseBlueprintJSON,
  )
+import PlutusCore.Data qualified as PLC
 
 spec :: Spec
 spec =
@@ -113,6 +119,42 @@ spec =
                                             }
                                         ]
                                 }
+
+        it "converts constructor data into an open application value" $ do
+            let schema =
+                    BlueprintSchema
+                        { schemaTitle = Just "Order"
+                        , schemaKind =
+                            SchemaConstructor
+                                0
+                                [ BlueprintSchema
+                                    { schemaTitle = Just "owner"
+                                    , schemaKind = SchemaBytes
+                                    }
+                                , BlueprintSchema
+                                    { schemaTitle = Just "amount"
+                                    , schemaKind = SchemaInteger
+                                    }
+                                ]
+                        }
+                datum =
+                    Data
+                        ( PLC.Constr
+                            0
+                            [ PLC.B (BS.pack [0xde, 0xad])
+                            , PLC.I 42
+                            ]
+                        ) ::
+                        Data ConwayEra
+            decodeBlueprintData schema datum
+                `shouldBe` Right
+                    ( OpenObject
+                        ( Map.fromList
+                            [ ("amount", OpenInteger 42)
+                            , ("owner", OpenBytes "dead")
+                            ]
+                        )
+                    )
 
 blueprintJson :: LBS8.ByteString
 blueprintJson =

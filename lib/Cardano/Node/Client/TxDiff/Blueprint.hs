@@ -13,11 +13,13 @@ module Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintArgument (..),
     BlueprintArgumentKind (..),
     BlueprintArgumentSelector (..),
+    BlueprintDataError (..),
     BlueprintMatchError (..),
     BlueprintPreamble (..),
     BlueprintSchema (..),
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
+    decodeBlueprintData,
     matchBlueprintArgument,
     parseBlueprintJSON,
 ) where
@@ -31,12 +33,20 @@ import Data.Aeson (
     (.:?),
  )
 import Data.Aeson.Types (Parser, (.!=))
-import Data.ByteString.Lazy (ByteString)
+import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+
+import Cardano.Ledger.Api.Scripts.Data (Data (..))
+import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Node.Client.TxDiff (OpenValue (..))
+import PlutusCore.Data qualified as PLC
 
 data Blueprint = Blueprint
     { blueprintPreamble :: BlueprintPreamble
@@ -82,6 +92,19 @@ data BlueprintMatchError
     | BlueprintDefinitionCycle Text
     deriving stock (Eq, Show)
 
+data BlueprintDataError
+    = BlueprintDataTypeMismatch Text
+    | BlueprintConstructorMismatch
+        { expectedConstructorIndex :: Integer
+        , actualConstructorIndex :: Integer
+        }
+    | BlueprintFieldCountMismatch
+        { expectedFieldCount :: Int
+        , actualFieldCount :: Int
+        }
+    | BlueprintUnresolvedReference Text
+    deriving stock (Eq, Show)
+
 data BlueprintSchema = BlueprintSchema
     { schemaTitle :: Maybe Text
     , schemaKind :: BlueprintSchemaKind
@@ -95,9 +118,71 @@ data BlueprintSchemaKind
     | SchemaReference Text
     deriving stock (Eq, Show)
 
-parseBlueprintJSON :: ByteString -> Either String Blueprint
+parseBlueprintJSON :: LBS.ByteString -> Either String Blueprint
 parseBlueprintJSON =
     eitherDecode
+
+decodeBlueprintData ::
+    BlueprintSchema -> Data ConwayEra -> Either BlueprintDataError OpenValue
+decodeBlueprintData schema (Data value) =
+    decodeBlueprintValue schema value
+
+decodeBlueprintValue ::
+    BlueprintSchema -> PLC.Data -> Either BlueprintDataError OpenValue
+decodeBlueprintValue schema value =
+    case schemaKind schema of
+        SchemaInteger ->
+            case value of
+                PLC.I integer ->
+                    Right (OpenInteger integer)
+                _ ->
+                    Left (BlueprintDataTypeMismatch "integer")
+        SchemaBytes ->
+            case value of
+                PLC.B bytes ->
+                    Right (OpenBytes (hexText bytes))
+                _ ->
+                    Left (BlueprintDataTypeMismatch "bytes")
+        SchemaConstructor expectedIndex fields ->
+            case value of
+                PLC.Constr actualIndex values
+                    | actualIndex /= expectedIndex ->
+                        Left
+                            BlueprintConstructorMismatch
+                                { expectedConstructorIndex = expectedIndex
+                                , actualConstructorIndex = actualIndex
+                                }
+                    | length fields /= length values ->
+                        Left
+                            BlueprintFieldCountMismatch
+                                { expectedFieldCount = length fields
+                                , actualFieldCount = length values
+                                }
+                    | otherwise ->
+                        OpenObject . Map.fromList
+                            <$> traverse
+                                decodeField
+                                (zip [0 :: Int ..] (zip fields values))
+                _ ->
+                    Left (BlueprintDataTypeMismatch "constructor")
+        SchemaReference reference ->
+            Left (BlueprintUnresolvedReference reference)
+  where
+    decodeField (index, (fieldSchema, fieldValue)) = do
+        decodedValue <- decodeBlueprintValue fieldSchema fieldValue
+        pure (fieldName index fieldSchema, decodedValue)
+
+fieldName :: Int -> BlueprintSchema -> Text
+fieldName index schema =
+    case schemaTitle schema of
+        Just title ->
+            title
+        Nothing ->
+            "field" <> Text.pack (show index)
+
+hexText :: BS.ByteString -> Text
+hexText =
+    TextEncoding.decodeUtf8 . Base16.encode
 
 matchBlueprintArgument ::
     [Blueprint] ->
