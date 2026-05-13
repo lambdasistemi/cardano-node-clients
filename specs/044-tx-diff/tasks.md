@@ -11,7 +11,7 @@ is proceeding field by field; blueprint handling has not started.
   child access.
 - [x] T002 [P] Add a unit test for one Conway fee change producing one changed
   fee path.
-- [ ] T003 [P] Add a unit test for one output coin change preserving only the
+- [x] T003 [P] Add a unit test for one output coin change preserving only the
   needed output context.
 - [x] T004 [P] Add a unit test for map factoring into `common`, `changed`,
   `onlyA`, and `onlyB`.
@@ -44,6 +44,7 @@ is proceeding field by field; blueprint handling has not started.
   signers, and total collateral.
 - [x] T033 Add the first Conway body traversal leaf: `body.fee`.
 - [x] T034 Add Conway body traversal for `body.validityInterval`.
+- [x] T035 Add Conway body traversal for `body.outputs[*].coin`.
 - [ ] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.

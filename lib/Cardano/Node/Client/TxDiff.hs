@@ -22,6 +22,7 @@ import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Foldable (toList)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -30,9 +31,15 @@ import Lens.Micro ((^.))
 
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Tx (bodyTxL)
-import Cardano.Ledger.Api.Tx.Body (feeTxBodyL, vldtTxBodyL)
+import Cardano.Ledger.Api.Tx.Body (
+    feeTxBodyL,
+    outputsTxBodyL,
+    vldtTxBodyL,
+ )
+import Cardano.Ledger.Api.Tx.Out (TxOut, coinTxOutL)
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
 
@@ -82,6 +89,8 @@ data ConwayDiffValue
     | ConwayCoinValue Coin
     | ConwayValidityIntervalValue ValidityInterval
     | ConwaySlotBoundValue (StrictMaybe SlotNo)
+    | ConwayOutputsValue [TxOut ConwayEra]
+    | ConwayTxOutValue (TxOut ConwayEra)
 
 diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
 diffConwayTx left right =
@@ -235,6 +244,10 @@ conwayDiffEqual (ConwayValidityIntervalValue left) (ConwayValidityIntervalValue 
     left == right
 conwayDiffEqual (ConwaySlotBoundValue left) (ConwaySlotBoundValue right) =
     left == right
+conwayDiffEqual (ConwayOutputsValue left) (ConwayOutputsValue right) =
+    left == right
+conwayDiffEqual (ConwayTxOutValue left) (ConwayTxOutValue right) =
+    left == right
 conwayDiffEqual _ _ =
     False
 
@@ -245,6 +258,10 @@ conwayDiffSummary (ConwayValidityIntervalValue validity) =
     Just (validityIntervalValue validity)
 conwayDiffSummary (ConwaySlotBoundValue slotBound) =
     Just (slotBoundValue slotBound)
+conwayDiffSummary (ConwayOutputsValue outputs) =
+    Just (Aeson.toJSON (map txOutValue outputs))
+conwayDiffSummary (ConwayTxOutValue output) =
+    Just (txOutValue output)
 conwayDiffSummary (ConwayTxValue _) =
     Nothing
 conwayDiffSummary (ConwayBodyValue _) =
@@ -264,6 +281,10 @@ conwayDiffProjection (ConwayBodyValue tx) =
                 ( "validityInterval"
                 , ConwayValidityIntervalValue (tx ^. bodyTxL . vldtTxBodyL)
                 )
+            ,
+                ( "outputs"
+                , ConwayOutputsValue (toList (tx ^. bodyTxL . outputsTxBodyL))
+                )
             ]
 conwayDiffProjection (ConwayCoinValue coin) =
     DiffAtomic (coinValue coin)
@@ -281,6 +302,11 @@ conwayDiffProjection (ConwayValidityIntervalValue validity) =
             ]
 conwayDiffProjection (ConwaySlotBoundValue slotBound) =
     DiffAtomic (slotBoundValue slotBound)
+conwayDiffProjection (ConwayOutputsValue outputs) =
+    DiffArrayChildren (map ConwayTxOutValue outputs)
+conwayDiffProjection (ConwayTxOutValue output) =
+    DiffObjectChildren $
+        Map.singleton "coin" (ConwayCoinValue (output ^. coinTxOutL))
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
@@ -298,6 +324,10 @@ slotBoundValue SNothing =
     Aeson.Null
 slotBoundValue (SJust (SlotNo slot)) =
     Aeson.toJSON slot
+
+txOutValue :: TxOut ConwayEra -> Aeson.Value
+txOutValue output =
+    Aeson.object ["coin" .= coinValue (output ^. coinTxOutL)]
 
 openValueSummary :: OpenValue -> Maybe Aeson.Value
 openValueSummary (OpenInteger value) =
