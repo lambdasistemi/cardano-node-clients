@@ -2,8 +2,8 @@
 
 **Input**: `specs/044-tx-diff/spec.md` and
 `specs/044-tx-diff/plan.md`  
-**Status**: First structural diff slice is implemented. Conway traversal and
-blueprint handling have not started.
+**Status**: First structural diff slice is implemented. Conway body traversal
+is proceeding field by field; blueprint handling has not started.
 
 ## Phase 1: RED Tests
 
@@ -43,6 +43,7 @@ blueprint handling have not started.
   reference inputs, collateral inputs, outputs, mint, withdrawals, required
   signers, and total collateral.
 - [x] T033 Add the first Conway body traversal leaf: `body.fee`.
+- [x] T034 Add Conway body traversal for `body.validityInterval`.
 - [ ] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.

@@ -28,10 +28,13 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Lens.Micro ((^.))
 
+import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Tx (bodyTxL)
-import Cardano.Ledger.Api.Tx.Body (feeTxBodyL)
+import Cardano.Ledger.Api.Tx.Body (feeTxBodyL, vldtTxBodyL)
+import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
+import Cardano.Slotting.Slot (SlotNo (..))
 
 newtype DiffPath = DiffPath [Text]
     deriving stock (Eq, Show)
@@ -77,6 +80,8 @@ data ConwayDiffValue
     = ConwayTxValue ConwayTx
     | ConwayBodyValue ConwayTx
     | ConwayCoinValue Coin
+    | ConwayValidityIntervalValue ValidityInterval
+    | ConwaySlotBoundValue (StrictMaybe SlotNo)
 
 diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
 diffConwayTx left right =
@@ -226,12 +231,20 @@ conwayDiffEqual (ConwayBodyValue left) (ConwayBodyValue right) =
     left ^. bodyTxL == right ^. bodyTxL
 conwayDiffEqual (ConwayCoinValue left) (ConwayCoinValue right) =
     left == right
+conwayDiffEqual (ConwayValidityIntervalValue left) (ConwayValidityIntervalValue right) =
+    left == right
+conwayDiffEqual (ConwaySlotBoundValue left) (ConwaySlotBoundValue right) =
+    left == right
 conwayDiffEqual _ _ =
     False
 
 conwayDiffSummary :: ConwayDiffValue -> Maybe Aeson.Value
 conwayDiffSummary (ConwayCoinValue coin) =
     Just (coinValue coin)
+conwayDiffSummary (ConwayValidityIntervalValue validity) =
+    Just (validityIntervalValue validity)
+conwayDiffSummary (ConwaySlotBoundValue slotBound) =
+    Just (slotBoundValue slotBound)
 conwayDiffSummary (ConwayTxValue _) =
     Nothing
 conwayDiffSummary (ConwayBodyValue _) =
@@ -242,15 +255,49 @@ conwayDiffProjection (ConwayTxValue tx) =
     DiffObjectChildren (Map.singleton "body" (ConwayBodyValue tx))
 conwayDiffProjection (ConwayBodyValue tx) =
     DiffObjectChildren $
-        Map.singleton
-            "fee"
-            (ConwayCoinValue (tx ^. bodyTxL . feeTxBodyL))
+        Map.fromList
+            [
+                ( "fee"
+                , ConwayCoinValue (tx ^. bodyTxL . feeTxBodyL)
+                )
+            ,
+                ( "validityInterval"
+                , ConwayValidityIntervalValue (tx ^. bodyTxL . vldtTxBodyL)
+                )
+            ]
 conwayDiffProjection (ConwayCoinValue coin) =
     DiffAtomic (coinValue coin)
+conwayDiffProjection (ConwayValidityIntervalValue validity) =
+    DiffObjectChildren $
+        Map.fromList
+            [
+                ( "invalidBefore"
+                , ConwaySlotBoundValue (invalidBefore validity)
+                )
+            ,
+                ( "invalidHereafter"
+                , ConwaySlotBoundValue (invalidHereafter validity)
+                )
+            ]
+conwayDiffProjection (ConwaySlotBoundValue slotBound) =
+    DiffAtomic (slotBoundValue slotBound)
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
     Aeson.object ["lovelace" .= lovelace]
+
+validityIntervalValue :: ValidityInterval -> Aeson.Value
+validityIntervalValue validity =
+    Aeson.object
+        [ "invalidBefore" .= slotBoundValue (invalidBefore validity)
+        , "invalidHereafter" .= slotBoundValue (invalidHereafter validity)
+        ]
+
+slotBoundValue :: StrictMaybe SlotNo -> Aeson.Value
+slotBoundValue SNothing =
+    Aeson.Null
+slotBoundValue (SJust (SlotNo slot)) =
+    Aeson.toJSON slot
 
 openValueSummary :: OpenValue -> Maybe Aeson.Value
 openValueSummary (OpenInteger value) =
