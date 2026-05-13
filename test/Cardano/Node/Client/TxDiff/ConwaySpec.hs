@@ -129,6 +129,16 @@ import Cardano.Node.Client.TxDiff (
     diffConwayTx,
     diffConwayTxWith,
     renderConwayTxInputDiff,
+    renderDiffNodeHuman,
+ )
+import Cardano.Node.Client.TxDiff.Blueprint (
+    Blueprint (..),
+    BlueprintArgument (..),
+    BlueprintPreamble (..),
+    BlueprintSchema (..),
+    BlueprintSchemaKind (..),
+    BlueprintValidator (..),
+    blueprintDataDecoder,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import PlutusCore.Data qualified as PLC
@@ -1054,6 +1064,38 @@ spec =
                         Map.empty
                     )
 
+        it "uses a matched blueprint decoder to descend into redeemer data fields" $ do
+            tx <- loadFixture sampleHash
+            let purpose = ConwaySpending (AsIx 0)
+                oldRedeemer = orderRedeemerData 42
+                newRedeemer = orderRedeemerData 43
+                exUnits = ExUnits 1000 10000
+                txA =
+                    tx
+                        & witsTxL
+                            . rdmrsTxWitsL
+                            .~ Redeemers
+                                (Map.singleton purpose (oldRedeemer, exUnits))
+                txB =
+                    tx
+                        & witsTxL
+                            . rdmrsTxWitsL
+                            .~ Redeemers
+                                (Map.singleton purpose (newRedeemer, exUnits))
+                options =
+                    defaultTxDiffOptions
+                        { txDiffIncludeWitnesses = True
+                        , txDiffDecodeData =
+                            Just (blueprintDataDecoder [orderBlueprint])
+                        }
+                output = renderDiffNodeHuman (diffConwayTxWith options txA txB)
+            output
+                `shouldSatisfy` Text.isInfixOf
+                    "~ witnesses.redeemers.spending.0.data.amount"
+            output
+                `shouldSatisfy` Text.isInfixOf
+                    "= witnesses.redeemers.spending.0.data.asset: {\"bytes\":\"dead\"}"
+
         it "reports an opt-in Conway key witness deletion keyed by key hash" $ do
             tx <- loadFixture sampleHash
             case Set.toAscList (tx ^. witsTxL . addrTxWitsL) of
@@ -1242,6 +1284,57 @@ fixturePath hash =
 sampleHash :: String
 sampleHash =
     "789f9a1393e3c9eacd19582ebb1b02b777696c8ddcedda2d8752cb5723c42ef6"
+
+orderBlueprint :: Blueprint
+orderBlueprint =
+    Blueprint
+        { blueprintPreamble =
+            BlueprintPreamble
+                { preambleTitle = "Swap orders"
+                , preamblePlutusVersion = "v3"
+                }
+        , blueprintValidators =
+            [ BlueprintValidator
+                { validatorTitle = Just "swap"
+                , validatorDatum = Nothing
+                , validatorRedeemer =
+                    Just
+                        BlueprintArgument
+                            { argumentTitle = Just "Order redeemer"
+                            , argumentSchema = orderRedeemerSchema
+                            }
+                }
+            ]
+        , blueprintDefinitions = Map.empty
+        }
+
+orderRedeemerSchema :: BlueprintSchema
+orderRedeemerSchema =
+    BlueprintSchema
+        { schemaTitle = Just "Order redeemer"
+        , schemaKind =
+            SchemaConstructor
+                1
+                [ BlueprintSchema
+                    { schemaTitle = Just "amount"
+                    , schemaKind = SchemaInteger
+                    }
+                , BlueprintSchema
+                    { schemaTitle = Just "asset"
+                    , schemaKind = SchemaBytes
+                    }
+                ]
+        }
+
+orderRedeemerData :: Integer -> Data ConwayEra
+orderRedeemerData amount =
+    Data
+        ( PLC.Constr
+            1
+            [ PLC.I amount
+            , PLC.B (BS8.pack "\xde\xad")
+            ]
+        )
 
 coinJson :: Coin -> Aeson.Value
 coinJson (Coin lovelace) =

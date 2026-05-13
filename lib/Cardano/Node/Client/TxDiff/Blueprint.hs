@@ -22,6 +22,7 @@ module Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintSchema (..),
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
+    blueprintDataDecoder,
     decodeBlueprintData,
     diffBlueprintArgumentData,
     diffBlueprintData,
@@ -59,6 +60,8 @@ import Cardano.Node.Client.TxDiff (
     DiffNode (..),
     DiffPath (..),
     OpenValue (..),
+    TxDiffDataKind (..),
+    TxDiffDataSelector (..),
     diffOpenValue,
  )
 import PlutusCore.Data qualified as PLC
@@ -146,6 +149,35 @@ data BlueprintSchemaKind
 parseBlueprintJSON :: LBS.ByteString -> Either String Blueprint
 parseBlueprintJSON =
     eitherDecode
+
+blueprintDataDecoder ::
+    [Blueprint] -> TxDiffDataSelector -> Data ConwayEra -> Either Text OpenValue
+blueprintDataDecoder blueprints selector datum = do
+    schema <-
+        case matchBlueprintArgument blueprints (blueprintArgumentSelector selector) of
+            Left err ->
+                Left (Text.pack (show (BlueprintMatchFallback err)))
+            Right matchedSchema ->
+                Right matchedSchema
+    case decodeBlueprintData schema datum of
+        Left err ->
+            Left (Text.pack (show (BlueprintDataFallback err)))
+        Right value ->
+            Right value
+
+blueprintArgumentSelector :: TxDiffDataSelector -> BlueprintArgumentSelector
+blueprintArgumentSelector selector =
+    BlueprintArgumentSelector
+        { selectorValidatorTitle = txDiffDataValidatorTitle selector
+        , selectorArgumentKind =
+            txDiffBlueprintArgumentKind (txDiffDataKind selector)
+        }
+
+txDiffBlueprintArgumentKind :: TxDiffDataKind -> BlueprintArgumentKind
+txDiffBlueprintArgumentKind TxDiffDatum =
+    BlueprintDatum
+txDiffBlueprintArgumentKind TxDiffRedeemer =
+    BlueprintRedeemer
 
 decodeBlueprintData ::
     BlueprintSchema -> Data ConwayEra -> Either BlueprintDataError OpenValue

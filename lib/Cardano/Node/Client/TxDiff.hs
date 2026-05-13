@@ -15,6 +15,9 @@ module Cardano.Node.Client.TxDiff (
     DiffPath (..),
     DiffProjection (..),
     OpenValue (..),
+    TxDiffDataDecoder,
+    TxDiffDataKind (..),
+    TxDiffDataSelector (..),
     TxDiffOptions (..),
     TxInputDecodeError (..),
     defaultTxDiffOptions,
@@ -167,15 +170,38 @@ data OpenValue
 newtype TxInputDecodeError = TxInputDecodeError Text
     deriving stock (Eq, Show)
 
-newtype TxDiffOptions = TxDiffOptions
-    { txDiffIncludeWitnesses :: Bool
+type TxDiffDataDecoder =
+    TxDiffDataSelector -> Data ConwayEra -> Either Text OpenValue
+
+data TxDiffDataKind
+    = TxDiffDatum
+    | TxDiffRedeemer
+    deriving stock (Eq, Show)
+
+data TxDiffDataSelector = TxDiffDataSelector
+    { txDiffDataValidatorTitle :: Maybe Text
+    , txDiffDataKind :: TxDiffDataKind
     }
     deriving stock (Eq, Show)
+
+data TxDiffOptions = TxDiffOptions
+    { txDiffIncludeWitnesses :: Bool
+    , txDiffDecodeData :: Maybe TxDiffDataDecoder
+    }
+
+instance Show TxDiffOptions where
+    show options =
+        "TxDiffOptions {txDiffIncludeWitnesses = "
+            <> show (txDiffIncludeWitnesses options)
+            <> ", txDiffDecodeData = "
+            <> maybe "Nothing" (const "Just <decoder>") (txDiffDecodeData options)
+            <> "}"
 
 defaultTxDiffOptions :: TxDiffOptions
 defaultTxDiffOptions =
     TxDiffOptions
         { txDiffIncludeWitnesses = False
+        , txDiffDecodeData = Nothing
         }
 
 data ConwayDiffValue
@@ -204,12 +230,13 @@ data ConwayDiffValue
     | ConwayVKeyWitnessesValue [WitVKey Witness]
     | ConwayVKeyWitnessValue (WitVKey Witness)
     | ConwayDatumWitnessesValue (TxDats ConwayEra)
-    | ConwayDataValue (Data ConwayEra)
+    | ConwayDataValue TxDiffDataSelector (Data ConwayEra)
     | ConwayRedeemersValue (Redeemers ConwayEra)
     | ConwayRedeemerValue (Data ConwayEra, ExUnits)
     | ConwayExUnitsValue ExUnits
     | ConwayScriptsValue (Map ScriptHash (Script ConwayEra))
     | ConwayScriptValue (Script ConwayEra)
+    | ConwayOpenValue OpenValue
 
 diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
 diffConwayTx =
@@ -626,7 +653,7 @@ conwayDiffEqual
     (ConwayDatumWitnessesValue left)
     (ConwayDatumWitnessesValue right) =
         left == right
-conwayDiffEqual (ConwayDataValue left) (ConwayDataValue right) =
+conwayDiffEqual (ConwayDataValue _ left) (ConwayDataValue _ right) =
     left == right
 conwayDiffEqual (ConwayRedeemersValue left) (ConwayRedeemersValue right) =
     left == right
@@ -637,6 +664,8 @@ conwayDiffEqual (ConwayExUnitsValue left) (ConwayExUnitsValue right) =
 conwayDiffEqual (ConwayScriptsValue left) (ConwayScriptsValue right) =
     left == right
 conwayDiffEqual (ConwayScriptValue left) (ConwayScriptValue right) =
+    left == right
+conwayDiffEqual (ConwayOpenValue left) (ConwayOpenValue right) =
     left == right
 conwayDiffEqual _ _ =
     False
@@ -686,7 +715,7 @@ conwayDiffSummary (ConwayVKeyWitnessValue witness) =
     Just (vkeyWitnessValue witness)
 conwayDiffSummary (ConwayDatumWitnessesValue datums) =
     Just (datumWitnessesValue datums)
-conwayDiffSummary (ConwayDataValue datum) =
+conwayDiffSummary (ConwayDataValue _ datum) =
     Just (dataValue datum)
 conwayDiffSummary (ConwayRedeemersValue redeemers) =
     Just (redeemersValue redeemers)
@@ -698,6 +727,8 @@ conwayDiffSummary (ConwayScriptsValue scripts) =
     Just (scriptsValue scripts)
 conwayDiffSummary (ConwayScriptValue script) =
     Just (scriptValue script)
+conwayDiffSummary (ConwayOpenValue value) =
+    openValueSummary value
 conwayDiffSummary (ConwayTxValue _) =
     Nothing
 conwayDiffSummary (ConwayBodyValue _) =
@@ -869,8 +900,8 @@ conwayDiffProjection _ (ConwayVKeyWitnessValue witness) =
     DiffAtomic (vkeyWitnessValue witness)
 conwayDiffProjection _ (ConwayDatumWitnessesValue datums) =
     DiffObjectChildren (datumWitnessChildren datums)
-conwayDiffProjection _ (ConwayDataValue datum) =
-    DiffAtomic (dataValue datum)
+conwayDiffProjection options (ConwayDataValue selector datum) =
+    dataDiffProjection options selector datum
 conwayDiffProjection _ (ConwayRedeemersValue redeemers) =
     DiffObjectChildren (redeemerChildren redeemers)
 conwayDiffProjection _ (ConwayRedeemerValue redeemer) =
@@ -881,6 +912,41 @@ conwayDiffProjection _ (ConwayScriptsValue scripts) =
     DiffObjectChildren (scriptChildren scripts)
 conwayDiffProjection _ (ConwayScriptValue script) =
     DiffAtomic (scriptValue script)
+conwayDiffProjection _ (ConwayOpenValue value) =
+    openValueDiffProjection value
+
+dataDiffProjection ::
+    TxDiffOptions ->
+    TxDiffDataSelector ->
+    Data ConwayEra ->
+    DiffProjection ConwayDiffValue
+dataDiffProjection options selector datum =
+    case txDiffDecodeData options of
+        Nothing ->
+            DiffAtomic (dataValue datum)
+        Just decodeData ->
+            case decodeData selector datum of
+                Right value ->
+                    openValueDiffProjection value
+                Left reason ->
+                    DiffAtomic (dataDecodeFallbackValue reason datum)
+
+openValueDiffProjection :: OpenValue -> DiffProjection ConwayDiffValue
+openValueDiffProjection value =
+    case openValueProjection value of
+        DiffAtomic atomic ->
+            DiffAtomic atomic
+        DiffObjectChildren fields ->
+            DiffObjectChildren (Map.map ConwayOpenValue fields)
+        DiffArrayChildren values ->
+            DiffArrayChildren (map ConwayOpenValue values)
+
+dataDecodeFallbackValue :: Text -> Data ConwayEra -> Aeson.Value
+dataDecodeFallbackValue reason datum =
+    Aeson.object
+        [ "fallback" .= reason
+        , "raw" .= dataValue datum
+        ]
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
@@ -1032,7 +1098,7 @@ datumWitnessesValue datums =
 datumWitnessChildren :: TxDats ConwayEra -> Map Text ConwayDiffValue
 datumWitnessChildren datums =
     Map.fromList
-        [ (dataHashKey dataHash, ConwayDataValue datum)
+        [ (dataHashKey dataHash, ConwayDataValue datumDataSelector datum)
         | (dataHash, datum) <- datumWitnessEntries datums
         ]
 
@@ -1152,13 +1218,27 @@ redeemerFieldChildren (redeemerData, exUnits) =
     Map.fromList
         [
             ( "data"
-            , ConwayDataValue redeemerData
+            , ConwayDataValue redeemerDataSelector redeemerData
             )
         ,
             ( "exUnits"
             , ConwayExUnitsValue exUnits
             )
         ]
+
+datumDataSelector :: TxDiffDataSelector
+datumDataSelector =
+    TxDiffDataSelector
+        { txDiffDataValidatorTitle = Nothing
+        , txDiffDataKind = TxDiffDatum
+        }
+
+redeemerDataSelector :: TxDiffDataSelector
+redeemerDataSelector =
+    TxDiffDataSelector
+        { txDiffDataValidatorTitle = Nothing
+        , txDiffDataKind = TxDiffRedeemer
+        }
 
 exUnitsValue :: ExUnits -> Aeson.Value
 exUnitsValue (ExUnits memory steps) =

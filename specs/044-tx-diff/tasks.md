@@ -19,7 +19,7 @@ implemented. Blueprint handling has started with the parser subset.
   equal inner values.
 - [x] T006 [P] Add a unit test for deterministic sequence alignment by index
   when no stable key exists.
-- [ ] T007 [P] Add a unit test for matched blueprint datum/redeemer traversal
+- [x] T007 [P] Add a unit test for matched blueprint datum/redeemer traversal
   into an open application value.
 - [x] T008 [P] Add unit tests for missing and ambiguous blueprint fallback.
 - [x] T032 [P] Add QuickCheck properties for equality stopping, object
