@@ -106,6 +106,9 @@ import Data.Word (Word64, Word8)
 import System.Directory (
     copyFile,
     createDirectoryIfMissing,
+    getPermissions,
+    setPermissions,
+    writable,
  )
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -570,11 +573,17 @@ copyGenesisSource source target = do
         ]
   where
     copyGenesisFile name =
-        copyFile (source </> name) (target </> name)
+        copyWritableFile (source </> name) (target </> name)
     copyDelegateKey name =
-        copyFile
+        copyWritableFile
             (source </> "delegate-keys" </> name)
             (target </> "delegate-keys" </> name)
+
+copyWritableFile :: FilePath -> FilePath -> IO ()
+copyWritableFile source target = do
+    copyFile source target
+    permissions <- getPermissions target
+    setPermissions target permissions{writable = True}
 
 patchGenesis :: FilePath -> IO ()
 patchGenesis dir = do
