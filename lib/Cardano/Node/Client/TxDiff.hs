@@ -41,6 +41,7 @@ import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Scripts.Data (Datum)
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
+    collateralInputsTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
     outputsTxBodyL,
@@ -322,6 +323,11 @@ conwayDiffProjection (ConwayBodyValue tx) =
     DiffObjectChildren $
         Map.fromList
             [
+                ( "collateralInputs"
+                , ConwayInputsValue $
+                    Set.toAscList (tx ^. bodyTxL . collateralInputsTxBodyL)
+                )
+            ,
                 ( "fee"
                 , ConwayCoinValue (tx ^. bodyTxL . feeTxBodyL)
                 )

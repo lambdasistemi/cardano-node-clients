@@ -35,6 +35,7 @@ import Cardano.Ledger.Api.Scripts.Data (
  )
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
+    collateralInputsTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
     outputsTxBodyL,
@@ -521,6 +522,50 @@ spec =
                         )
                     )
 
+        it "reports a Conway collateral input change at body.collateralInputs.0" $ do
+            tx <- loadFixture sampleHash
+            let oldInput = mkTxIn 1
+                newInput = mkTxIn 2
+                txA =
+                    tx
+                        & bodyTxL
+                            . collateralInputsTxBodyL
+                            .~ Set.singleton oldInput
+                txB =
+                    tx
+                        & bodyTxL
+                            . collateralInputsTxBodyL
+                            .~ Set.singleton newInput
+            diffConwayTx txA txB
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["collateralInputs"] txA)
+                    ( Map.singleton
+                        "collateralInputs"
+                        ( DiffNode
+                            (DiffPath ["body", "collateralInputs"])
+                            ( DiffArray
+                                []
+                                [
+                                    ( 0
+                                    , DiffNode
+                                        ( DiffPath
+                                            [ "body"
+                                            , "collateralInputs"
+                                            , "0"
+                                            ]
+                                        )
+                                        ( DiffChanged
+                                            (txInJson oldInput)
+                                            (txInJson newInput)
+                                        )
+                                    )
+                                ]
+                                []
+                                []
+                            )
+                        )
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -582,6 +627,11 @@ bodyCommonExcept omitted tx =
 bodyFieldValues :: ConwayTx -> [(Text, Aeson.Value)]
 bodyFieldValues tx =
     [
+        ( "collateralInputs"
+        , inputsJson $
+            Set.toAscList (tx ^. bodyTxL . collateralInputsTxBodyL)
+        )
+    ,
         ( "fee"
         , coinJson (tx ^. bodyTxL . feeTxBodyL)
         )
