@@ -79,7 +79,7 @@ implemented. Blueprint handling has started with the parser subset.
 
 - [x] T024 Add a human renderer over `DiffNode`.
 - [x] T025 Add exact numeric rendering for known ledger scalar units.
-- [ ] T026 Add input decoding for CBOR hex, raw CBOR, and cardano-cli JSON
+- [x] T026 Add input decoding for CBOR hex, raw CBOR, and cardano-cli JSON
   envelope inputs.
 - [ ] T027 Add the thin `tx-diff` executable.
 - [ ] T028 Wire the executable into cabal and Nix only after the library tests

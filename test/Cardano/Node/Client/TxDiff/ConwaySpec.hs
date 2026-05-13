@@ -11,6 +11,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Char8 qualified as BS8
+import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Short qualified as SBS
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
@@ -123,6 +124,7 @@ import Cardano.Node.Client.TxDiff (
     DiffNode (..),
     DiffPath (..),
     TxDiffOptions (..),
+    decodeConwayTxInput,
     defaultTxDiffOptions,
     diffConwayTx,
     diffConwayTxWith,
@@ -133,6 +135,23 @@ import PlutusCore.Data qualified as PLC
 spec :: Spec
 spec =
     describe "Conway transactions" $ do
+        it "decodes tx input from CBOR hex, raw CBOR, and cardano-cli JSON envelope" $ do
+            expected <- loadFixture sampleHash
+            hex <- loadFixtureHex sampleHash
+            raw <- decodeFixtureHex hex
+            let envelope =
+                    LBS.toStrict $
+                        Aeson.encode $
+                            Aeson.object
+                                [ "type" .= ("Tx ConwayEra" :: Text)
+                                , "description" .= ("fixture" :: Text)
+                                , "cborHex" .= hex
+                                ]
+            decodeConwayTxInput (Text.encodeUtf8 hex)
+                `shouldBe` Right expected
+            decodeConwayTxInput raw `shouldBe` Right expected
+            decodeConwayTxInput envelope `shouldBe` Right expected
+
         it "reports a Conway fee change at body.fee" $ do
             tx <- loadFixture sampleHash
             let tx' = tx & bodyTxL . feeTxBodyL .~ Coin 42
@@ -1173,7 +1192,7 @@ bodyDiff common changed =
 
 loadFixture :: String -> IO ConwayTx
 loadFixture hash = do
-    hex <- Text.strip . Text.pack <$> readFile (fixturePath hash)
+    hex <- loadFixtureHex hash
     case decodeFullAnnotatorFromHexText
         (natVersion @11)
         "tx-diff fixture"
@@ -1184,6 +1203,19 @@ loadFixture hash = do
         Left err ->
             expectationFailure ("failed to decode fixture: " <> show err)
                 >> fail "fixture decode failed"
+
+loadFixtureHex :: String -> IO Text
+loadFixtureHex hash =
+    Text.strip . Text.pack <$> readFile (fixturePath hash)
+
+decodeFixtureHex :: Text -> IO ByteString
+decodeFixtureHex hex =
+    case Base16.decode (Text.encodeUtf8 hex) of
+        Right raw ->
+            pure raw
+        Left err ->
+            expectationFailure ("failed to decode fixture hex: " <> err)
+                >> fail "fixture hex decode failed"
 
 fixturePath :: String -> FilePath
 fixturePath hash =

@@ -16,7 +16,9 @@ module Cardano.Node.Client.TxDiff (
     DiffProjection (..),
     OpenValue (..),
     TxDiffOptions (..),
+    TxInputDecodeError (..),
     defaultTxDiffOptions,
+    decodeConwayTxInput,
     diffConwayTx,
     diffConwayTxWith,
     diffOpenValue,
@@ -24,14 +26,17 @@ module Cardano.Node.Client.TxDiff (
     renderDiffNodeHuman,
 ) where
 
-import Data.Aeson ((.=))
+import Data.Aeson ((.:), (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Short qualified as SBS
+import Data.Char (isHexDigit, isSpace)
 import Data.Foldable (toList)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -85,7 +90,15 @@ import Cardano.Ledger.Api.Tx.Wits (
     witVKeyHash,
  )
 import Cardano.Ledger.BaseTypes (StrictMaybe (..), TxIx (..))
-import Cardano.Ledger.Binary (serialize')
+import Cardano.Ledger.Binary (
+    Annotator,
+    Decoder,
+    decCBOR,
+    decodeFullAnnotator,
+    decodeFullAnnotatorFromHexText,
+    natVersion,
+    serialize',
+ )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
@@ -148,6 +161,9 @@ data OpenValue
     | OpenBytes Text
     deriving stock (Eq, Show)
 
+newtype TxInputDecodeError = TxInputDecodeError Text
+    deriving stock (Eq, Show)
+
 newtype TxDiffOptions = TxDiffOptions
     { txDiffIncludeWitnesses :: Bool
     }
@@ -199,6 +215,64 @@ diffConwayTx =
 diffConwayTxWith :: TxDiffOptions -> ConwayTx -> ConwayTx -> DiffNode
 diffConwayTxWith options left right =
     diffWith (conwayDiffPlan options) (ConwayTxValue left) (ConwayTxValue right)
+
+decodeConwayTxInput :: ByteString -> Either TxInputDecodeError ConwayTx
+decodeConwayTxInput input =
+    case Aeson.eitherDecodeStrict' input of
+        Right envelope ->
+            decodeConwayTxHex (txTextEnvelopeCborHex envelope)
+        Left _
+            | isHexInput input ->
+                decodeConwayTxHex
+                    (TextEncoding.decodeUtf8 (strippedHexInput input))
+            | otherwise ->
+                decodeConwayTxRaw input
+
+newtype TxTextEnvelope = TxTextEnvelope
+    { txTextEnvelopeCborHex :: Text
+    }
+
+instance Aeson.FromJSON TxTextEnvelope where
+    parseJSON =
+        Aeson.withObject "cardano-cli transaction text envelope" $ \value ->
+            TxTextEnvelope <$> value .: "cborHex"
+
+decodeConwayTxHex :: Text -> Either TxInputDecodeError ConwayTx
+decodeConwayTxHex hex =
+    case decodeFullAnnotatorFromHexText
+        (natVersion @11)
+        "Conway transaction"
+        conwayTxDecoder
+        (Text.strip hex) of
+        Right tx ->
+            Right tx
+        Left err ->
+            Left (TxInputDecodeError (Text.pack (show err)))
+
+decodeConwayTxRaw :: ByteString -> Either TxInputDecodeError ConwayTx
+decodeConwayTxRaw raw =
+    case decodeFullAnnotator
+        (natVersion @11)
+        "Conway transaction"
+        conwayTxDecoder
+        (LBS.fromStrict raw) of
+        Right tx ->
+            Right tx
+        Left err ->
+            Left (TxInputDecodeError (Text.pack (show err)))
+
+conwayTxDecoder :: forall s. Decoder s (Annotator ConwayTx)
+conwayTxDecoder =
+    decCBOR
+
+isHexInput :: ByteString -> Bool
+isHexInput input =
+    let stripped = strippedHexInput input
+     in not (BS.null stripped) && BS8.all isHexDigit stripped
+
+strippedHexInput :: ByteString -> ByteString
+strippedHexInput =
+    BS8.filter (not . isSpace)
 
 diffOpenValue :: OpenValue -> OpenValue -> DiffNode
 diffOpenValue =
