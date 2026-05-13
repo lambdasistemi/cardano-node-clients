@@ -46,6 +46,7 @@ import Cardano.Ledger.Api.Tx.Body (
     inputsTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
+    reqSignerHashesTxBodyL,
     totalCollateralTxBodyL,
     vldtTxBodyL,
  )
@@ -62,6 +63,10 @@ import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
 import Cardano.Ledger.Hashes (extractHash)
+import Cardano.Ledger.Keys (
+    KeyHash (..),
+    KeyRole (Guard),
+ )
 import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
@@ -113,6 +118,8 @@ data ConwayDiffValue
     | ConwayStrictMaybeCoinValue (StrictMaybe Coin)
     | ConwayInputsValue [TxIn]
     | ConwayTxInValue TxIn
+    | ConwayKeyHashesValue [KeyHash Guard]
+    | ConwayKeyHashValue (KeyHash Guard)
     | ConwayValidityIntervalValue ValidityInterval
     | ConwaySlotBoundValue (StrictMaybe SlotNo)
     | ConwayOutputsValue [TxOut ConwayEra]
@@ -277,6 +284,10 @@ conwayDiffEqual (ConwayInputsValue left) (ConwayInputsValue right) =
     left == right
 conwayDiffEqual (ConwayTxInValue left) (ConwayTxInValue right) =
     left == right
+conwayDiffEqual (ConwayKeyHashesValue left) (ConwayKeyHashesValue right) =
+    left == right
+conwayDiffEqual (ConwayKeyHashValue left) (ConwayKeyHashValue right) =
+    left == right
 conwayDiffEqual (ConwayValidityIntervalValue left) (ConwayValidityIntervalValue right) =
     left == right
 conwayDiffEqual (ConwaySlotBoundValue left) (ConwaySlotBoundValue right) =
@@ -305,6 +316,10 @@ conwayDiffSummary (ConwayInputsValue inputs) =
     Just (inputsValue inputs)
 conwayDiffSummary (ConwayTxInValue txIn) =
     Just (txInValue txIn)
+conwayDiffSummary (ConwayKeyHashesValue keyHashes) =
+    Just (keyHashesValue keyHashes)
+conwayDiffSummary (ConwayKeyHashValue keyHash) =
+    Just (keyHashValue keyHash)
 conwayDiffSummary (ConwayValidityIntervalValue validity) =
     Just (validityIntervalValue validity)
 conwayDiffSummary (ConwaySlotBoundValue slotBound) =
@@ -350,6 +365,11 @@ conwayDiffProjection (ConwayBodyValue tx) =
                     Set.toAscList (tx ^. bodyTxL . referenceInputsTxBodyL)
                 )
             ,
+                ( "requiredSigners"
+                , ConwayKeyHashesValue $
+                    Set.toAscList (tx ^. bodyTxL . reqSignerHashesTxBodyL)
+                )
+            ,
                 ( "totalCollateral"
                 , ConwayStrictMaybeCoinValue $
                     tx ^. bodyTxL . totalCollateralTxBodyL
@@ -371,6 +391,10 @@ conwayDiffProjection (ConwayInputsValue inputs) =
     DiffArrayChildren (map ConwayTxInValue inputs)
 conwayDiffProjection (ConwayTxInValue txIn) =
     DiffAtomic (txInValue txIn)
+conwayDiffProjection (ConwayKeyHashesValue keyHashes) =
+    DiffArrayChildren (map ConwayKeyHashValue keyHashes)
+conwayDiffProjection (ConwayKeyHashValue keyHash) =
+    DiffAtomic (keyHashValue keyHash)
 conwayDiffProjection (ConwayValidityIntervalValue validity) =
     DiffObjectChildren $
         Map.fromList
@@ -434,6 +458,14 @@ txInValue (TxIn (TxId safeHash) (TxIx index)) =
         [ "txId" .= hexText (hashToBytes (extractHash safeHash))
         , "index" .= index
         ]
+
+keyHashesValue :: [KeyHash Guard] -> Aeson.Value
+keyHashesValue keyHashes =
+    Aeson.toJSON (map keyHashValue keyHashes)
+
+keyHashValue :: KeyHash Guard -> Aeson.Value
+keyHashValue (KeyHash keyHash) =
+    Aeson.String (hexText (hashToBytes keyHash))
 
 validityIntervalValue :: ValidityInterval -> Aeson.Value
 validityIntervalValue validity =

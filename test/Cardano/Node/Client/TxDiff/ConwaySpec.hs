@@ -40,6 +40,7 @@ import Cardano.Ledger.Api.Tx.Body (
     inputsTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
+    reqSignerHashesTxBodyL,
     totalCollateralTxBodyL,
     vldtTxBodyL,
  )
@@ -63,6 +64,10 @@ import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
 import Cardano.Ledger.Hashes (extractHash, unsafeMakeSafeHash)
+import Cardano.Ledger.Keys (
+    KeyHash (..),
+    KeyRole (Guard),
+ )
 import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
     Plutus (..),
@@ -593,6 +598,50 @@ spec =
                         )
                     )
 
+        it "reports a Conway required signer change at body.requiredSigners.0" $ do
+            tx <- loadFixture sampleHash
+            let oldSigner = mkWitnessKeyHash 1
+                newSigner = mkWitnessKeyHash 2
+                txA =
+                    tx
+                        & bodyTxL
+                            . reqSignerHashesTxBodyL
+                            .~ Set.singleton oldSigner
+                txB =
+                    tx
+                        & bodyTxL
+                            . reqSignerHashesTxBodyL
+                            .~ Set.singleton newSigner
+            diffConwayTx txA txB
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["requiredSigners"] txA)
+                    ( Map.singleton
+                        "requiredSigners"
+                        ( DiffNode
+                            (DiffPath ["body", "requiredSigners"])
+                            ( DiffArray
+                                []
+                                [
+                                    ( 0
+                                    , DiffNode
+                                        ( DiffPath
+                                            [ "body"
+                                            , "requiredSigners"
+                                            , "0"
+                                            ]
+                                        )
+                                        ( DiffChanged
+                                            (keyHashJson oldSigner)
+                                            (keyHashJson newSigner)
+                                        )
+                                    )
+                                ]
+                                []
+                                []
+                            )
+                        )
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -684,6 +733,11 @@ bodyFieldValues tx =
             Set.toAscList (tx ^. bodyTxL . referenceInputsTxBodyL)
         )
     ,
+        ( "requiredSigners"
+        , keyHashesJson $
+            Set.toAscList (tx ^. bodyTxL . reqSignerHashesTxBodyL)
+        )
+    ,
         ( "totalCollateral"
         , strictMaybeCoinJson (tx ^. bodyTxL . totalCollateralTxBodyL)
         )
@@ -719,6 +773,23 @@ hexByte :: Int -> String
 hexByte x =
     let s = "0123456789abcdef"
      in [s !! (x `div` 16), s !! (x `mod` 16)]
+
+mkWitnessKeyHash :: Int -> KeyHash Guard
+mkWitnessKeyHash n =
+    let hexStr =
+            replicate 52 '0'
+                ++ hexByte (n `div` 256)
+                ++ hexByte (n `mod` 256)
+        h = fromJust (hashFromStringAsHex hexStr)
+     in KeyHash h
+
+keyHashesJson :: [KeyHash Guard] -> Aeson.Value
+keyHashesJson keyHashes =
+    Aeson.toJSON (map keyHashJson keyHashes)
+
+keyHashJson :: KeyHash Guard -> Aeson.Value
+keyHashJson (KeyHash keyHash) =
+    Aeson.String (hexText (hashToBytes keyHash))
 
 outputsJson :: [TxOut ConwayEra] -> Aeson.Value
 outputsJson outputs =
