@@ -1094,7 +1094,7 @@ spec =
                     "~ witnesses.redeemers.spending.0.data.amount"
             output
                 `shouldSatisfy` Text.isInfixOf
-                    "= witnesses.redeemers.spending.0.data.asset: {\"bytes\":\"dead\"}"
+                    "  B: 43"
 
         it "reports an opt-in Conway key witness deletion keyed by key hash" $ do
             tx <- loadFixture sampleHash

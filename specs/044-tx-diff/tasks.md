@@ -89,5 +89,5 @@ implemented. Blueprint handling has started with the parser subset.
 
 - [x] T029 Run the focused TxDiff unit tests.
 - [x] T030 Run `just unit`.
-- [ ] T031 Regenerate any gist/output artifacts only from the executable,
+- [x] T031 Regenerate any gist/output artifacts only from the executable,
   after the executable exists again.

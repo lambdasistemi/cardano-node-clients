@@ -463,39 +463,23 @@ renderDiffNodeLines (DiffNode path change) =
             , "  A: " <> renderJsonValue left
             , "  B: " <> renderJsonValue right
             ]
-        DiffObject common changed onlyA onlyB ->
+        DiffObject _ changed onlyA onlyB ->
             concat
-                [ renderObjectCommon path common
-                , concatMap renderDiffNodeLines (Map.elems changed)
+                [ concatMap renderDiffNodeLines (Map.elems changed)
                 , renderObjectOnly "-" path onlyA
                 , renderObjectOnly "+" path onlyB
                 ]
-        DiffArray common changed onlyA onlyB ->
+        DiffArray _ changed onlyA onlyB ->
             concat
-                [ renderArrayCommon path common
-                , concatMap (renderDiffNodeLines . snd) changed
+                [ concatMap (renderDiffNodeLines . snd) changed
                 , renderArrayOnly "-" path onlyA
                 , renderArrayOnly "+" path onlyB
                 ]
-
-renderObjectCommon ::
-    DiffPath -> Map Text (Maybe Aeson.Value) -> [Text]
-renderObjectCommon path common =
-    [ renderSameLine (path </> key) value
-    | (key, value) <- Map.toAscList common
-    ]
 
 renderObjectOnly :: Text -> DiffPath -> Map Text Aeson.Value -> [Text]
 renderObjectOnly prefix path values =
     [ prefix <> " " <> renderPath (path </> key) <> ": " <> renderJsonValue value
     | (key, value) <- Map.toAscList values
-    ]
-
-renderArrayCommon ::
-    DiffPath -> [(Int, Maybe Aeson.Value)] -> [Text]
-renderArrayCommon path common =
-    [ renderSameLine (path </> Text.pack (show index)) value
-    | (index, value) <- common
     ]
 
 renderArrayOnly :: Text -> DiffPath -> [(Int, Aeson.Value)] -> [Text]
@@ -526,7 +510,37 @@ renderJsonValue value =
         Just lovelace ->
             renderLovelace lovelace
         Nothing ->
-            renderEncodedJsonValue value
+            case cborValue value of
+                Just cbor ->
+                    renderCborValue cbor
+                Nothing ->
+                    renderEncodedJsonValue value
+
+cborValue :: Aeson.Value -> Maybe Text
+cborValue (Aeson.Object value) =
+    case KeyMap.toList value of
+        [(key, Aeson.String cbor)]
+            | key == Key.fromText "cbor" ->
+                Just cbor
+        _ ->
+            Nothing
+cborValue _ =
+    Nothing
+
+renderCborValue :: Text -> Text
+renderCborValue cbor =
+    "cbor:"
+        <> cborSummary cbor
+        <> " ("
+        <> Text.pack (show (Text.length cbor `div` 2))
+        <> " bytes)"
+
+cborSummary :: Text -> Text
+cborSummary cbor
+    | Text.length cbor > 64 =
+        Text.take 32 cbor <> "..."
+    | otherwise =
+        cbor
 
 renderEncodedJsonValue :: Aeson.Value -> Text
 renderEncodedJsonValue =

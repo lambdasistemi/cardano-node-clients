@@ -197,8 +197,7 @@ spec =
                         ]
             renderDiffNodeHuman (diffOpenValue left right)
                 `shouldBe` Text.unlines
-                    [ "= same: 1"
-                    , "~ changed"
+                    [ "~ changed"
                     , "  A: \"left\""
                     , "  B: \"right\""
                     , "- onlyA: {\"bytes\":\"aa\"}"
@@ -218,6 +217,21 @@ spec =
                     [ "~ body.fee"
                     , "  A: 1.000000 ADA (1000000 lovelace)"
                     , "  B: 1.500000 ADA (1500000 lovelace)"
+                    ]
+
+        it "summarizes raw CBOR payloads in human-readable output" $ do
+            let diff =
+                    DiffNode
+                        (DiffPath ["body", "outputs", "0", "datum"])
+                        ( DiffChanged
+                            (Aeson.object ["cbor" .= Text.replicate 80 "a"])
+                            (Aeson.object ["cbor" .= Text.replicate 80 "b"])
+                        )
+            renderDiffNodeHuman diff
+                `shouldBe` Text.unlines
+                    [ "~ body.outputs.0.datum"
+                    , "  A: cbor:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... (40 bytes)"
+                    , "  B: cbor:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... (40 bytes)"
                     ]
 
         it "reports any equal generated value as same at the root" $
