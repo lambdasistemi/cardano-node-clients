@@ -6,14 +6,18 @@ module Cardano.Node.Client.TxDiff.ConwaySpec (spec) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
+import Data.ByteString (ByteString)
+import Data.ByteString.Base16 qualified as Base16
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Sequence.Strict qualified as StrictSeq
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as Text
 import Lens.Micro ((&), (.~), (^.))
 import Test.Hspec
 
+import Cardano.Ledger.Address (Addr, serialiseAddr)
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
@@ -21,7 +25,7 @@ import Cardano.Ledger.Api.Tx.Body (
     outputsTxBodyL,
     vldtTxBodyL,
  )
-import Cardano.Ledger.Api.Tx.Out (TxOut, coinTxOutL)
+import Cardano.Ledger.Api.Tx.Out (TxOut, addrTxOutL, coinTxOutL)
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Binary (
     Annotator,
@@ -185,7 +189,14 @@ spec =
                                                     ["body", "outputs", "0"]
                                                 )
                                                 ( DiffObject
-                                                    Map.empty
+                                                    ( Map.singleton
+                                                        "address"
+                                                        ( Just $
+                                                            addressJson $
+                                                                firstOutput
+                                                                    ^. addrTxOutL
+                                                        )
+                                                    )
                                                     ( Map.singleton
                                                         "coin"
                                                         ( DiffNode
@@ -215,6 +226,96 @@ spec =
                                     )
                                 )
                             )
+
+        it "reports a Conway output address change at body.outputs.0.address" $ do
+            tx <- loadFixture sampleHash
+            let outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
+            case outputs of
+                firstOutput : secondOutput : otherOutputs -> do
+                    let newAddress = secondOutput ^. addrTxOutL
+                        oldAddress = firstOutput ^. addrTxOutL
+                    oldAddress `shouldNotBe` newAddress
+                    let changedOutput =
+                            firstOutput & addrTxOutL .~ newAddress
+                        tx' =
+                            tx
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ StrictSeq.fromList
+                                        ( changedOutput
+                                            : secondOutput
+                                            : otherOutputs
+                                        )
+                    diffConwayTx tx tx'
+                        `shouldBe` bodyDiff
+                            ( Map.fromList
+                                [
+                                    ( "fee"
+                                    , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
+                                    )
+                                ,
+                                    ( "validityInterval"
+                                    , Just $
+                                        validityIntervalJson $
+                                            tx ^. bodyTxL . vldtTxBodyL
+                                    )
+                                ]
+                            )
+                            ( Map.singleton
+                                "outputs"
+                                ( DiffNode
+                                    (DiffPath ["body", "outputs"])
+                                    ( DiffArray
+                                        ( indexedOutputSummaries
+                                            (secondOutput : otherOutputs)
+                                        )
+                                        [
+                                            ( 0
+                                            , DiffNode
+                                                ( DiffPath
+                                                    ["body", "outputs", "0"]
+                                                )
+                                                ( DiffObject
+                                                    ( Map.singleton
+                                                        "coin"
+                                                        ( Just $
+                                                            coinJson $
+                                                                firstOutput
+                                                                    ^. coinTxOutL
+                                                        )
+                                                    )
+                                                    ( Map.singleton
+                                                        "address"
+                                                        ( DiffNode
+                                                            ( DiffPath
+                                                                [ "body"
+                                                                , "outputs"
+                                                                , "0"
+                                                                , "address"
+                                                                ]
+                                                            )
+                                                            ( DiffChanged
+                                                                ( addressJson
+                                                                    oldAddress
+                                                                )
+                                                                ( addressJson
+                                                                    newAddress
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+                                                    Map.empty
+                                                    Map.empty
+                                                )
+                                            )
+                                        ]
+                                        []
+                                        []
+                                    )
+                                )
+                            )
+                _ ->
+                    expectationFailure "fixture has fewer than two outputs"
 
 rootPath :: DiffPath
 rootPath =
@@ -269,7 +370,18 @@ outputsJson outputs =
 
 outputJson :: TxOut ConwayEra -> Aeson.Value
 outputJson output =
-    Aeson.object ["coin" .= coinJson (output ^. coinTxOutL)]
+    Aeson.object
+        [ "address" .= addressJson (output ^. addrTxOutL)
+        , "coin" .= coinJson (output ^. coinTxOutL)
+        ]
+
+addressJson :: Addr -> Aeson.Value
+addressJson address =
+    Aeson.object ["bytes" .= hexText (serialiseAddr address)]
+
+hexText :: ByteString -> Text
+hexText =
+    Text.decodeUtf8 . Base16.encode
 
 validityIntervalJson :: ValidityInterval -> Aeson.Value
 validityIntervalJson validity =

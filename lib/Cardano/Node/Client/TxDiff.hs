@@ -22,13 +22,17 @@ import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString (ByteString)
+import Data.ByteString.Base16 qualified as Base16
 import Data.Foldable (toList)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Lens.Micro ((^.))
 
+import Cardano.Ledger.Address (Addr, serialiseAddr)
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
@@ -36,7 +40,7 @@ import Cardano.Ledger.Api.Tx.Body (
     outputsTxBodyL,
     vldtTxBodyL,
  )
-import Cardano.Ledger.Api.Tx.Out (TxOut, coinTxOutL)
+import Cardano.Ledger.Api.Tx.Out (TxOut, addrTxOutL, coinTxOutL)
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
@@ -91,6 +95,7 @@ data ConwayDiffValue
     | ConwaySlotBoundValue (StrictMaybe SlotNo)
     | ConwayOutputsValue [TxOut ConwayEra]
     | ConwayTxOutValue (TxOut ConwayEra)
+    | ConwayAddressValue Addr
 
 diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
 diffConwayTx left right =
@@ -248,6 +253,8 @@ conwayDiffEqual (ConwayOutputsValue left) (ConwayOutputsValue right) =
     left == right
 conwayDiffEqual (ConwayTxOutValue left) (ConwayTxOutValue right) =
     left == right
+conwayDiffEqual (ConwayAddressValue left) (ConwayAddressValue right) =
+    left == right
 conwayDiffEqual _ _ =
     False
 
@@ -262,6 +269,8 @@ conwayDiffSummary (ConwayOutputsValue outputs) =
     Just (Aeson.toJSON (map txOutValue outputs))
 conwayDiffSummary (ConwayTxOutValue output) =
     Just (txOutValue output)
+conwayDiffSummary (ConwayAddressValue address) =
+    Just (addressValue address)
 conwayDiffSummary (ConwayTxValue _) =
     Nothing
 conwayDiffSummary (ConwayBodyValue _) =
@@ -306,7 +315,18 @@ conwayDiffProjection (ConwayOutputsValue outputs) =
     DiffArrayChildren (map ConwayTxOutValue outputs)
 conwayDiffProjection (ConwayTxOutValue output) =
     DiffObjectChildren $
-        Map.singleton "coin" (ConwayCoinValue (output ^. coinTxOutL))
+        Map.fromList
+            [
+                ( "address"
+                , ConwayAddressValue (output ^. addrTxOutL)
+                )
+            ,
+                ( "coin"
+                , ConwayCoinValue (output ^. coinTxOutL)
+                )
+            ]
+conwayDiffProjection (ConwayAddressValue address) =
+    DiffAtomic (addressValue address)
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
@@ -327,7 +347,18 @@ slotBoundValue (SJust (SlotNo slot)) =
 
 txOutValue :: TxOut ConwayEra -> Aeson.Value
 txOutValue output =
-    Aeson.object ["coin" .= coinValue (output ^. coinTxOutL)]
+    Aeson.object
+        [ "address" .= addressValue (output ^. addrTxOutL)
+        , "coin" .= coinValue (output ^. coinTxOutL)
+        ]
+
+addressValue :: Addr -> Aeson.Value
+addressValue address =
+    Aeson.object ["bytes" .= hexText (serialiseAddr address)]
+
+hexText :: ByteString -> Text
+hexText =
+    TextEncoding.decodeUtf8 . Base16.encode
 
 openValueSummary :: OpenValue -> Maybe Aeson.Value
 openValueSummary (OpenInteger value) =
