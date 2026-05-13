@@ -47,7 +47,8 @@ import Cardano.Ledger.Address (
     serialiseAddr,
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
-import Cardano.Ledger.Api.Scripts.Data (Datum)
+import Cardano.Ledger.Alonzo.TxWits (TxDats (..))
+import Cardano.Ledger.Api.Scripts.Data (Data, Datum)
 import Cardano.Ledger.Api.Tx (bodyTxL, witsTxL)
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
@@ -68,13 +69,13 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
-import Cardano.Ledger.Api.Tx.Wits (scriptTxWitsL)
+import Cardano.Ledger.Api.Tx.Wits (datsTxWitsL, scriptTxWitsL)
 import Cardano.Ledger.BaseTypes (StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
-import Cardano.Ledger.Hashes (ScriptHash (..), extractHash)
+import Cardano.Ledger.Hashes (DataHash, ScriptHash (..), extractHash)
 import Cardano.Ledger.Keys (
     KeyHash (..),
     KeyRole (Guard),
@@ -160,6 +161,8 @@ data ConwayDiffValue
     | ConwayDatumValue (Datum ConwayEra)
     | ConwayReferenceScriptValue (StrictMaybe (Script ConwayEra))
     | ConwayWitnessesValue ConwayTx
+    | ConwayDatumWitnessesValue (TxDats ConwayEra)
+    | ConwayDataValue (Data ConwayEra)
     | ConwayScriptsValue (Map ScriptHash (Script ConwayEra))
     | ConwayScriptValue (Script ConwayEra)
 
@@ -355,6 +358,12 @@ conwayDiffEqual
         left == right
 conwayDiffEqual (ConwayWitnessesValue left) (ConwayWitnessesValue right) =
     left ^. witsTxL == right ^. witsTxL
+conwayDiffEqual
+    (ConwayDatumWitnessesValue left)
+    (ConwayDatumWitnessesValue right) =
+        left == right
+conwayDiffEqual (ConwayDataValue left) (ConwayDataValue right) =
+    left == right
 conwayDiffEqual (ConwayScriptsValue left) (ConwayScriptsValue right) =
     left == right
 conwayDiffEqual (ConwayScriptValue left) (ConwayScriptValue right) =
@@ -397,6 +406,10 @@ conwayDiffSummary (ConwayDatumValue datum) =
     Just (datumValue datum)
 conwayDiffSummary (ConwayReferenceScriptValue referenceScript) =
     Just (referenceScriptValue referenceScript)
+conwayDiffSummary (ConwayDatumWitnessesValue datums) =
+    Just (datumWitnessesValue datums)
+conwayDiffSummary (ConwayDataValue datum) =
+    Just (dataValue datum)
 conwayDiffSummary (ConwayScriptsValue scripts) =
     Just (scriptsValue scripts)
 conwayDiffSummary (ConwayScriptValue script) =
@@ -538,9 +551,20 @@ conwayDiffProjection _ (ConwayReferenceScriptValue referenceScript) =
     DiffAtomic (referenceScriptValue referenceScript)
 conwayDiffProjection _ (ConwayWitnessesValue tx) =
     DiffObjectChildren $
-        Map.singleton
-            "scripts"
-            (ConwayScriptsValue (tx ^. witsTxL . scriptTxWitsL))
+        Map.fromList
+            [
+                ( "datums"
+                , ConwayDatumWitnessesValue (tx ^. witsTxL . datsTxWitsL)
+                )
+            ,
+                ( "scripts"
+                , ConwayScriptsValue (tx ^. witsTxL . scriptTxWitsL)
+                )
+            ]
+conwayDiffProjection _ (ConwayDatumWitnessesValue datums) =
+    DiffObjectChildren (datumWitnessChildren datums)
+conwayDiffProjection _ (ConwayDataValue datum) =
+    DiffAtomic (dataValue datum)
 conwayDiffProjection _ (ConwayScriptsValue scripts) =
     DiffObjectChildren (scriptChildren scripts)
 conwayDiffProjection _ (ConwayScriptValue script) =
@@ -680,6 +704,34 @@ scriptValue :: Script ConwayEra -> Aeson.Value
 scriptValue script =
     Aeson.object
         [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) script)
+        ]
+
+datumWitnessesValue :: TxDats ConwayEra -> Aeson.Value
+datumWitnessesValue datums =
+    objectValue
+        [ (dataHashKey dataHash, dataValue datum)
+        | (dataHash, datum) <- datumWitnessEntries datums
+        ]
+
+datumWitnessChildren :: TxDats ConwayEra -> Map Text ConwayDiffValue
+datumWitnessChildren datums =
+    Map.fromList
+        [ (dataHashKey dataHash, ConwayDataValue datum)
+        | (dataHash, datum) <- datumWitnessEntries datums
+        ]
+
+datumWitnessEntries :: TxDats ConwayEra -> [(DataHash, Data ConwayEra)]
+datumWitnessEntries (TxDats datums) =
+    Map.toAscList datums
+
+dataHashKey :: DataHash -> Text
+dataHashKey dataHash =
+    hexText (hashToBytes (extractHash dataHash))
+
+dataValue :: Data ConwayEra -> Aeson.Value
+dataValue datum =
+    Aeson.object
+        [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
         ]
 
 scriptsValue :: Map ScriptHash (Script ConwayEra) -> Aeson.Value

@@ -36,10 +36,12 @@ import Cardano.Ledger.Alonzo.Scripts (
     fromPlutusScript,
     mkPlutusScript,
  )
+import Cardano.Ledger.Alonzo.TxWits (TxDats (..))
 import Cardano.Ledger.Api.Scripts.Data (
     Data (..),
     Datum (..),
     dataToBinaryData,
+    hashData,
  )
 import Cardano.Ledger.Api.Tx (
     bodyTxL,
@@ -64,7 +66,7 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
-import Cardano.Ledger.Api.Tx.Wits (scriptTxWitsL)
+import Cardano.Ledger.Api.Tx.Wits (datsTxWitsL, scriptTxWitsL)
 import Cardano.Ledger.BaseTypes (Network (Testnet), StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (
     Annotator,
@@ -79,6 +81,7 @@ import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow, hashScript)
 import Cardano.Ledger.Credential (Credential (KeyHashObj))
 import Cardano.Ledger.Hashes (
+    DataHash,
     ScriptHash (..),
     extractHash,
     unsafeMakeSafeHash,
@@ -815,7 +818,10 @@ spec =
                             ( DiffNode
                                 (DiffPath ["witnesses"])
                                 ( DiffObject
-                                    Map.empty
+                                    ( Map.singleton
+                                        "datums"
+                                        (Just (Aeson.object []))
+                                    )
                                     ( Map.singleton
                                         "scripts"
                                         ( DiffNode
@@ -831,6 +837,65 @@ spec =
                                                     ( scriptJson
                                                         alwaysTrueScript
                                                     )
+                                                )
+                                            )
+                                        )
+                                    )
+                                    Map.empty
+                                    Map.empty
+                                )
+                            )
+                        )
+                        Map.empty
+                        Map.empty
+                    )
+
+        it "reports an opt-in Conway witness datum insertion keyed by data hash" $ do
+            tx <- loadFixture sampleHash
+            let datumData = integerData 42
+                datumHash = hashData datumData
+                txA =
+                    tx
+                        & witsTxL
+                            . datsTxWitsL
+                            .~ TxDats Map.empty
+                txB =
+                    tx
+                        & witsTxL
+                            . datsTxWitsL
+                            .~ TxDats (Map.singleton datumHash datumData)
+                options =
+                    defaultTxDiffOptions
+                        { txDiffIncludeWitnesses = True
+                        }
+                datumPath = dataHashKey datumHash
+            diffConwayTxWith options txA txB
+                `shouldBe` DiffNode
+                    rootPath
+                    ( DiffObject
+                        (Map.singleton "body" Nothing)
+                        ( Map.singleton
+                            "witnesses"
+                            ( DiffNode
+                                (DiffPath ["witnesses"])
+                                ( DiffObject
+                                    ( Map.singleton
+                                        "scripts"
+                                        (Just (Aeson.object []))
+                                    )
+                                    ( Map.singleton
+                                        "datums"
+                                        ( DiffNode
+                                            ( DiffPath
+                                                ["witnesses", "datums"]
+                                            )
+                                            ( DiffObject
+                                                Map.empty
+                                                Map.empty
+                                                Map.empty
+                                                ( Map.singleton
+                                                    datumPath
+                                                    (dataJson datumData)
                                                 )
                                             )
                                         )
@@ -1056,6 +1121,10 @@ scriptHashKey :: ScriptHash -> Text
 scriptHashKey (ScriptHash scriptHash) =
     hexText (hashToBytes scriptHash)
 
+dataHashKey :: DataHash -> Text
+dataHashKey dataHash =
+    hexText (hashToBytes (extractHash dataHash))
+
 assetNameKey :: AssetName -> Text
 assetNameKey (AssetName bytes) =
     hexText (SBS.fromShort bytes)
@@ -1120,10 +1189,21 @@ datumJson datum =
             .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
         ]
 
+dataJson :: Data ConwayEra -> Aeson.Value
+dataJson dataValue =
+    Aeson.object
+        [ "cbor"
+            .= hexText (serialize' (eraProtVerLow @ConwayEra) dataValue)
+        ]
+
+integerData :: Integer -> Data ConwayEra
+integerData value =
+    Data (PLC.I value)
+
 inlineIntegerDatum :: Integer -> Datum ConwayEra
 inlineIntegerDatum value =
     Datum $
-        dataToBinaryData (Data (PLC.I value) :: Data ConwayEra)
+        dataToBinaryData (integerData value)
 
 referenceScriptJson :: StrictMaybe (Script ConwayEra) -> Aeson.Value
 referenceScriptJson SNothing =

@@ -60,6 +60,7 @@ is proceeding field by field; blueprint handling has not started.
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.
 - [x] T046 Add opt-in witness traversal for witness scripts.
+- [x] T047 Add opt-in witness traversal for datum values.
 - [ ] T018 Keep unknown unequal ledger values atomic at their current path.
 
 ## Phase 4: Blueprint Boundary
