@@ -205,6 +205,21 @@ spec =
                     , "+ onlyB: {\"bytes\":\"bb\"}"
                     ]
 
+        it "renders known coin values with exact ADA and lovelace units" $ do
+            let diff =
+                    DiffNode
+                        (DiffPath ["body", "fee"])
+                        ( DiffChanged
+                            (Aeson.object ["lovelace" .= (1_000_000 :: Integer)])
+                            (Aeson.object ["lovelace" .= (1_500_000 :: Integer)])
+                        )
+            renderDiffNodeHuman diff
+                `shouldBe` Text.unlines
+                    [ "~ body.fee"
+                    , "  A: 1.000000 ADA (1000000 lovelace)"
+                    , "  B: 1.500000 ADA (1500000 lovelace)"
+                    ]
+
         it "reports any equal generated value as same at the root" $
             property $
                 \(SmallOpenValue value) ->

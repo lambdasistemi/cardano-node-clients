@@ -78,7 +78,7 @@ implemented. Blueprint handling has started with the parser subset.
 ## Phase 5: Rendering And CLI
 
 - [x] T024 Add a human renderer over `DiffNode`.
-- [ ] T025 Add exact numeric rendering for known ledger scalar units.
+- [x] T025 Add exact numeric rendering for known ledger scalar units.
 - [ ] T026 Add input decoding for CBOR hex, raw CBOR, and cardano-cli JSON
   envelope inputs.
 - [ ] T027 Add the thin `tx-diff` executable.

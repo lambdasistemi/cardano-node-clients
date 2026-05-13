@@ -40,6 +40,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Lens.Micro ((^.))
+import Text.Read (readMaybe)
 
 import Cardano.Crypto.Hash (hashToBytes)
 import Cardano.Ledger.Address (
@@ -388,8 +389,50 @@ renderPath (DiffPath segments) =
     Text.intercalate "." segments
 
 renderJsonValue :: Aeson.Value -> Text
-renderJsonValue =
+renderJsonValue value =
+    case lovelaceValue value of
+        Just lovelace ->
+            renderLovelace lovelace
+        Nothing ->
+            renderEncodedJsonValue value
+
+renderEncodedJsonValue :: Aeson.Value -> Text
+renderEncodedJsonValue =
     TextEncoding.decodeUtf8 . LBS.toStrict . Aeson.encode
+
+lovelaceValue :: Aeson.Value -> Maybe Integer
+lovelaceValue (Aeson.Object value) =
+    case KeyMap.toList value of
+        [(key, numberValue)]
+            | key == Key.fromText "lovelace" ->
+                integerJsonValue numberValue
+        _ ->
+            Nothing
+lovelaceValue _ =
+    Nothing
+
+integerJsonValue :: Aeson.Value -> Maybe Integer
+integerJsonValue numberValue@(Aeson.Number _) =
+    readMaybe (Text.unpack (renderEncodedJsonValue numberValue))
+integerJsonValue _ =
+    Nothing
+
+renderLovelace :: Integer -> Text
+renderLovelace lovelace =
+    sign
+        <> Text.pack (show ada)
+        <> "."
+        <> Text.justifyRight 6 '0' (Text.pack (show rest))
+        <> " ADA ("
+        <> Text.pack (show lovelace)
+        <> " lovelace)"
+  where
+    sign =
+        if lovelace < 0 then "-" else ""
+    absoluteLovelace =
+        abs lovelace
+    (ada, rest) =
+        absoluteLovelace `quotRem` 1000000
 
 (</>) :: DiffPath -> Text -> DiffPath
 DiffPath segments </> segment =
