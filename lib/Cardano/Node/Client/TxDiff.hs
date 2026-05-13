@@ -47,7 +47,8 @@ import Cardano.Ledger.Address (
     serialiseAddr,
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
-import Cardano.Ledger.Alonzo.TxWits (TxDats (..))
+import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
+import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
 import Cardano.Ledger.Api.Scripts.Data (Data, Datum)
 import Cardano.Ledger.Api.Tx (bodyTxL, witsTxL)
 import Cardano.Ledger.Api.Tx.Body (
@@ -69,11 +70,16 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
-import Cardano.Ledger.Api.Tx.Wits (datsTxWitsL, scriptTxWitsL)
+import Cardano.Ledger.Api.Tx.Wits (
+    datsTxWitsL,
+    rdmrsTxWitsL,
+    scriptTxWitsL,
+ )
 import Cardano.Ledger.BaseTypes (StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
 import Cardano.Ledger.Core (Script, eraProtVerLow)
 import Cardano.Ledger.Hashes (DataHash, ScriptHash (..), extractHash)
 import Cardano.Ledger.Keys (
@@ -85,6 +91,7 @@ import Cardano.Ledger.Mary.Value (
     MultiAsset (..),
     PolicyID (..),
  )
+import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
@@ -163,6 +170,9 @@ data ConwayDiffValue
     | ConwayWitnessesValue ConwayTx
     | ConwayDatumWitnessesValue (TxDats ConwayEra)
     | ConwayDataValue (Data ConwayEra)
+    | ConwayRedeemersValue (Redeemers ConwayEra)
+    | ConwayRedeemerValue (Data ConwayEra, ExUnits)
+    | ConwayExUnitsValue ExUnits
     | ConwayScriptsValue (Map ScriptHash (Script ConwayEra))
     | ConwayScriptValue (Script ConwayEra)
 
@@ -364,6 +374,12 @@ conwayDiffEqual
         left == right
 conwayDiffEqual (ConwayDataValue left) (ConwayDataValue right) =
     left == right
+conwayDiffEqual (ConwayRedeemersValue left) (ConwayRedeemersValue right) =
+    left == right
+conwayDiffEqual (ConwayRedeemerValue left) (ConwayRedeemerValue right) =
+    left == right
+conwayDiffEqual (ConwayExUnitsValue left) (ConwayExUnitsValue right) =
+    left == right
 conwayDiffEqual (ConwayScriptsValue left) (ConwayScriptsValue right) =
     left == right
 conwayDiffEqual (ConwayScriptValue left) (ConwayScriptValue right) =
@@ -410,6 +426,12 @@ conwayDiffSummary (ConwayDatumWitnessesValue datums) =
     Just (datumWitnessesValue datums)
 conwayDiffSummary (ConwayDataValue datum) =
     Just (dataValue datum)
+conwayDiffSummary (ConwayRedeemersValue redeemers) =
+    Just (redeemersValue redeemers)
+conwayDiffSummary (ConwayRedeemerValue redeemer) =
+    Just (redeemerValue redeemer)
+conwayDiffSummary (ConwayExUnitsValue exUnits) =
+    Just (exUnitsValue exUnits)
 conwayDiffSummary (ConwayScriptsValue scripts) =
     Just (scriptsValue scripts)
 conwayDiffSummary (ConwayScriptValue script) =
@@ -557,6 +579,10 @@ conwayDiffProjection _ (ConwayWitnessesValue tx) =
                 , ConwayDatumWitnessesValue (tx ^. witsTxL . datsTxWitsL)
                 )
             ,
+                ( "redeemers"
+                , ConwayRedeemersValue (tx ^. witsTxL . rdmrsTxWitsL)
+                )
+            ,
                 ( "scripts"
                 , ConwayScriptsValue (tx ^. witsTxL . scriptTxWitsL)
                 )
@@ -565,6 +591,12 @@ conwayDiffProjection _ (ConwayDatumWitnessesValue datums) =
     DiffObjectChildren (datumWitnessChildren datums)
 conwayDiffProjection _ (ConwayDataValue datum) =
     DiffAtomic (dataValue datum)
+conwayDiffProjection _ (ConwayRedeemersValue redeemers) =
+    DiffObjectChildren (redeemerChildren redeemers)
+conwayDiffProjection _ (ConwayRedeemerValue redeemer) =
+    DiffObjectChildren (redeemerFieldChildren redeemer)
+conwayDiffProjection _ (ConwayExUnitsValue exUnits) =
+    DiffAtomic (exUnitsValue exUnits)
 conwayDiffProjection _ (ConwayScriptsValue scripts) =
     DiffObjectChildren (scriptChildren scripts)
 conwayDiffProjection _ (ConwayScriptValue script) =
@@ -732,6 +764,72 @@ dataValue :: Data ConwayEra -> Aeson.Value
 dataValue datum =
     Aeson.object
         [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
+        ]
+
+redeemersValue :: Redeemers ConwayEra -> Aeson.Value
+redeemersValue redeemers =
+    objectValue
+        [ (redeemerPurposeKey purpose, redeemerValue redeemer)
+        | (purpose, redeemer) <- redeemerEntries redeemers
+        ]
+
+redeemerChildren :: Redeemers ConwayEra -> Map Text ConwayDiffValue
+redeemerChildren redeemers =
+    Map.fromList
+        [ (redeemerPurposeKey purpose, ConwayRedeemerValue redeemer)
+        | (purpose, redeemer) <- redeemerEntries redeemers
+        ]
+
+redeemerEntries ::
+    Redeemers ConwayEra ->
+    [(ConwayPlutusPurpose AsIx ConwayEra, (Data ConwayEra, ExUnits))]
+redeemerEntries (Redeemers redeemers) =
+    Map.toAscList redeemers
+
+redeemerPurposeKey :: ConwayPlutusPurpose AsIx ConwayEra -> Text
+redeemerPurposeKey (ConwaySpending (AsIx index)) =
+    indexedRedeemerPurposeKey "spending" index
+redeemerPurposeKey (ConwayMinting (AsIx index)) =
+    indexedRedeemerPurposeKey "minting" index
+redeemerPurposeKey (ConwayCertifying (AsIx index)) =
+    indexedRedeemerPurposeKey "certifying" index
+redeemerPurposeKey (ConwayRewarding (AsIx index)) =
+    indexedRedeemerPurposeKey "rewarding" index
+redeemerPurposeKey (ConwayVoting (AsIx index)) =
+    indexedRedeemerPurposeKey "voting" index
+redeemerPurposeKey (ConwayProposing (AsIx index)) =
+    indexedRedeemerPurposeKey "proposing" index
+
+indexedRedeemerPurposeKey :: (Show index) => Text -> index -> Text
+indexedRedeemerPurposeKey label index =
+    label <> "." <> Text.pack (show index)
+
+redeemerValue :: (Data ConwayEra, ExUnits) -> Aeson.Value
+redeemerValue (redeemerData, exUnits) =
+    Aeson.object
+        [ "data" .= dataValue redeemerData
+        , "exUnits" .= exUnitsValue exUnits
+        ]
+
+redeemerFieldChildren ::
+    (Data ConwayEra, ExUnits) -> Map Text ConwayDiffValue
+redeemerFieldChildren (redeemerData, exUnits) =
+    Map.fromList
+        [
+            ( "data"
+            , ConwayDataValue redeemerData
+            )
+        ,
+            ( "exUnits"
+            , ConwayExUnitsValue exUnits
+            )
+        ]
+
+exUnitsValue :: ExUnits -> Aeson.Value
+exUnitsValue (ExUnits memory steps) =
+    Aeson.object
+        [ "memory" .= memory
+        , "steps" .= steps
         ]
 
 scriptsValue :: Map ScriptHash (Script ConwayEra) -> Aeson.Value

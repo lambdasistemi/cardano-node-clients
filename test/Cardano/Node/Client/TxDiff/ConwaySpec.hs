@@ -33,10 +33,11 @@ import Cardano.Ledger.Address (
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (
+    AsIx (..),
     fromPlutusScript,
     mkPlutusScript,
  )
-import Cardano.Ledger.Alonzo.TxWits (TxDats (..))
+import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
 import Cardano.Ledger.Api.Scripts.Data (
     Data (..),
     Datum (..),
@@ -66,7 +67,11 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
-import Cardano.Ledger.Api.Tx.Wits (datsTxWitsL, scriptTxWitsL)
+import Cardano.Ledger.Api.Tx.Wits (
+    datsTxWitsL,
+    rdmrsTxWitsL,
+    scriptTxWitsL,
+ )
 import Cardano.Ledger.BaseTypes (Network (Testnet), StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (
     Annotator,
@@ -78,6 +83,7 @@ import Cardano.Ledger.Binary (
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
 import Cardano.Ledger.Core (Script, eraProtVerLow, hashScript)
 import Cardano.Ledger.Credential (Credential (KeyHashObj))
 import Cardano.Ledger.Hashes (
@@ -95,6 +101,7 @@ import Cardano.Ledger.Mary.Value (
     MultiAsset (..),
     PolicyID (..),
  )
+import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
     Plutus (..),
@@ -818,10 +825,7 @@ spec =
                             ( DiffNode
                                 (DiffPath ["witnesses"])
                                 ( DiffObject
-                                    ( Map.singleton
-                                        "datums"
-                                        (Just (Aeson.object []))
-                                    )
+                                    (witnessCommonExcept ["scripts"] txA)
                                     ( Map.singleton
                                         "scripts"
                                         ( DiffNode
@@ -879,10 +883,7 @@ spec =
                             ( DiffNode
                                 (DiffPath ["witnesses"])
                                 ( DiffObject
-                                    ( Map.singleton
-                                        "scripts"
-                                        (Just (Aeson.object []))
-                                    )
+                                    (witnessCommonExcept ["datums"] txA)
                                     ( Map.singleton
                                         "datums"
                                         ( DiffNode
@@ -897,6 +898,104 @@ spec =
                                                     datumPath
                                                     (dataJson datumData)
                                                 )
+                                            )
+                                        )
+                                    )
+                                    Map.empty
+                                    Map.empty
+                                )
+                            )
+                        )
+                        Map.empty
+                        Map.empty
+                    )
+
+        it "reports an opt-in Conway redeemer data change keyed by purpose and index" $ do
+            tx <- loadFixture sampleHash
+            let purpose = ConwaySpending (AsIx 0)
+                oldRedeemer = integerData 1
+                newRedeemer = integerData 2
+                exUnits = ExUnits 1000 10000
+                txA =
+                    tx
+                        & witsTxL
+                            . rdmrsTxWitsL
+                            .~ Redeemers
+                                (Map.singleton purpose (oldRedeemer, exUnits))
+                txB =
+                    tx
+                        & witsTxL
+                            . rdmrsTxWitsL
+                            .~ Redeemers
+                                (Map.singleton purpose (newRedeemer, exUnits))
+                options =
+                    defaultTxDiffOptions
+                        { txDiffIncludeWitnesses = True
+                        }
+                purposePath = redeemerPurposeKey purpose
+            diffConwayTxWith options txA txB
+                `shouldBe` DiffNode
+                    rootPath
+                    ( DiffObject
+                        (Map.singleton "body" Nothing)
+                        ( Map.singleton
+                            "witnesses"
+                            ( DiffNode
+                                (DiffPath ["witnesses"])
+                                ( DiffObject
+                                    (witnessCommonExcept ["redeemers"] txA)
+                                    ( Map.singleton
+                                        "redeemers"
+                                        ( DiffNode
+                                            ( DiffPath
+                                                ["witnesses", "redeemers"]
+                                            )
+                                            ( DiffObject
+                                                Map.empty
+                                                ( Map.singleton
+                                                    purposePath
+                                                    ( DiffNode
+                                                        ( DiffPath
+                                                            [ "witnesses"
+                                                            , "redeemers"
+                                                            , purposePath
+                                                            ]
+                                                        )
+                                                        ( DiffObject
+                                                            ( Map.singleton
+                                                                "exUnits"
+                                                                ( Just $
+                                                                    exUnitsJson
+                                                                        exUnits
+                                                                )
+                                                            )
+                                                            ( Map.singleton
+                                                                "data"
+                                                                ( DiffNode
+                                                                    ( DiffPath
+                                                                        [ "witnesses"
+                                                                        , "redeemers"
+                                                                        , purposePath
+                                                                        , "data"
+                                                                        ]
+                                                                    )
+                                                                    ( DiffChanged
+                                                                        ( dataJson
+                                                                            oldRedeemer
+                                                                        )
+                                                                        ( dataJson
+                                                                            newRedeemer
+                                                                        )
+                                                                    )
+                                                                )
+                                                            )
+                                                            Map.empty
+                                                            Map.empty
+                                                        )
+                                                    )
+                                                )
+                                                Map.empty
+                                                Map.empty
                                             )
                                         )
                                     )
@@ -972,6 +1071,33 @@ bodyCommonExcept omitted tx =
         | (field, value) <- bodyFieldValues tx
         , field `notElem` omitted
         ]
+
+witnessCommonExcept ::
+    [Text] ->
+    ConwayTx ->
+    Map.Map Text (Maybe Aeson.Value)
+witnessCommonExcept omitted tx =
+    Map.fromList
+        [ (field, Just value)
+        | (field, value) <- witnessFieldValues tx
+        , field `notElem` omitted
+        ]
+
+witnessFieldValues :: ConwayTx -> [(Text, Aeson.Value)]
+witnessFieldValues tx =
+    [
+        ( "datums"
+        , datumWitnessesJson (tx ^. witsTxL . datsTxWitsL)
+        )
+    ,
+        ( "redeemers"
+        , redeemersJson (tx ^. witsTxL . rdmrsTxWitsL)
+        )
+    ,
+        ( "scripts"
+        , scriptsJson (tx ^. witsTxL . scriptTxWitsL)
+        )
+    ]
 
 bodyFieldValues :: ConwayTx -> [(Text, Aeson.Value)]
 bodyFieldValues tx =
@@ -1125,9 +1251,58 @@ dataHashKey :: DataHash -> Text
 dataHashKey dataHash =
     hexText (hashToBytes (extractHash dataHash))
 
+datumWitnessesJson :: TxDats ConwayEra -> Aeson.Value
+datumWitnessesJson (TxDats datums) =
+    Aeson.Object $
+        KeyMap.fromList
+            [ (Key.fromText (dataHashKey dataHash), dataJson datum)
+            | (dataHash, datum) <- Map.toAscList datums
+            ]
+
+redeemersJson :: Redeemers ConwayEra -> Aeson.Value
+redeemersJson (Redeemers redeemers) =
+    Aeson.Object $
+        KeyMap.fromList
+            [ (Key.fromText (redeemerPurposeKey purpose), redeemerJson redeemer)
+            | (purpose, redeemer) <- Map.toAscList redeemers
+            ]
+
+redeemerJson :: (Data ConwayEra, ExUnits) -> Aeson.Value
+redeemerJson (redeemerData, exUnits) =
+    Aeson.object
+        [ "data" .= dataJson redeemerData
+        , "exUnits" .= exUnitsJson exUnits
+        ]
+
+redeemerPurposeKey :: ConwayPlutusPurpose AsIx ConwayEra -> Text
+redeemerPurposeKey (ConwaySpending (AsIx index)) =
+    indexedRedeemerPurposeKey "spending" index
+redeemerPurposeKey (ConwayMinting (AsIx index)) =
+    indexedRedeemerPurposeKey "minting" index
+redeemerPurposeKey (ConwayCertifying (AsIx index)) =
+    indexedRedeemerPurposeKey "certifying" index
+redeemerPurposeKey (ConwayRewarding (AsIx index)) =
+    indexedRedeemerPurposeKey "rewarding" index
+redeemerPurposeKey (ConwayVoting (AsIx index)) =
+    indexedRedeemerPurposeKey "voting" index
+redeemerPurposeKey (ConwayProposing (AsIx index)) =
+    indexedRedeemerPurposeKey "proposing" index
+
+indexedRedeemerPurposeKey :: (Show index) => Text -> index -> Text
+indexedRedeemerPurposeKey label index =
+    label <> "." <> Text.pack (show index)
+
 assetNameKey :: AssetName -> Text
 assetNameKey (AssetName bytes) =
     hexText (SBS.fromShort bytes)
+
+scriptsJson :: Map.Map ScriptHash (Script ConwayEra) -> Aeson.Value
+scriptsJson scripts =
+    Aeson.Object $
+        KeyMap.fromList
+            [ (Key.fromText (scriptHashKey scriptHash), scriptJson script)
+            | (scriptHash, script) <- Map.toAscList scripts
+            ]
 
 outputsJson :: [TxOut ConwayEra] -> Aeson.Value
 outputsJson outputs =
@@ -1194,6 +1369,13 @@ dataJson dataValue =
     Aeson.object
         [ "cbor"
             .= hexText (serialize' (eraProtVerLow @ConwayEra) dataValue)
+        ]
+
+exUnitsJson :: ExUnits -> Aeson.Value
+exUnitsJson (ExUnits memory steps) =
+    Aeson.object
+        [ "memory" .= memory
+        , "steps" .= steps
         ]
 
 integerData :: Integer -> Data ConwayEra
