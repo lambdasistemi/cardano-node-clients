@@ -4,6 +4,7 @@ module Cardano.Node.Client.TxDiff.BlueprintSpec (spec) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Map.Strict qualified as Map
@@ -22,11 +23,15 @@ import Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintArgument (..),
     BlueprintArgumentKind (..),
     BlueprintArgumentSelector (..),
+    BlueprintDiff (..),
+    BlueprintFallbackReason (..),
+    BlueprintMatchError (..),
     BlueprintPreamble (..),
     BlueprintSchema (..),
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
     decodeBlueprintData,
+    diffBlueprintArgumentData,
     diffBlueprintData,
     matchBlueprintArgument,
     parseBlueprintJSON,
@@ -166,6 +171,39 @@ spec =
                         )
                     )
 
+        it "falls back to raw data when no blueprint argument matches" $
+            case diffBlueprintArgumentData
+                []
+                orderDatumSelector
+                (orderDatum 42)
+                (orderDatum 43) of
+                BlueprintDiffFallback
+                    (BlueprintMatchFallback BlueprintArgumentMissing)
+                    diff ->
+                        diff `shouldBeRawDataChange` rootPath
+                other ->
+                    expectationFailure ("unexpected fallback result: " <> show other)
+
+        it "falls back to raw data when blueprint argument matches ambiguously" $
+            case parseBlueprintJSON blueprintJson of
+                Left err ->
+                    expectationFailure err
+                Right blueprint ->
+                    case diffBlueprintArgumentData
+                        [blueprint, blueprint]
+                        orderDatumSelector
+                        (orderDatum 42)
+                        (orderDatum 43) of
+                        BlueprintDiffFallback
+                            ( BlueprintMatchFallback
+                                    (BlueprintArgumentAmbiguous ["swap", "swap"])
+                                )
+                            diff ->
+                                diff `shouldBeRawDataChange` rootPath
+                        other ->
+                            expectationFailure $
+                                "unexpected fallback result: " <> show other
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -197,6 +235,28 @@ orderDatum amount =
             , PLC.I amount
             ]
         )
+
+orderDatumSelector :: BlueprintArgumentSelector
+orderDatumSelector =
+    BlueprintArgumentSelector
+        { selectorValidatorTitle = Just "swap"
+        , selectorArgumentKind = BlueprintDatum
+        }
+
+shouldBeRawDataChange :: DiffNode -> DiffPath -> Expectation
+shouldBeRawDataChange (DiffNode path (DiffChanged left right)) expectedPath = do
+    path `shouldBe` expectedPath
+    left `shouldSatisfy` hasCborField
+    right `shouldSatisfy` hasCborField
+    left `shouldNotBe` right
+shouldBeRawDataChange other _ =
+    expectationFailure ("expected raw data change, got: " <> show other)
+
+hasCborField :: Aeson.Value -> Bool
+hasCborField (Aeson.Object value) =
+    KeyMap.member "cbor" value
+hasCborField _ =
+    False
 
 blueprintJson :: LBS8.ByteString
 blueprintJson =

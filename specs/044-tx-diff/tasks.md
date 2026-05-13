@@ -21,7 +21,7 @@ implemented. Blueprint handling has started with the parser subset.
   when no stable key exists.
 - [ ] T007 [P] Add a unit test for matched blueprint datum/redeemer traversal
   into an open application value.
-- [ ] T008 [P] Add unit tests for missing and ambiguous blueprint fallback.
+- [x] T008 [P] Add unit tests for missing and ambiguous blueprint fallback.
 - [x] T032 [P] Add QuickCheck properties for equality stopping, object
   partitioning, array alignment, and scalar changed leaves.
 
@@ -73,7 +73,7 @@ implemented. Blueprint handling has started with the parser subset.
   validator context.
 - [x] T021 Convert matched Plutus data into the open application value tree.
 - [x] T022 Apply the same equality-first diff to open application values.
-- [ ] T023 Report missing and ambiguous blueprint matches explicitly.
+- [x] T023 Report missing and ambiguous blueprint matches explicitly.
 
 ## Phase 5: Rendering And CLI
 

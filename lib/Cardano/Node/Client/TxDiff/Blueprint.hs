@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 {- |
 Module      : Cardano.Node.Client.TxDiff.Blueprint
@@ -14,12 +15,15 @@ module Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintArgumentKind (..),
     BlueprintArgumentSelector (..),
     BlueprintDataError (..),
+    BlueprintDiff (..),
+    BlueprintFallbackReason (..),
     BlueprintMatchError (..),
     BlueprintPreamble (..),
     BlueprintSchema (..),
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
     decodeBlueprintData,
+    diffBlueprintArgumentData,
     diffBlueprintData,
     matchBlueprintArgument,
     parseBlueprintJSON,
@@ -32,7 +36,9 @@ import Data.Aeson (
     withObject,
     (.:),
     (.:?),
+    (.=),
  )
+import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Parser, (.!=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
@@ -45,8 +51,16 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 
 import Cardano.Ledger.Api.Scripts.Data (Data (..))
+import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Node.Client.TxDiff (DiffNode, OpenValue (..), diffOpenValue)
+import Cardano.Ledger.Core (eraProtVerLow)
+import Cardano.Node.Client.TxDiff (
+    DiffChange (..),
+    DiffNode (..),
+    DiffPath (..),
+    OpenValue (..),
+    diffOpenValue,
+ )
 import PlutusCore.Data qualified as PLC
 
 data Blueprint = Blueprint
@@ -93,6 +107,16 @@ data BlueprintMatchError
     | BlueprintDefinitionCycle Text
     deriving stock (Eq, Show)
 
+data BlueprintDiff
+    = BlueprintDiffDecoded DiffNode
+    | BlueprintDiffFallback BlueprintFallbackReason DiffNode
+    deriving stock (Eq, Show)
+
+data BlueprintFallbackReason
+    = BlueprintMatchFallback BlueprintMatchError
+    | BlueprintDataFallback BlueprintDataError
+    deriving stock (Eq, Show)
+
 data BlueprintDataError
     = BlueprintDataTypeMismatch Text
     | BlueprintConstructorMismatch
@@ -137,6 +161,47 @@ diffBlueprintData schema left right = do
     leftOpen <- decodeBlueprintData schema left
     rightOpen <- decodeBlueprintData schema right
     pure (diffOpenValue leftOpen rightOpen)
+
+diffBlueprintArgumentData ::
+    [Blueprint] ->
+    BlueprintArgumentSelector ->
+    Data ConwayEra ->
+    Data ConwayEra ->
+    BlueprintDiff
+diffBlueprintArgumentData blueprints selector left right =
+    case matchBlueprintArgument blueprints selector of
+        Left err ->
+            BlueprintDiffFallback
+                (BlueprintMatchFallback err)
+                (rawBlueprintDataDiff left right)
+        Right schema ->
+            case diffBlueprintData schema left right of
+                Left err ->
+                    BlueprintDiffFallback
+                        (BlueprintDataFallback err)
+                        (rawBlueprintDataDiff left right)
+                Right diff ->
+                    BlueprintDiffDecoded diff
+
+rawBlueprintDataDiff :: Data ConwayEra -> Data ConwayEra -> DiffNode
+rawBlueprintDataDiff left right
+    | left == right =
+        DiffNode
+            (DiffPath [])
+            (DiffSame (Just (rawBlueprintDataValue left)))
+    | otherwise =
+        DiffNode
+            (DiffPath [])
+            ( DiffChanged
+                (rawBlueprintDataValue left)
+                (rawBlueprintDataValue right)
+            )
+
+rawBlueprintDataValue :: Data ConwayEra -> Aeson.Value
+rawBlueprintDataValue datum =
+    Aeson.object
+        [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
+        ]
 
 decodeBlueprintValue ::
     BlueprintSchema -> PLC.Data -> Either BlueprintDataError OpenValue
