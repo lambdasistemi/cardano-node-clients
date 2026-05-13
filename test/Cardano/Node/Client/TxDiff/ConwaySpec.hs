@@ -47,6 +47,7 @@ import Cardano.Ledger.Api.Scripts.Data (
 import Cardano.Ledger.Api.Tx (
     addrTxWitsL,
     bodyTxL,
+    bootAddrTxWitsL,
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
@@ -97,7 +98,12 @@ import Cardano.Ledger.Hashes (
 import Cardano.Ledger.Keys (
     KeyHash (..),
     KeyRole (Guard, Witness),
-    WitVKey,
+    WitVKey (..),
+    hashKey,
+ )
+import Cardano.Ledger.Keys.Bootstrap (
+    BootstrapWitness (..),
+    ChainCode (..),
  )
 import Cardano.Ledger.Mary.Value (
     AssetName (..),
@@ -1076,6 +1082,74 @@ spec =
                                 Map.empty
                             )
 
+        it "reports an opt-in Conway bootstrap witness insertion keyed by key hash" $ do
+            tx <- loadFixture sampleHash
+            case Set.toAscList (tx ^. witsTxL . addrTxWitsL) of
+                [] ->
+                    expectationFailure "fixture has no key witnesses"
+                firstWitness : _ -> do
+                    let bootstrapWitness =
+                            bootstrapWitnessFromVKeyWitness firstWitness
+                        txA =
+                            tx
+                                & witsTxL
+                                    . bootAddrTxWitsL
+                                    .~ Set.empty
+                        txB =
+                            tx
+                                & witsTxL
+                                    . bootAddrTxWitsL
+                                    .~ Set.singleton bootstrapWitness
+                        options =
+                            defaultTxDiffOptions
+                                { txDiffIncludeWitnesses = True
+                                }
+                        witnessPath =
+                            bootstrapWitnessKeyHashKey bootstrapWitness
+                    diffConwayTxWith options txA txB
+                        `shouldBe` DiffNode
+                            rootPath
+                            ( DiffObject
+                                (Map.singleton "body" Nothing)
+                                ( Map.singleton
+                                    "witnesses"
+                                    ( DiffNode
+                                        (DiffPath ["witnesses"])
+                                        ( DiffObject
+                                            ( witnessCommonExcept
+                                                ["bootstraps"]
+                                                txA
+                                            )
+                                            ( Map.singleton
+                                                "bootstraps"
+                                                ( DiffNode
+                                                    ( DiffPath
+                                                        [ "witnesses"
+                                                        , "bootstraps"
+                                                        ]
+                                                    )
+                                                    ( DiffObject
+                                                        Map.empty
+                                                        Map.empty
+                                                        Map.empty
+                                                        ( Map.singleton
+                                                            witnessPath
+                                                            ( bootstrapWitnessJson
+                                                                bootstrapWitness
+                                                            )
+                                                        )
+                                                    )
+                                                )
+                                            )
+                                            Map.empty
+                                            Map.empty
+                                        )
+                                    )
+                                )
+                                Map.empty
+                                Map.empty
+                            )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -1154,6 +1228,11 @@ witnessCommonExcept omitted tx =
 witnessFieldValues :: ConwayTx -> [(Text, Aeson.Value)]
 witnessFieldValues tx =
     [
+        ( "bootstraps"
+        , bootstrapWitnessesJson $
+            Set.toAscList (tx ^. witsTxL . bootAddrTxWitsL)
+        )
+    ,
         ( "datums"
         , datumWitnessesJson (tx ^. witsTxL . datsTxWitsL)
         )
@@ -1287,6 +1366,35 @@ keyHashJson keyHash =
 keyHashKey :: KeyHash kr -> Text
 keyHashKey (KeyHash keyHash) =
     hexText (hashToBytes keyHash)
+
+bootstrapWitnessesJson :: [BootstrapWitness] -> Aeson.Value
+bootstrapWitnessesJson witnesses =
+    Aeson.Object $
+        KeyMap.fromList
+            [ ( Key.fromText (bootstrapWitnessKeyHashKey witness)
+              , bootstrapWitnessJson witness
+              )
+            | witness <- witnesses
+            ]
+
+bootstrapWitnessJson :: BootstrapWitness -> Aeson.Value
+bootstrapWitnessJson witness =
+    Aeson.object
+        [ "cbor"
+            .= hexText (serialize' (eraProtVerLow @ConwayEra) witness)
+        ]
+
+bootstrapWitnessKeyHashKey :: BootstrapWitness -> Text
+bootstrapWitnessKeyHashKey witness =
+    keyHashKey (hashKey (bwKey witness))
+
+bootstrapWitnessFromVKeyWitness :: WitVKey Witness -> BootstrapWitness
+bootstrapWitnessFromVKeyWitness (WitVKey key signature) =
+    BootstrapWitness
+        key
+        signature
+        (ChainCode (BS8.replicate 32 '\0'))
+        BS8.empty
 
 withdrawalsJson :: Withdrawals -> Aeson.Value
 withdrawalsJson (Withdrawals withdrawals) =

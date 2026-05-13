@@ -58,11 +58,12 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T045 Add Conway body traversal for `body.mint`.
 - [x] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
-- [ ] T017 Add opt-in witness traversal.
+- [x] T017 Add opt-in witness traversal.
 - [x] T046 Add opt-in witness traversal for witness scripts.
 - [x] T047 Add opt-in witness traversal for datum values.
 - [x] T048 Add opt-in witness traversal for redeemer data and execution units.
 - [x] T049 Add opt-in witness traversal for verification key witnesses.
+- [x] T050 Add opt-in witness traversal for bootstrap witnesses.
 - [ ] T018 Keep unknown unequal ledger values atomic at their current path.
 
 ## Phase 4: Blueprint Boundary

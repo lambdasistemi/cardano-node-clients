@@ -50,7 +50,12 @@ import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
 import Cardano.Ledger.Api.Scripts.Data (Data, Datum)
-import Cardano.Ledger.Api.Tx (addrTxWitsL, bodyTxL, witsTxL)
+import Cardano.Ledger.Api.Tx (
+    addrTxWitsL,
+    bodyTxL,
+    bootAddrTxWitsL,
+    witsTxL,
+ )
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
     feeTxBodyL,
@@ -87,7 +92,9 @@ import Cardano.Ledger.Keys (
     KeyHash (..),
     KeyRole (Guard, Witness),
     WitVKey,
+    hashKey,
  )
+import Cardano.Ledger.Keys.Bootstrap (BootstrapWitness (..))
 import Cardano.Ledger.Mary.Value (
     AssetName (..),
     MultiAsset (..),
@@ -170,6 +177,8 @@ data ConwayDiffValue
     | ConwayDatumValue (Datum ConwayEra)
     | ConwayReferenceScriptValue (StrictMaybe (Script ConwayEra))
     | ConwayWitnessesValue ConwayTx
+    | ConwayBootstrapWitnessesValue [BootstrapWitness]
+    | ConwayBootstrapWitnessValue BootstrapWitness
     | ConwayVKeyWitnessesValue [WitVKey Witness]
     | ConwayVKeyWitnessValue (WitVKey Witness)
     | ConwayDatumWitnessesValue (TxDats ConwayEra)
@@ -373,6 +382,14 @@ conwayDiffEqual
 conwayDiffEqual (ConwayWitnessesValue left) (ConwayWitnessesValue right) =
     left ^. witsTxL == right ^. witsTxL
 conwayDiffEqual
+    (ConwayBootstrapWitnessesValue left)
+    (ConwayBootstrapWitnessesValue right) =
+        left == right
+conwayDiffEqual
+    (ConwayBootstrapWitnessValue left)
+    (ConwayBootstrapWitnessValue right) =
+        left == right
+conwayDiffEqual
     (ConwayVKeyWitnessesValue left)
     (ConwayVKeyWitnessesValue right) =
         left == right
@@ -434,6 +451,10 @@ conwayDiffSummary (ConwayDatumValue datum) =
     Just (datumValue datum)
 conwayDiffSummary (ConwayReferenceScriptValue referenceScript) =
     Just (referenceScriptValue referenceScript)
+conwayDiffSummary (ConwayBootstrapWitnessesValue witnesses) =
+    Just (bootstrapWitnessesValue witnesses)
+conwayDiffSummary (ConwayBootstrapWitnessValue witness) =
+    Just (bootstrapWitnessValue witness)
 conwayDiffSummary (ConwayVKeyWitnessesValue witnesses) =
     Just (vkeyWitnessesValue witnesses)
 conwayDiffSummary (ConwayVKeyWitnessValue witness) =
@@ -591,6 +612,11 @@ conwayDiffProjection _ (ConwayWitnessesValue tx) =
     DiffObjectChildren $
         Map.fromList
             [
+                ( "bootstraps"
+                , ConwayBootstrapWitnessesValue $
+                    Set.toAscList (tx ^. witsTxL . bootAddrTxWitsL)
+                )
+            ,
                 ( "datums"
                 , ConwayDatumWitnessesValue (tx ^. witsTxL . datsTxWitsL)
                 )
@@ -608,6 +634,10 @@ conwayDiffProjection _ (ConwayWitnessesValue tx) =
                     Set.toAscList (tx ^. witsTxL . addrTxWitsL)
                 )
             ]
+conwayDiffProjection _ (ConwayBootstrapWitnessesValue witnesses) =
+    DiffObjectChildren (bootstrapWitnessChildren witnesses)
+conwayDiffProjection _ (ConwayBootstrapWitnessValue witness) =
+    DiffAtomic (bootstrapWitnessValue witness)
 conwayDiffProjection _ (ConwayVKeyWitnessesValue witnesses) =
     DiffObjectChildren (vkeyWitnessChildren witnesses)
 conwayDiffProjection _ (ConwayVKeyWitnessValue witness) =
@@ -794,6 +824,33 @@ dataValue datum =
     Aeson.object
         [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
         ]
+
+bootstrapWitnessesValue :: [BootstrapWitness] -> Aeson.Value
+bootstrapWitnessesValue witnesses =
+    objectValue
+        [ (bootstrapWitnessKeyHashKey witness, bootstrapWitnessValue witness)
+        | witness <- witnesses
+        ]
+
+bootstrapWitnessChildren ::
+    [BootstrapWitness] -> Map Text ConwayDiffValue
+bootstrapWitnessChildren witnesses =
+    Map.fromList
+        [ ( bootstrapWitnessKeyHashKey witness
+          , ConwayBootstrapWitnessValue witness
+          )
+        | witness <- witnesses
+        ]
+
+bootstrapWitnessValue :: BootstrapWitness -> Aeson.Value
+bootstrapWitnessValue witness =
+    Aeson.object
+        [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) witness)
+        ]
+
+bootstrapWitnessKeyHashKey :: BootstrapWitness -> Text
+bootstrapWitnessKeyHashKey witness =
+    keyHashKey (hashKey (bwKey witness))
 
 vkeyWitnessesValue :: [WitVKey Witness] -> Aeson.Value
 vkeyWitnessesValue witnesses =
