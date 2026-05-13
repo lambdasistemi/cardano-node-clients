@@ -12,13 +12,16 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Short qualified as SBS
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromJust)
 import Data.Sequence.Strict qualified as StrictSeq
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Lens.Micro ((&), (.~), (^.))
 import Test.Hspec
 
+import Cardano.Crypto.Hash (hashFromStringAsHex, hashToBytes)
 import Cardano.Ledger.Address (Addr, serialiseAddr)
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (
@@ -33,6 +36,7 @@ import Cardano.Ledger.Api.Scripts.Data (
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
+    inputsTxBodyL,
     outputsTxBodyL,
     vldtTxBodyL,
  )
@@ -43,7 +47,7 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
-import Cardano.Ledger.BaseTypes (StrictMaybe (..))
+import Cardano.Ledger.BaseTypes (StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (
     Annotator,
     Decoder,
@@ -55,11 +59,13 @@ import Cardano.Ledger.Binary (
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
+import Cardano.Ledger.Hashes (extractHash, unsafeMakeSafeHash)
 import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
     Plutus (..),
     PlutusBinary (..),
  )
+import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxDiff (
     DiffChange (..),
@@ -75,22 +81,10 @@ spec =
     describe "Conway transactions" $ do
         it "reports a Conway fee change at body.fee" $ do
             tx <- loadFixture sampleHash
-            let validity = tx ^. bodyTxL . vldtTxBodyL
-            let outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
             let tx' = tx & bodyTxL . feeTxBodyL .~ Coin 42
             diffConwayTx tx tx'
                 `shouldBe` bodyDiff
-                    ( Map.fromList
-                        [
-                            ( "validityInterval"
-                            , Just (validityIntervalJson validity)
-                            )
-                        ,
-                            ( "outputs"
-                            , Just (outputsJson outputs)
-                            )
-                        ]
-                    )
+                    (bodyCommonExcept ["fee"] tx)
                     ( Map.fromList
                         [
                             ( "fee"
@@ -107,7 +101,6 @@ spec =
         it "reports a Conway validity change at body.validityInterval.invalidHereafter" $ do
             tx <- loadFixture sampleHash
             let oldValidity = tx ^. bodyTxL . vldtTxBodyL
-                outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
                 newValidity =
                     oldValidity
                         { invalidHereafter =
@@ -116,17 +109,7 @@ spec =
                 tx' = tx & bodyTxL . vldtTxBodyL .~ newValidity
             diffConwayTx tx tx'
                 `shouldBe` bodyDiff
-                    ( Map.fromList
-                        [
-                            ( "fee"
-                            , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
-                            )
-                        ,
-                            ( "outputs"
-                            , Just (outputsJson outputs)
-                            )
-                        ]
-                    )
+                    (bodyCommonExcept ["validityInterval"] tx)
                     ( Map.fromList
                         [
                             ( "validityInterval"
@@ -187,19 +170,7 @@ spec =
                                         (changedOutput : otherOutputs)
                     diffConwayTx tx tx'
                         `shouldBe` bodyDiff
-                            ( Map.fromList
-                                [
-                                    ( "fee"
-                                    , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
-                                    )
-                                ,
-                                    ( "validityInterval"
-                                    , Just $
-                                        validityIntervalJson $
-                                            tx ^. bodyTxL . vldtTxBodyL
-                                    )
-                                ]
-                            )
+                            (bodyCommonExcept ["outputs"] tx)
                             ( Map.singleton
                                 "outputs"
                                 ( DiffNode
@@ -269,19 +240,7 @@ spec =
                                         )
                     diffConwayTx tx tx'
                         `shouldBe` bodyDiff
-                            ( Map.fromList
-                                [
-                                    ( "fee"
-                                    , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
-                                    )
-                                ,
-                                    ( "validityInterval"
-                                    , Just $
-                                        validityIntervalJson $
-                                            tx ^. bodyTxL . vldtTxBodyL
-                                    )
-                                ]
-                            )
+                            (bodyCommonExcept ["outputs"] tx)
                             ( Map.singleton
                                 "outputs"
                                 ( DiffNode
@@ -354,19 +313,7 @@ spec =
                                         (changedOutput : otherOutputs)
                     diffConwayTx tx tx'
                         `shouldBe` bodyDiff
-                            ( Map.fromList
-                                [
-                                    ( "fee"
-                                    , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
-                                    )
-                                ,
-                                    ( "validityInterval"
-                                    , Just $
-                                        validityIntervalJson $
-                                            tx ^. bodyTxL . vldtTxBodyL
-                                    )
-                                ]
-                            )
+                            (bodyCommonExcept ["outputs"] tx)
                             ( Map.singleton
                                 "outputs"
                                 ( DiffNode
@@ -440,19 +387,7 @@ spec =
                                         (changedOutput : otherOutputs)
                     diffConwayTx tx tx'
                         `shouldBe` bodyDiff
-                            ( Map.fromList
-                                [
-                                    ( "fee"
-                                    , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
-                                    )
-                                ,
-                                    ( "validityInterval"
-                                    , Just $
-                                        validityIntervalJson $
-                                            tx ^. bodyTxL . vldtTxBodyL
-                                    )
-                                ]
-                            )
+                            (bodyCommonExcept ["outputs"] tx)
                             ( Map.singleton
                                 "outputs"
                                 ( DiffNode
@@ -502,6 +437,45 @@ spec =
                                 )
                             )
 
+        it "reports a Conway input change at body.inputs.0" $ do
+            tx <- loadFixture sampleHash
+            let oldInput = mkTxIn 1
+                newInput = mkTxIn 2
+                txA =
+                    tx
+                        & bodyTxL
+                            . inputsTxBodyL
+                            .~ Set.singleton oldInput
+                txB =
+                    tx
+                        & bodyTxL
+                            . inputsTxBodyL
+                            .~ Set.singleton newInput
+            diffConwayTx txA txB
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["inputs"] txA)
+                    ( Map.singleton
+                        "inputs"
+                        ( DiffNode
+                            (DiffPath ["body", "inputs"])
+                            ( DiffArray
+                                []
+                                [
+                                    ( 0
+                                    , DiffNode
+                                        (DiffPath ["body", "inputs", "0"])
+                                        ( DiffChanged
+                                            (txInJson oldInput)
+                                            (txInJson newInput)
+                                        )
+                                    )
+                                ]
+                                []
+                                []
+                            )
+                        )
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -548,6 +522,66 @@ sampleHash =
 coinJson :: Coin -> Aeson.Value
 coinJson (Coin lovelace) =
     Aeson.object ["lovelace" .= lovelace]
+
+bodyCommonExcept ::
+    [Text] ->
+    ConwayTx ->
+    Map.Map Text (Maybe Aeson.Value)
+bodyCommonExcept omitted tx =
+    Map.fromList
+        [ (field, Just value)
+        | (field, value) <- bodyFieldValues tx
+        , field `notElem` omitted
+        ]
+
+bodyFieldValues :: ConwayTx -> [(Text, Aeson.Value)]
+bodyFieldValues tx =
+    [
+        ( "fee"
+        , coinJson (tx ^. bodyTxL . feeTxBodyL)
+        )
+    ,
+        ( "inputs"
+        , inputsJson $
+            Set.toAscList (tx ^. bodyTxL . inputsTxBodyL)
+        )
+    ,
+        ( "outputs"
+        , outputsJson $
+            toList (tx ^. bodyTxL . outputsTxBodyL)
+        )
+    ,
+        ( "validityInterval"
+        , validityIntervalJson (tx ^. bodyTxL . vldtTxBodyL)
+        )
+    ]
+
+inputsJson :: [TxIn] -> Aeson.Value
+inputsJson inputs =
+    Aeson.toJSON (map txInJson inputs)
+
+txInJson :: TxIn -> Aeson.Value
+txInJson (TxIn (TxId safeHash) (TxIx index)) =
+    Aeson.object
+        [ "txId" .= hexText (hashToBytes (extractHash safeHash))
+        , "index" .= index
+        ]
+
+mkTxIn :: Int -> TxIn
+mkTxIn n =
+    let hexStr =
+            replicate 60 '0'
+                ++ hexByte (n `div` 256)
+                ++ hexByte (n `mod` 256)
+        h = fromJust (hashFromStringAsHex hexStr)
+     in TxIn
+            (TxId (unsafeMakeSafeHash h))
+            (TxIx 0)
+
+hexByte :: Int -> String
+hexByte x =
+    let s = "0123456789abcdef"
+     in [s !! (x `div` 16), s !! (x `mod` 16)]
 
 outputsJson :: [TxOut ConwayEra] -> Aeson.Value
 outputsJson outputs =

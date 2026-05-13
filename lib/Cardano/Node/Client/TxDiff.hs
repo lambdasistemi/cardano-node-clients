@@ -29,17 +29,20 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.Foldable (toList)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Lens.Micro ((^.))
 
+import Cardano.Crypto.Hash (hashToBytes)
 import Cardano.Ledger.Address (Addr, serialiseAddr)
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Scripts.Data (Datum)
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
+    inputsTxBodyL,
     outputsTxBodyL,
     vldtTxBodyL,
  )
@@ -50,11 +53,13 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
-import Cardano.Ledger.BaseTypes (StrictMaybe (..))
+import Cardano.Ledger.BaseTypes (StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
+import Cardano.Ledger.Hashes (extractHash)
+import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
 
@@ -102,6 +107,8 @@ data ConwayDiffValue
     = ConwayTxValue ConwayTx
     | ConwayBodyValue ConwayTx
     | ConwayCoinValue Coin
+    | ConwayInputsValue [TxIn]
+    | ConwayTxInValue TxIn
     | ConwayValidityIntervalValue ValidityInterval
     | ConwaySlotBoundValue (StrictMaybe SlotNo)
     | ConwayOutputsValue [TxOut ConwayEra]
@@ -258,6 +265,10 @@ conwayDiffEqual (ConwayBodyValue left) (ConwayBodyValue right) =
     left ^. bodyTxL == right ^. bodyTxL
 conwayDiffEqual (ConwayCoinValue left) (ConwayCoinValue right) =
     left == right
+conwayDiffEqual (ConwayInputsValue left) (ConwayInputsValue right) =
+    left == right
+conwayDiffEqual (ConwayTxInValue left) (ConwayTxInValue right) =
+    left == right
 conwayDiffEqual (ConwayValidityIntervalValue left) (ConwayValidityIntervalValue right) =
     left == right
 conwayDiffEqual (ConwaySlotBoundValue left) (ConwaySlotBoundValue right) =
@@ -280,6 +291,10 @@ conwayDiffEqual _ _ =
 conwayDiffSummary :: ConwayDiffValue -> Maybe Aeson.Value
 conwayDiffSummary (ConwayCoinValue coin) =
     Just (coinValue coin)
+conwayDiffSummary (ConwayInputsValue inputs) =
+    Just (inputsValue inputs)
+conwayDiffSummary (ConwayTxInValue txIn) =
+    Just (txInValue txIn)
 conwayDiffSummary (ConwayValidityIntervalValue validity) =
     Just (validityIntervalValue validity)
 conwayDiffSummary (ConwaySlotBoundValue slotBound) =
@@ -310,6 +325,11 @@ conwayDiffProjection (ConwayBodyValue tx) =
                 , ConwayCoinValue (tx ^. bodyTxL . feeTxBodyL)
                 )
             ,
+                ( "inputs"
+                , ConwayInputsValue $
+                    Set.toAscList (tx ^. bodyTxL . inputsTxBodyL)
+                )
+            ,
                 ( "validityInterval"
                 , ConwayValidityIntervalValue (tx ^. bodyTxL . vldtTxBodyL)
                 )
@@ -320,6 +340,10 @@ conwayDiffProjection (ConwayBodyValue tx) =
             ]
 conwayDiffProjection (ConwayCoinValue coin) =
     DiffAtomic (coinValue coin)
+conwayDiffProjection (ConwayInputsValue inputs) =
+    DiffArrayChildren (map ConwayTxInValue inputs)
+conwayDiffProjection (ConwayTxInValue txIn) =
+    DiffAtomic (txInValue txIn)
 conwayDiffProjection (ConwayValidityIntervalValue validity) =
     DiffObjectChildren $
         Map.fromList
@@ -366,6 +390,17 @@ conwayDiffProjection (ConwayReferenceScriptValue referenceScript) =
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
     Aeson.object ["lovelace" .= lovelace]
+
+inputsValue :: [TxIn] -> Aeson.Value
+inputsValue inputs =
+    Aeson.toJSON (map txInValue inputs)
+
+txInValue :: TxIn -> Aeson.Value
+txInValue (TxIn (TxId safeHash) (TxIx index)) =
+    Aeson.object
+        [ "txId" .= hexText (hashToBytes (extractHash safeHash))
+        , "index" .= index
+        ]
 
 validityIntervalValue :: ValidityInterval -> Aeson.Value
 validityIntervalValue validity =
