@@ -2,8 +2,8 @@
 
 **Input**: `specs/044-tx-diff/spec.md` and
 `specs/044-tx-diff/plan.md`  
-**Status**: First structural diff slice is implemented. Conway body traversal
-is proceeding field by field; blueprint handling has not started.
+**Status**: Structural Conway body and opt-in witness traversal are
+implemented. Blueprint handling has started with the parser subset.
 
 ## Phase 1: RED Tests
 
@@ -64,11 +64,11 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T048 Add opt-in witness traversal for redeemer data and execution units.
 - [x] T049 Add opt-in witness traversal for verification key witnesses.
 - [x] T050 Add opt-in witness traversal for bootstrap witnesses.
-- [ ] T018 Keep unknown unequal ledger values atomic at their current path.
+- [x] T018 Keep unknown unequal ledger values atomic at their current path.
 
 ## Phase 4: Blueprint Boundary
 
-- [ ] T019 Parse the required Plutus blueprint subset.
+- [x] T019 Parse the required Plutus blueprint subset.
 - [ ] T020 Match blueprints at datum/redeemer leaves using available
   validator context.
 - [ ] T021 Convert matched Plutus data into the open application value tree.
