@@ -69,7 +69,7 @@ implemented. Blueprint handling has started with the parser subset.
 ## Phase 4: Blueprint Boundary
 
 - [x] T019 Parse the required Plutus blueprint subset.
-- [ ] T020 Match blueprints at datum/redeemer leaves using available
+- [x] T020 Match blueprints at datum/redeemer leaves using available
   validator context.
 - [ ] T021 Convert matched Plutus data into the open application value tree.
 - [ ] T022 Apply the same equality-first diff to open application values.

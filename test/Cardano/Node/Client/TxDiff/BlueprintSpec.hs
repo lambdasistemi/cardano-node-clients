@@ -9,16 +9,19 @@ import Test.Hspec
 import Cardano.Node.Client.TxDiff.Blueprint (
     Blueprint (..),
     BlueprintArgument (..),
+    BlueprintArgumentKind (..),
+    BlueprintArgumentSelector (..),
     BlueprintPreamble (..),
     BlueprintSchema (..),
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
+    matchBlueprintArgument,
     parseBlueprintJSON,
  )
 
 spec :: Spec
 spec =
-    describe "Plutus blueprints" $
+    describe "Plutus blueprints" $ do
         it "parses validators, datum and redeemer schemas, and definitions" $ do
             parseBlueprintJSON blueprintJson
                 `shouldBe` Right
@@ -86,6 +89,30 @@ spec =
                                             ]
                                     }
                         }
+
+        it "matches a validator datum schema and resolves local definitions" $
+            case parseBlueprintJSON blueprintJson of
+                Left err ->
+                    expectationFailure err
+                Right blueprint ->
+                    matchBlueprintArgument
+                        [blueprint]
+                        BlueprintArgumentSelector
+                            { selectorValidatorTitle = Just "swap"
+                            , selectorArgumentKind = BlueprintDatum
+                            }
+                        `shouldBe` Right
+                            BlueprintSchema
+                                { schemaTitle = Just "Order datum"
+                                , schemaKind =
+                                    SchemaConstructor
+                                        0
+                                        [ BlueprintSchema
+                                            { schemaTitle = Just "owner"
+                                            , schemaKind = SchemaBytes
+                                            }
+                                        ]
+                                }
 
 blueprintJson :: LBS8.ByteString
 blueprintJson =
