@@ -6,6 +6,8 @@ module Cardano.Node.Client.TxDiff.ConwaySpec (spec) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Char8 qualified as BS8
@@ -22,7 +24,13 @@ import Lens.Micro ((&), (.~), (^.))
 import Test.Hspec
 
 import Cardano.Crypto.Hash (hashFromStringAsHex, hashToBytes)
-import Cardano.Ledger.Address (Addr, serialiseAddr)
+import Cardano.Ledger.Address (
+    AccountAddress (..),
+    AccountId (..),
+    Addr,
+    Withdrawals (..),
+    serialiseAddr,
+ )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (
     fromPlutusScript,
@@ -43,6 +51,7 @@ import Cardano.Ledger.Api.Tx.Body (
     reqSignerHashesTxBodyL,
     totalCollateralTxBodyL,
     vldtTxBodyL,
+    withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
@@ -51,7 +60,7 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
-import Cardano.Ledger.BaseTypes (StrictMaybe (..), TxIx (..))
+import Cardano.Ledger.BaseTypes (Network (Testnet), StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (
     Annotator,
     Decoder,
@@ -63,6 +72,7 @@ import Cardano.Ledger.Binary (
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
+import Cardano.Ledger.Credential (Credential (KeyHashObj))
 import Cardano.Ledger.Hashes (extractHash, unsafeMakeSafeHash)
 import Cardano.Ledger.Keys (
     KeyHash (..),
@@ -642,6 +652,52 @@ spec =
                         )
                     )
 
+        it "reports a Conway withdrawal coin change keyed by reward account" $ do
+            tx <- loadFixture sampleHash
+            let rewardAccount = mkRewardAccount 1
+                oldCoin = Coin 1_000_000
+                newCoin = Coin 2_000_000
+                txA =
+                    tx
+                        & bodyTxL
+                            . withdrawalsTxBodyL
+                            .~ Withdrawals (Map.singleton rewardAccount oldCoin)
+                txB =
+                    tx
+                        & bodyTxL
+                            . withdrawalsTxBodyL
+                            .~ Withdrawals (Map.singleton rewardAccount newCoin)
+                rewardAccountPath = rewardAccountKey rewardAccount
+            diffConwayTx txA txB
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["withdrawals"] txA)
+                    ( Map.singleton
+                        "withdrawals"
+                        ( DiffNode
+                            (DiffPath ["body", "withdrawals"])
+                            ( DiffObject
+                                Map.empty
+                                ( Map.singleton
+                                    rewardAccountPath
+                                    ( DiffNode
+                                        ( DiffPath
+                                            [ "body"
+                                            , "withdrawals"
+                                            , rewardAccountPath
+                                            ]
+                                        )
+                                        ( DiffChanged
+                                            (coinJson oldCoin)
+                                            (coinJson newCoin)
+                                        )
+                                    )
+                                )
+                                Map.empty
+                                Map.empty
+                            )
+                        )
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -745,6 +801,10 @@ bodyFieldValues tx =
         ( "validityInterval"
         , validityIntervalJson (tx ^. bodyTxL . vldtTxBodyL)
         )
+    ,
+        ( "withdrawals"
+        , withdrawalsJson (tx ^. bodyTxL . withdrawalsTxBodyL)
+        )
     ]
 
 inputsJson :: [TxIn] -> Aeson.Value
@@ -774,14 +834,24 @@ hexByte x =
     let s = "0123456789abcdef"
      in [s !! (x `div` 16), s !! (x `mod` 16)]
 
-mkWitnessKeyHash :: Int -> KeyHash Guard
-mkWitnessKeyHash n =
+mkKeyHash :: Int -> KeyHash kr
+mkKeyHash n =
     let hexStr =
             replicate 52 '0'
                 ++ hexByte (n `div` 256)
                 ++ hexByte (n `mod` 256)
         h = fromJust (hashFromStringAsHex hexStr)
      in KeyHash h
+
+mkWitnessKeyHash :: Int -> KeyHash Guard
+mkWitnessKeyHash =
+    mkKeyHash
+
+mkRewardAccount :: Int -> AccountAddress
+mkRewardAccount n =
+    AccountAddress
+        Testnet
+        (AccountId (KeyHashObj (mkKeyHash n)))
 
 keyHashesJson :: [KeyHash Guard] -> Aeson.Value
 keyHashesJson keyHashes =
@@ -790,6 +860,18 @@ keyHashesJson keyHashes =
 keyHashJson :: KeyHash Guard -> Aeson.Value
 keyHashJson (KeyHash keyHash) =
     Aeson.String (hexText (hashToBytes keyHash))
+
+withdrawalsJson :: Withdrawals -> Aeson.Value
+withdrawalsJson (Withdrawals withdrawals) =
+    Aeson.Object $
+        KeyMap.fromList
+            [ (Key.fromText (rewardAccountKey rewardAccount), coinJson coin)
+            | (rewardAccount, coin) <- Map.toAscList withdrawals
+            ]
+
+rewardAccountKey :: AccountAddress -> Text
+rewardAccountKey rewardAccount =
+    hexText (serialize' (eraProtVerLow @ConwayEra) rewardAccount)
 
 outputsJson :: [TxOut ConwayEra] -> Aeson.Value
 outputsJson outputs =

@@ -36,7 +36,12 @@ import Data.Text.Encoding qualified as TextEncoding
 import Lens.Micro ((^.))
 
 import Cardano.Crypto.Hash (hashToBytes)
-import Cardano.Ledger.Address (Addr, serialiseAddr)
+import Cardano.Ledger.Address (
+    AccountAddress,
+    Addr,
+    Withdrawals (..),
+    serialiseAddr,
+ )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Scripts.Data (Datum)
 import Cardano.Ledger.Api.Tx (bodyTxL)
@@ -49,6 +54,7 @@ import Cardano.Ledger.Api.Tx.Body (
     reqSignerHashesTxBodyL,
     totalCollateralTxBodyL,
     vldtTxBodyL,
+    withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
@@ -120,6 +126,7 @@ data ConwayDiffValue
     | ConwayTxInValue TxIn
     | ConwayKeyHashesValue [KeyHash Guard]
     | ConwayKeyHashValue (KeyHash Guard)
+    | ConwayWithdrawalsValue Withdrawals
     | ConwayValidityIntervalValue ValidityInterval
     | ConwaySlotBoundValue (StrictMaybe SlotNo)
     | ConwayOutputsValue [TxOut ConwayEra]
@@ -288,6 +295,8 @@ conwayDiffEqual (ConwayKeyHashesValue left) (ConwayKeyHashesValue right) =
     left == right
 conwayDiffEqual (ConwayKeyHashValue left) (ConwayKeyHashValue right) =
     left == right
+conwayDiffEqual (ConwayWithdrawalsValue left) (ConwayWithdrawalsValue right) =
+    left == right
 conwayDiffEqual (ConwayValidityIntervalValue left) (ConwayValidityIntervalValue right) =
     left == right
 conwayDiffEqual (ConwaySlotBoundValue left) (ConwaySlotBoundValue right) =
@@ -320,6 +329,8 @@ conwayDiffSummary (ConwayKeyHashesValue keyHashes) =
     Just (keyHashesValue keyHashes)
 conwayDiffSummary (ConwayKeyHashValue keyHash) =
     Just (keyHashValue keyHash)
+conwayDiffSummary (ConwayWithdrawalsValue withdrawals) =
+    Just (withdrawalsValue withdrawals)
 conwayDiffSummary (ConwayValidityIntervalValue validity) =
     Just (validityIntervalValue validity)
 conwayDiffSummary (ConwaySlotBoundValue slotBound) =
@@ -379,6 +390,10 @@ conwayDiffProjection (ConwayBodyValue tx) =
                 , ConwayValidityIntervalValue (tx ^. bodyTxL . vldtTxBodyL)
                 )
             ,
+                ( "withdrawals"
+                , ConwayWithdrawalsValue (tx ^. bodyTxL . withdrawalsTxBodyL)
+                )
+            ,
                 ( "outputs"
                 , ConwayOutputsValue (toList (tx ^. bodyTxL . outputsTxBodyL))
                 )
@@ -395,6 +410,8 @@ conwayDiffProjection (ConwayKeyHashesValue keyHashes) =
     DiffArrayChildren (map ConwayKeyHashValue keyHashes)
 conwayDiffProjection (ConwayKeyHashValue keyHash) =
     DiffAtomic (keyHashValue keyHash)
+conwayDiffProjection (ConwayWithdrawalsValue withdrawals) =
+    DiffObjectChildren (withdrawalChildren withdrawals)
 conwayDiffProjection (ConwayValidityIntervalValue validity) =
     DiffObjectChildren $
         Map.fromList
@@ -466,6 +483,28 @@ keyHashesValue keyHashes =
 keyHashValue :: KeyHash Guard -> Aeson.Value
 keyHashValue (KeyHash keyHash) =
     Aeson.String (hexText (hashToBytes keyHash))
+
+withdrawalsValue :: Withdrawals -> Aeson.Value
+withdrawalsValue withdrawals =
+    objectValue
+        [ (rewardAccountKey rewardAccount, coinValue coin)
+        | (rewardAccount, coin) <- withdrawalEntries withdrawals
+        ]
+
+withdrawalChildren :: Withdrawals -> Map Text ConwayDiffValue
+withdrawalChildren withdrawals =
+    Map.fromList
+        [ (rewardAccountKey rewardAccount, ConwayCoinValue coin)
+        | (rewardAccount, coin) <- withdrawalEntries withdrawals
+        ]
+
+withdrawalEntries :: Withdrawals -> [(AccountAddress, Coin)]
+withdrawalEntries (Withdrawals withdrawals) =
+    Map.toAscList withdrawals
+
+rewardAccountKey :: AccountAddress -> Text
+rewardAccountKey rewardAccount =
+    hexText (serialize' (eraProtVerLow @ConwayEra) rewardAccount)
 
 validityIntervalValue :: ValidityInterval -> Aeson.Value
 validityIntervalValue validity =
