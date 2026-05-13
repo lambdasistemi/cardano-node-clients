@@ -62,6 +62,7 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T046 Add opt-in witness traversal for witness scripts.
 - [x] T047 Add opt-in witness traversal for datum values.
 - [x] T048 Add opt-in witness traversal for redeemer data and execution units.
+- [x] T049 Add opt-in witness traversal for verification key witnesses.
 - [ ] T018 Keep unknown unequal ledger values atomic at their current path.
 
 ## Phase 4: Blueprint Boundary

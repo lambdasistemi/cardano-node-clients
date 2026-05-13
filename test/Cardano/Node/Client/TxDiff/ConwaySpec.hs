@@ -45,6 +45,7 @@ import Cardano.Ledger.Api.Scripts.Data (
     hashData,
  )
 import Cardano.Ledger.Api.Tx (
+    addrTxWitsL,
     bodyTxL,
     witsTxL,
  )
@@ -71,6 +72,7 @@ import Cardano.Ledger.Api.Tx.Wits (
     datsTxWitsL,
     rdmrsTxWitsL,
     scriptTxWitsL,
+    witVKeyHash,
  )
 import Cardano.Ledger.BaseTypes (Network (Testnet), StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (
@@ -94,7 +96,8 @@ import Cardano.Ledger.Hashes (
  )
 import Cardano.Ledger.Keys (
     KeyHash (..),
-    KeyRole (Guard),
+    KeyRole (Guard, Witness),
+    WitVKey,
  )
 import Cardano.Ledger.Mary.Value (
     AssetName (..),
@@ -1008,6 +1011,71 @@ spec =
                         Map.empty
                     )
 
+        it "reports an opt-in Conway key witness deletion keyed by key hash" $ do
+            tx <- loadFixture sampleHash
+            case Set.toAscList (tx ^. witsTxL . addrTxWitsL) of
+                [] ->
+                    expectationFailure "fixture has no key witnesses"
+                firstWitness : _ -> do
+                    let txA =
+                            tx
+                                & witsTxL
+                                    . addrTxWitsL
+                                    .~ Set.singleton firstWitness
+                        txB =
+                            tx
+                                & witsTxL
+                                    . addrTxWitsL
+                                    .~ Set.empty
+                        options =
+                            defaultTxDiffOptions
+                                { txDiffIncludeWitnesses = True
+                                }
+                        witnessPath = witnessKeyHashKey firstWitness
+                    diffConwayTxWith options txA txB
+                        `shouldBe` DiffNode
+                            rootPath
+                            ( DiffObject
+                                (Map.singleton "body" Nothing)
+                                ( Map.singleton
+                                    "witnesses"
+                                    ( DiffNode
+                                        (DiffPath ["witnesses"])
+                                        ( DiffObject
+                                            ( witnessCommonExcept
+                                                ["vkeys"]
+                                                txA
+                                            )
+                                            ( Map.singleton
+                                                "vkeys"
+                                                ( DiffNode
+                                                    ( DiffPath
+                                                        [ "witnesses"
+                                                        , "vkeys"
+                                                        ]
+                                                    )
+                                                    ( DiffObject
+                                                        Map.empty
+                                                        Map.empty
+                                                        ( Map.singleton
+                                                            witnessPath
+                                                            ( vkeyWitnessJson
+                                                                firstWitness
+                                                            )
+                                                        )
+                                                        Map.empty
+                                                    )
+                                                )
+                                            )
+                                            Map.empty
+                                            Map.empty
+                                        )
+                                    )
+                                )
+                                Map.empty
+                                Map.empty
+                            )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -1096,6 +1164,11 @@ witnessFieldValues tx =
     ,
         ( "scripts"
         , scriptsJson (tx ^. witsTxL . scriptTxWitsL)
+        )
+    ,
+        ( "vkeys"
+        , vkeyWitnessesJson $
+            Set.toAscList (tx ^. witsTxL . addrTxWitsL)
         )
     ]
 
@@ -1208,8 +1281,12 @@ keyHashesJson keyHashes =
     Aeson.toJSON (map keyHashJson keyHashes)
 
 keyHashJson :: KeyHash Guard -> Aeson.Value
-keyHashJson (KeyHash keyHash) =
-    Aeson.String (hexText (hashToBytes keyHash))
+keyHashJson keyHash =
+    Aeson.String (keyHashKey keyHash)
+
+keyHashKey :: KeyHash kr -> Text
+keyHashKey (KeyHash keyHash) =
+    hexText (hashToBytes keyHash)
 
 withdrawalsJson :: Withdrawals -> Aeson.Value
 withdrawalsJson (Withdrawals withdrawals) =
@@ -1273,6 +1350,25 @@ redeemerJson (redeemerData, exUnits) =
         [ "data" .= dataJson redeemerData
         , "exUnits" .= exUnitsJson exUnits
         ]
+
+vkeyWitnessesJson :: [WitVKey Witness] -> Aeson.Value
+vkeyWitnessesJson witnesses =
+    Aeson.Object $
+        KeyMap.fromList
+            [ (Key.fromText (witnessKeyHashKey witness), vkeyWitnessJson witness)
+            | witness <- witnesses
+            ]
+
+vkeyWitnessJson :: WitVKey Witness -> Aeson.Value
+vkeyWitnessJson witness =
+    Aeson.object
+        [ "cbor"
+            .= hexText (serialize' (eraProtVerLow @ConwayEra) witness)
+        ]
+
+witnessKeyHashKey :: WitVKey Witness -> Text
+witnessKeyHashKey witness =
+    keyHashKey (witVKeyHash witness)
 
 redeemerPurposeKey :: ConwayPlutusPurpose AsIx ConwayEra -> Text
 redeemerPurposeKey (ConwaySpending (AsIx index)) =
