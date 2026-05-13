@@ -47,7 +47,6 @@ module Cardano.Node.Client.Balance (
     FeeLoopError (..),
 ) where
 
-import Data.ByteString qualified as BS
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
@@ -56,9 +55,7 @@ import Data.Set qualified as Set
 import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Ledger.Address (
-    AccountAddress (..),
-    AccountId (..),
-    Addr (..),
+    Addr,
     Withdrawals (..),
  )
 import Cardano.Ledger.Alonzo.PParams (
@@ -106,7 +103,6 @@ import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Governance (
     ProposalProcedure (..),
-    Voter (..),
     VotingProcedures (..),
  )
 import Cardano.Ledger.Conway.TxCert (
@@ -119,11 +115,6 @@ import Cardano.Ledger.Core (
     PParams,
     getTotalDepositsTxCerts,
  )
-import Cardano.Ledger.Credential (
-    Credential (..),
- )
-import Cardano.Ledger.Hashes (originalBytes)
-import Cardano.Ledger.Keys (KeyHash (..))
 import Cardano.Ledger.Mary.Value (
     MaryValue (..),
     MultiAsset (..),
@@ -131,6 +122,12 @@ import Cardano.Ledger.Mary.Value (
     mapMaybeMultiAsset,
  )
 import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Credentials (
+    accountKeyHashBytes,
+    addrPaymentKeyHashBytes,
+    keyHashBytes,
+    voterKeyHashBytes,
+ )
 import Cardano.Node.Client.Inputs (spendingIndex)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Scripts (
@@ -573,46 +570,6 @@ estimatedKeyWitnessCount body bodyInputs inputUtxos =
                 | account <- Map.keys withdrawals
                 , Just kh <- [accountKeyHashBytes account]
                 ]
-
-addrPaymentKeyHashBytes :: Addr -> Maybe BS.ByteString
-addrPaymentKeyHashBytes =
-    \case
-        Addr _ (KeyHashObj kh) _ ->
-            Just (keyHashBytes kh)
-        Addr _ (ScriptHashObj _) _ ->
-            Nothing
-        AddrBootstrap _ ->
-            Nothing
-
-accountKeyHashBytes :: AccountAddress -> Maybe BS.ByteString
-accountKeyHashBytes =
-    \case
-        AccountAddress _ (AccountId (KeyHashObj kh)) ->
-            Just (keyHashBytes kh)
-        AccountAddress _ (AccountId (ScriptHashObj _)) ->
-            Nothing
-
-voterKeyHashBytes :: Voter -> Maybe BS.ByteString
-voterKeyHashBytes =
-    \case
-        CommitteeVoter credential ->
-            credentialKeyHashBytes credential
-        DRepVoter credential ->
-            credentialKeyHashBytes credential
-        StakePoolVoter kh ->
-            Just (keyHashBytes kh)
-
-credentialKeyHashBytes :: Credential kd -> Maybe BS.ByteString
-credentialKeyHashBytes =
-    \case
-        KeyHashObj kh ->
-            Just (keyHashBytes kh)
-        ScriptHashObj _ ->
-            Nothing
-
-keyHashBytes :: KeyHash kd -> BS.ByteString
-keyHashBytes (KeyHash h) =
-    originalBytes h
 
 certRefund ::
     ConwayTxCert ConwayEra ->
