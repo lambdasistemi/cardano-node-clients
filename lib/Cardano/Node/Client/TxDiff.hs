@@ -48,12 +48,13 @@ import Cardano.Ledger.Api.Tx.Out (
     addrTxOutL,
     coinTxOutL,
     datumTxOutL,
+    referenceScriptTxOutL,
  )
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Core (eraProtVerLow)
+import Cardano.Ledger.Core (Script, eraProtVerLow)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
 
@@ -107,6 +108,7 @@ data ConwayDiffValue
     | ConwayTxOutValue (TxOut ConwayEra)
     | ConwayAddressValue Addr
     | ConwayDatumValue (Datum ConwayEra)
+    | ConwayReferenceScriptValue (StrictMaybe (Script ConwayEra))
 
 diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
 diffConwayTx left right =
@@ -268,6 +270,10 @@ conwayDiffEqual (ConwayAddressValue left) (ConwayAddressValue right) =
     left == right
 conwayDiffEqual (ConwayDatumValue left) (ConwayDatumValue right) =
     left == right
+conwayDiffEqual
+    (ConwayReferenceScriptValue left)
+    (ConwayReferenceScriptValue right) =
+        left == right
 conwayDiffEqual _ _ =
     False
 
@@ -286,6 +292,8 @@ conwayDiffSummary (ConwayAddressValue address) =
     Just (addressValue address)
 conwayDiffSummary (ConwayDatumValue datum) =
     Just (datumValue datum)
+conwayDiffSummary (ConwayReferenceScriptValue referenceScript) =
+    Just (referenceScriptValue referenceScript)
 conwayDiffSummary (ConwayTxValue _) =
     Nothing
 conwayDiffSummary (ConwayBodyValue _) =
@@ -343,11 +351,17 @@ conwayDiffProjection (ConwayTxOutValue output) =
                 ( "datum"
                 , ConwayDatumValue (output ^. datumTxOutL)
                 )
+            ,
+                ( "referenceScript"
+                , ConwayReferenceScriptValue (output ^. referenceScriptTxOutL)
+                )
             ]
 conwayDiffProjection (ConwayAddressValue address) =
     DiffAtomic (addressValue address)
 conwayDiffProjection (ConwayDatumValue datum) =
     DiffAtomic (datumValue datum)
+conwayDiffProjection (ConwayReferenceScriptValue referenceScript) =
+    DiffAtomic (referenceScriptValue referenceScript)
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
@@ -372,6 +386,8 @@ txOutValue output =
         [ "address" .= addressValue (output ^. addrTxOutL)
         , "coin" .= coinValue (output ^. coinTxOutL)
         , "datum" .= datumValue (output ^. datumTxOutL)
+        , "referenceScript"
+            .= referenceScriptValue (output ^. referenceScriptTxOutL)
         ]
 
 addressValue :: Addr -> Aeson.Value
@@ -382,6 +398,14 @@ datumValue :: Datum ConwayEra -> Aeson.Value
 datumValue datum =
     Aeson.object
         [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
+        ]
+
+referenceScriptValue :: StrictMaybe (Script ConwayEra) -> Aeson.Value
+referenceScriptValue SNothing =
+    Aeson.Null
+referenceScriptValue (SJust script) =
+    Aeson.object
+        [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) script)
         ]
 
 hexText :: ByteString -> Text

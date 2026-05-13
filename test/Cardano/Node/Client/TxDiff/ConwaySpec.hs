@@ -8,6 +8,8 @@ import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Char8 qualified as BS8
+import Data.ByteString.Short qualified as SBS
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Sequence.Strict qualified as StrictSeq
@@ -19,6 +21,10 @@ import Test.Hspec
 
 import Cardano.Ledger.Address (Addr, serialiseAddr)
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Alonzo.Scripts (
+    fromPlutusScript,
+    mkPlutusScript,
+ )
 import Cardano.Ledger.Api.Scripts.Data (
     Data (..),
     Datum (..),
@@ -35,6 +41,7 @@ import Cardano.Ledger.Api.Tx.Out (
     addrTxOutL,
     coinTxOutL,
     datumTxOutL,
+    referenceScriptTxOutL,
  )
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Binary (
@@ -47,7 +54,12 @@ import Cardano.Ledger.Binary (
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Core (eraProtVerLow)
+import Cardano.Ledger.Core (Script, eraProtVerLow)
+import Cardano.Ledger.Plutus.Language (
+    Language (PlutusV3),
+    Plutus (..),
+    PlutusBinary (..),
+ )
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxDiff (
     DiffChange (..),
@@ -202,22 +214,9 @@ spec =
                                                     ["body", "outputs", "0"]
                                                 )
                                                 ( DiffObject
-                                                    ( Map.fromList
-                                                        [
-                                                            ( "address"
-                                                            , Just $
-                                                                addressJson $
-                                                                    firstOutput
-                                                                        ^. addrTxOutL
-                                                            )
-                                                        ,
-                                                            ( "datum"
-                                                            , Just $
-                                                                datumJson $
-                                                                    firstOutput
-                                                                        ^. datumTxOutL
-                                                            )
-                                                        ]
+                                                    ( outputCommonExcept
+                                                        ["coin"]
+                                                        firstOutput
                                                     )
                                                     ( Map.singleton
                                                         "coin"
@@ -298,22 +297,9 @@ spec =
                                                     ["body", "outputs", "0"]
                                                 )
                                                 ( DiffObject
-                                                    ( Map.fromList
-                                                        [
-                                                            ( "coin"
-                                                            , Just $
-                                                                coinJson $
-                                                                    firstOutput
-                                                                        ^. coinTxOutL
-                                                            )
-                                                        ,
-                                                            ( "datum"
-                                                            , Just $
-                                                                datumJson $
-                                                                    firstOutput
-                                                                        ^. datumTxOutL
-                                                            )
-                                                        ]
+                                                    ( outputCommonExcept
+                                                        ["address"]
+                                                        firstOutput
                                                     )
                                                     ( Map.singleton
                                                         "address"
@@ -395,22 +381,9 @@ spec =
                                                     ["body", "outputs", "0"]
                                                 )
                                                 ( DiffObject
-                                                    ( Map.fromList
-                                                        [
-                                                            ( "address"
-                                                            , Just $
-                                                                addressJson $
-                                                                    firstOutput
-                                                                        ^. addrTxOutL
-                                                            )
-                                                        ,
-                                                            ( "coin"
-                                                            , Just $
-                                                                coinJson $
-                                                                    firstOutput
-                                                                        ^. coinTxOutL
-                                                            )
-                                                        ]
+                                                    ( outputCommonExcept
+                                                        ["datum"]
+                                                        firstOutput
                                                     )
                                                     ( Map.singleton
                                                         "datum"
@@ -428,6 +401,92 @@ spec =
                                                                 )
                                                                 ( datumJson
                                                                     newDatum
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+                                                    Map.empty
+                                                    Map.empty
+                                                )
+                                            )
+                                        ]
+                                        []
+                                        []
+                                    )
+                                )
+                            )
+
+        it "reports a Conway output reference script change at body.outputs.0.referenceScript" $ do
+            tx <- loadFixture sampleHash
+            let outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
+            case outputs of
+                [] ->
+                    expectationFailure "fixture has no outputs"
+                firstOutput : otherOutputs -> do
+                    let oldReferenceScript =
+                            firstOutput ^. referenceScriptTxOutL
+                        newReferenceScript =
+                            SJust alwaysTrueScript
+                    oldReferenceScript `shouldNotBe` newReferenceScript
+                    let changedOutput =
+                            firstOutput
+                                & referenceScriptTxOutL
+                                    .~ newReferenceScript
+                        tx' =
+                            tx
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ StrictSeq.fromList
+                                        (changedOutput : otherOutputs)
+                    diffConwayTx tx tx'
+                        `shouldBe` bodyDiff
+                            ( Map.fromList
+                                [
+                                    ( "fee"
+                                    , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
+                                    )
+                                ,
+                                    ( "validityInterval"
+                                    , Just $
+                                        validityIntervalJson $
+                                            tx ^. bodyTxL . vldtTxBodyL
+                                    )
+                                ]
+                            )
+                            ( Map.singleton
+                                "outputs"
+                                ( DiffNode
+                                    (DiffPath ["body", "outputs"])
+                                    ( DiffArray
+                                        ( indexedOutputSummaries otherOutputs
+                                        )
+                                        [
+                                            ( 0
+                                            , DiffNode
+                                                ( DiffPath
+                                                    ["body", "outputs", "0"]
+                                                )
+                                                ( DiffObject
+                                                    ( outputCommonExcept
+                                                        ["referenceScript"]
+                                                        firstOutput
+                                                    )
+                                                    ( Map.singleton
+                                                        "referenceScript"
+                                                        ( DiffNode
+                                                            ( DiffPath
+                                                                [ "body"
+                                                                , "outputs"
+                                                                , "0"
+                                                                , "referenceScript"
+                                                                ]
+                                                            )
+                                                            ( DiffChanged
+                                                                ( referenceScriptJson
+                                                                    oldReferenceScript
+                                                                )
+                                                                ( referenceScriptJson
+                                                                    newReferenceScript
                                                                 )
                                                             )
                                                         )
@@ -500,7 +559,40 @@ outputJson output =
         [ "address" .= addressJson (output ^. addrTxOutL)
         , "coin" .= coinJson (output ^. coinTxOutL)
         , "datum" .= datumJson (output ^. datumTxOutL)
+        , "referenceScript"
+            .= referenceScriptJson (output ^. referenceScriptTxOutL)
         ]
+
+outputCommonExcept ::
+    [Text] ->
+    TxOut ConwayEra ->
+    Map.Map Text (Maybe Aeson.Value)
+outputCommonExcept omitted output =
+    Map.fromList
+        [ (field, Just value)
+        | (field, value) <- outputFieldValues output
+        , field `notElem` omitted
+        ]
+
+outputFieldValues :: TxOut ConwayEra -> [(Text, Aeson.Value)]
+outputFieldValues output =
+    [
+        ( "address"
+        , addressJson (output ^. addrTxOutL)
+        )
+    ,
+        ( "coin"
+        , coinJson (output ^. coinTxOutL)
+        )
+    ,
+        ( "datum"
+        , datumJson (output ^. datumTxOutL)
+        )
+    ,
+        ( "referenceScript"
+        , referenceScriptJson (output ^. referenceScriptTxOutL)
+        )
+    ]
 
 addressJson :: Addr -> Aeson.Value
 addressJson address =
@@ -521,6 +613,38 @@ inlineIntegerDatum :: Integer -> Datum ConwayEra
 inlineIntegerDatum value =
     Datum $
         dataToBinaryData (Data (PLC.I value) :: Data ConwayEra)
+
+referenceScriptJson :: StrictMaybe (Script ConwayEra) -> Aeson.Value
+referenceScriptJson SNothing =
+    Aeson.Null
+referenceScriptJson (SJust script) =
+    Aeson.object
+        [ "cbor"
+            .= hexText (serialize' (eraProtVerLow @ConwayEra) script)
+        ]
+
+alwaysTrueHex :: BS8.ByteString
+alwaysTrueHex =
+    "58d501010029800aba2aba1aab9eaab9dab9a48888966002646465\
+    \300130053754003300700398038012444b30013370e9000001c4c\
+    \9289bae300a3009375400915980099b874800800e2646644944c0\
+    \2c004c02cc030004c024dd5002456600266e1d200400389925130\
+    \0a3009375400915980099b874801800e2646644944dd698058009\
+    \805980600098049baa0048acc004cdc3a40100071324a26014601\
+    \26ea80122646644944dd698058009805980600098049baa004401\
+    \c8039007200e401c3006300700130060013003375400d149a26ca\
+    \c8009"
+
+alwaysTrueScript :: Script ConwayEra
+alwaysTrueScript =
+    let bytes =
+            either error id $
+                Base16.decode (BS8.filter (/= '\n') alwaysTrueHex)
+        plutus = Plutus @PlutusV3 (PlutusBinary (SBS.toShort bytes))
+     in maybe
+            (error "alwaysTrueScript: mkPlutusScript")
+            fromPlutusScript
+            (mkPlutusScript plutus)
 
 validityIntervalJson :: ValidityInterval -> Aeson.Value
 validityIntervalJson validity =
