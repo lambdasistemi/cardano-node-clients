@@ -266,6 +266,7 @@ import Cardano.Node.Client.Balance (
     evalBudgetExUnits,
     refScriptsSize,
  )
+import Cardano.Node.Client.Inputs (spendingIndex)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo)
 import Lens.Micro ((&), (.~), (^.))
@@ -1838,19 +1839,6 @@ bumpFee chIdx tx targetFee =
 -- ----------------------------------------------------
 -- Internal helpers
 -- ----------------------------------------------------
-
-{- | Compute the spending index of a 'TxIn' in the
-sorted input set.
--}
-spendingIndex :: TxIn -> Set TxIn -> Word32
-spendingIndex needle inputs =
-    go 0 (Set.toAscList inputs)
-  where
-    go _ [] =
-        error "spendingIndex: TxIn not in set"
-    go n (x : xs)
-        | x == needle = n
-        | otherwise = go (n + 1) xs
 
 withdrawalIndex ::
     AccountAddress ->
