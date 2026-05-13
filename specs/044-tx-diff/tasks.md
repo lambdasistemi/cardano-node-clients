@@ -50,6 +50,7 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T038 Add Conway output traversal for
   `body.outputs[*].referenceScript`.
 - [x] T039 Add Conway body traversal for `body.inputs`.
+- [x] T040 Add Conway body traversal for `body.referenceInputs`.
 - [ ] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.

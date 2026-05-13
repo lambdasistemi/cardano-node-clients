@@ -38,6 +38,7 @@ import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     inputsTxBodyL,
     outputsTxBodyL,
+    referenceInputsTxBodyL,
     vldtTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
@@ -476,6 +477,50 @@ spec =
                         )
                     )
 
+        it "reports a Conway reference input change at body.referenceInputs.0" $ do
+            tx <- loadFixture sampleHash
+            let oldInput = mkTxIn 1
+                newInput = mkTxIn 2
+                txA =
+                    tx
+                        & bodyTxL
+                            . referenceInputsTxBodyL
+                            .~ Set.singleton oldInput
+                txB =
+                    tx
+                        & bodyTxL
+                            . referenceInputsTxBodyL
+                            .~ Set.singleton newInput
+            diffConwayTx txA txB
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["referenceInputs"] txA)
+                    ( Map.singleton
+                        "referenceInputs"
+                        ( DiffNode
+                            (DiffPath ["body", "referenceInputs"])
+                            ( DiffArray
+                                []
+                                [
+                                    ( 0
+                                    , DiffNode
+                                        ( DiffPath
+                                            [ "body"
+                                            , "referenceInputs"
+                                            , "0"
+                                            ]
+                                        )
+                                        ( DiffChanged
+                                            (txInJson oldInput)
+                                            (txInJson newInput)
+                                        )
+                                    )
+                                ]
+                                []
+                                []
+                            )
+                        )
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -549,6 +594,11 @@ bodyFieldValues tx =
         ( "outputs"
         , outputsJson $
             toList (tx ^. bodyTxL . outputsTxBodyL)
+        )
+    ,
+        ( "referenceInputs"
+        , inputsJson $
+            Set.toAscList (tx ^. bodyTxL . referenceInputsTxBodyL)
         )
     ,
         ( "validityInterval"

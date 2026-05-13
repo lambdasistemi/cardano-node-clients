@@ -44,6 +44,7 @@ import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     inputsTxBodyL,
     outputsTxBodyL,
+    referenceInputsTxBodyL,
     vldtTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
@@ -328,6 +329,11 @@ conwayDiffProjection (ConwayBodyValue tx) =
                 ( "inputs"
                 , ConwayInputsValue $
                     Set.toAscList (tx ^. bodyTxL . inputsTxBodyL)
+                )
+            ,
+                ( "referenceInputs"
+                , ConwayInputsValue $
+                    Set.toAscList (tx ^. bodyTxL . referenceInputsTxBodyL)
                 )
             ,
                 ( "validityInterval"
