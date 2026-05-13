@@ -53,7 +53,6 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
-import Data.Word (Word32)
 import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Ledger.Address (
@@ -143,6 +142,7 @@ import Cardano.Ledger.Mary.Value (
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language)
 import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Inputs (spendingIndex)
 import Cardano.Node.Client.Ledger (ConwayTx)
 
 {- | Result of 'balanceTx'. Carries the balanced
@@ -811,30 +811,6 @@ computeScriptIntegrity lang pp rdmrs =
                 SJust $
                     hashScriptIntegrity $
                         ScriptIntegrity rdmrs emptyDats langViews
-
-{- | Compute the spending index of a 'TxIn' within
-the sorted input set.
-
-Plutus spending redeemers reference inputs by their
-position in the sorted set of all transaction
-inputs. This function finds that position.
-
-@
-let allInputs = Set.fromList [stateIn, reqIn, feeIn]
-    stateIx = spendingIndex stateIn allInputs
-    -- redeemer: ConwaySpending (AsIx stateIx)
-@
--}
-spendingIndex :: TxIn -> Set.Set TxIn -> Word32
-spendingIndex needle inputs =
-    let sorted = Set.toAscList inputs
-     in go 0 sorted
-  where
-    go _ [] =
-        error "spendingIndex: TxIn not in set"
-    go n (x : xs)
-        | x == needle = n
-        | otherwise = go (n + 1) xs
 
 {- | Zero execution units, used as placeholder when
 building a transaction before script evaluation.
