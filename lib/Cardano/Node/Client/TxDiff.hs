@@ -21,6 +21,7 @@ module Cardano.Node.Client.TxDiff (
     diffConwayTxWith,
     diffOpenValue,
     diffWith,
+    renderDiffNodeHuman,
 ) where
 
 import Data.Aeson ((.=))
@@ -29,6 +30,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Short qualified as SBS
 import Data.Foldable (toList)
 import Data.Map.Strict (Map)
@@ -313,6 +315,81 @@ objectValue fields =
             [ (Key.fromText key, value)
             | (key, value) <- fields
             ]
+
+renderDiffNodeHuman :: DiffNode -> Text
+renderDiffNodeHuman =
+    Text.unlines . renderDiffNodeLines
+
+renderDiffNodeLines :: DiffNode -> [Text]
+renderDiffNodeLines (DiffNode path change) =
+    case change of
+        DiffSame value ->
+            [renderSameLine path value]
+        DiffChanged left right ->
+            [ "~ " <> renderPath path
+            , "  A: " <> renderJsonValue left
+            , "  B: " <> renderJsonValue right
+            ]
+        DiffObject common changed onlyA onlyB ->
+            concat
+                [ renderObjectCommon path common
+                , concatMap renderDiffNodeLines (Map.elems changed)
+                , renderObjectOnly "-" path onlyA
+                , renderObjectOnly "+" path onlyB
+                ]
+        DiffArray common changed onlyA onlyB ->
+            concat
+                [ renderArrayCommon path common
+                , concatMap (renderDiffNodeLines . snd) changed
+                , renderArrayOnly "-" path onlyA
+                , renderArrayOnly "+" path onlyB
+                ]
+
+renderObjectCommon ::
+    DiffPath -> Map Text (Maybe Aeson.Value) -> [Text]
+renderObjectCommon path common =
+    [ renderSameLine (path </> key) value
+    | (key, value) <- Map.toAscList common
+    ]
+
+renderObjectOnly :: Text -> DiffPath -> Map Text Aeson.Value -> [Text]
+renderObjectOnly prefix path values =
+    [ prefix <> " " <> renderPath (path </> key) <> ": " <> renderJsonValue value
+    | (key, value) <- Map.toAscList values
+    ]
+
+renderArrayCommon ::
+    DiffPath -> [(Int, Maybe Aeson.Value)] -> [Text]
+renderArrayCommon path common =
+    [ renderSameLine (path </> Text.pack (show index)) value
+    | (index, value) <- common
+    ]
+
+renderArrayOnly :: Text -> DiffPath -> [(Int, Aeson.Value)] -> [Text]
+renderArrayOnly prefix path values =
+    [ prefix
+        <> " "
+        <> renderPath (path </> Text.pack (show index))
+        <> ": "
+        <> renderJsonValue value
+    | (index, value) <- values
+    ]
+
+renderSameLine :: DiffPath -> Maybe Aeson.Value -> Text
+renderSameLine path Nothing =
+    "= " <> renderPath path
+renderSameLine path (Just value) =
+    "= " <> renderPath path <> ": " <> renderJsonValue value
+
+renderPath :: DiffPath -> Text
+renderPath (DiffPath []) =
+    "<root>"
+renderPath (DiffPath segments) =
+    Text.intercalate "." segments
+
+renderJsonValue :: Aeson.Value -> Text
+renderJsonValue =
+    TextEncoding.decodeUtf8 . LBS.toStrict . Aeson.encode
 
 (</>) :: DiffPath -> Text -> DiffPath
 DiffPath segments </> segment =

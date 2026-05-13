@@ -34,6 +34,7 @@ import Cardano.Node.Client.TxDiff (
     OpenValue (..),
     diffOpenValue,
     diffWith,
+    renderDiffNodeHuman,
  )
 
 spec :: Spec
@@ -180,6 +181,29 @@ spec =
                         []
                         [(3, Aeson.String "inserted")]
                     )
+
+        it "renders collected diff tree as human-readable path lines" $ do
+            let left =
+                    OpenObject
+                        [ ("same", OpenInteger 1)
+                        , ("changed", OpenText "left")
+                        , ("onlyA", OpenBytes "aa")
+                        ]
+                right =
+                    OpenObject
+                        [ ("same", OpenInteger 1)
+                        , ("changed", OpenText "right")
+                        , ("onlyB", OpenBytes "bb")
+                        ]
+            renderDiffNodeHuman (diffOpenValue left right)
+                `shouldBe` Text.unlines
+                    [ "= same: 1"
+                    , "~ changed"
+                    , "  A: \"left\""
+                    , "  B: \"right\""
+                    , "- onlyA: {\"bytes\":\"aa\"}"
+                    , "+ onlyB: {\"bytes\":\"bb\"}"
+                    ]
 
         it "reports any equal generated value as same at the root" $
             property $
