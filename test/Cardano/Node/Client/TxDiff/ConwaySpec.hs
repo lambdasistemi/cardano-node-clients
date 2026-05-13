@@ -41,7 +41,10 @@ import Cardano.Ledger.Api.Scripts.Data (
     Datum (..),
     dataToBinaryData,
  )
-import Cardano.Ledger.Api.Tx (bodyTxL)
+import Cardano.Ledger.Api.Tx (
+    bodyTxL,
+    witsTxL,
+ )
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
     feeTxBodyL,
@@ -61,6 +64,7 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
+import Cardano.Ledger.Api.Tx.Wits (scriptTxWitsL)
 import Cardano.Ledger.BaseTypes (Network (Testnet), StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (
     Annotator,
@@ -72,7 +76,7 @@ import Cardano.Ledger.Binary (
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Core (Script, eraProtVerLow)
+import Cardano.Ledger.Core (Script, eraProtVerLow, hashScript)
 import Cardano.Ledger.Credential (Credential (KeyHashObj))
 import Cardano.Ledger.Hashes (
     ScriptHash (..),
@@ -99,7 +103,10 @@ import Cardano.Node.Client.TxDiff (
     DiffChange (..),
     DiffNode (..),
     DiffPath (..),
+    TxDiffOptions (..),
+    defaultTxDiffOptions,
     diffConwayTx,
+    diffConwayTxWith,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import PlutusCore.Data qualified as PLC
@@ -780,6 +787,63 @@ spec =
                         )
                     )
 
+        it "reports an opt-in Conway witness script insertion keyed by script hash" $ do
+            tx <- loadFixture sampleHash
+            let scriptHash = hashScript alwaysTrueScript
+            let txA =
+                    tx
+                        & witsTxL
+                            . scriptTxWitsL
+                            .~ Map.empty
+                txB =
+                    tx
+                        & witsTxL
+                            . scriptTxWitsL
+                            .~ Map.singleton scriptHash alwaysTrueScript
+                options =
+                    defaultTxDiffOptions
+                        { txDiffIncludeWitnesses = True
+                        }
+                scriptPath = scriptHashKey scriptHash
+            diffConwayTxWith options txA txB
+                `shouldBe` DiffNode
+                    rootPath
+                    ( DiffObject
+                        (Map.singleton "body" Nothing)
+                        ( Map.singleton
+                            "witnesses"
+                            ( DiffNode
+                                (DiffPath ["witnesses"])
+                                ( DiffObject
+                                    Map.empty
+                                    ( Map.singleton
+                                        "scripts"
+                                        ( DiffNode
+                                            ( DiffPath
+                                                ["witnesses", "scripts"]
+                                            )
+                                            ( DiffObject
+                                                Map.empty
+                                                Map.empty
+                                                Map.empty
+                                                ( Map.singleton
+                                                    scriptPath
+                                                    ( scriptJson
+                                                        alwaysTrueScript
+                                                    )
+                                                )
+                                            )
+                                        )
+                                    )
+                                    Map.empty
+                                    Map.empty
+                                )
+                            )
+                        )
+                        Map.empty
+                        Map.empty
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -985,8 +1049,12 @@ assetQuantitiesJson assets =
             ]
 
 policyIdKey :: PolicyID -> Text
-policyIdKey (PolicyID (ScriptHash policyHash)) =
-    hexText (hashToBytes policyHash)
+policyIdKey (PolicyID scriptHash) =
+    scriptHashKey scriptHash
+
+scriptHashKey :: ScriptHash -> Text
+scriptHashKey (ScriptHash scriptHash) =
+    hexText (hashToBytes scriptHash)
 
 assetNameKey :: AssetName -> Text
 assetNameKey (AssetName bytes) =
@@ -1061,6 +1129,13 @@ referenceScriptJson :: StrictMaybe (Script ConwayEra) -> Aeson.Value
 referenceScriptJson SNothing =
     Aeson.Null
 referenceScriptJson (SJust script) =
+    Aeson.object
+        [ "cbor"
+            .= hexText (serialize' (eraProtVerLow @ConwayEra) script)
+        ]
+
+scriptJson :: Script ConwayEra -> Aeson.Value
+scriptJson script =
     Aeson.object
         [ "cbor"
             .= hexText (serialize' (eraProtVerLow @ConwayEra) script)

@@ -15,7 +15,10 @@ module Cardano.Node.Client.TxDiff (
     DiffPath (..),
     DiffProjection (..),
     OpenValue (..),
+    TxDiffOptions (..),
+    defaultTxDiffOptions,
     diffConwayTx,
+    diffConwayTxWith,
     diffOpenValue,
     diffWith,
 ) where
@@ -45,7 +48,7 @@ import Cardano.Ledger.Address (
  )
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Api.Scripts.Data (Datum)
-import Cardano.Ledger.Api.Tx (bodyTxL)
+import Cardano.Ledger.Api.Tx (bodyTxL, witsTxL)
 import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
     feeTxBodyL,
@@ -65,6 +68,7 @@ import Cardano.Ledger.Api.Tx.Out (
     datumTxOutL,
     referenceScriptTxOutL,
  )
+import Cardano.Ledger.Api.Tx.Wits (scriptTxWitsL)
 import Cardano.Ledger.BaseTypes (StrictMaybe (..), TxIx (..))
 import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Coin (Coin (..))
@@ -124,6 +128,17 @@ data OpenValue
     | OpenBytes Text
     deriving stock (Eq, Show)
 
+newtype TxDiffOptions = TxDiffOptions
+    { txDiffIncludeWitnesses :: Bool
+    }
+    deriving stock (Eq, Show)
+
+defaultTxDiffOptions :: TxDiffOptions
+defaultTxDiffOptions =
+    TxDiffOptions
+        { txDiffIncludeWitnesses = False
+        }
+
 data ConwayDiffValue
     = ConwayTxValue ConwayTx
     | ConwayBodyValue ConwayTx
@@ -144,10 +159,17 @@ data ConwayDiffValue
     | ConwayAddressValue Addr
     | ConwayDatumValue (Datum ConwayEra)
     | ConwayReferenceScriptValue (StrictMaybe (Script ConwayEra))
+    | ConwayWitnessesValue ConwayTx
+    | ConwayScriptsValue (Map ScriptHash (Script ConwayEra))
+    | ConwayScriptValue (Script ConwayEra)
 
 diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
-diffConwayTx left right =
-    diffWith conwayDiffPlan (ConwayTxValue left) (ConwayTxValue right)
+diffConwayTx =
+    diffConwayTxWith defaultTxDiffOptions
+
+diffConwayTxWith :: TxDiffOptions -> ConwayTx -> ConwayTx -> DiffNode
+diffConwayTxWith options left right =
+    diffWith (conwayDiffPlan options) (ConwayTxValue left) (ConwayTxValue right)
 
 diffOpenValue :: OpenValue -> OpenValue -> DiffNode
 diffOpenValue =
@@ -278,12 +300,12 @@ openValuePlan =
         , diffProject = openValueProjection
         }
 
-conwayDiffPlan :: DiffPlan ConwayDiffValue
-conwayDiffPlan =
+conwayDiffPlan :: TxDiffOptions -> DiffPlan ConwayDiffValue
+conwayDiffPlan options =
     DiffPlan
         { diffEqual = conwayDiffEqual
         , diffSummary = conwayDiffSummary
-        , diffProject = conwayDiffProjection
+        , diffProject = conwayDiffProjection options
         }
 
 conwayDiffEqual :: ConwayDiffValue -> ConwayDiffValue -> Bool
@@ -331,6 +353,12 @@ conwayDiffEqual
     (ConwayReferenceScriptValue left)
     (ConwayReferenceScriptValue right) =
         left == right
+conwayDiffEqual (ConwayWitnessesValue left) (ConwayWitnessesValue right) =
+    left ^. witsTxL == right ^. witsTxL
+conwayDiffEqual (ConwayScriptsValue left) (ConwayScriptsValue right) =
+    left == right
+conwayDiffEqual (ConwayScriptValue left) (ConwayScriptValue right) =
+    left == right
 conwayDiffEqual _ _ =
     False
 
@@ -369,15 +397,35 @@ conwayDiffSummary (ConwayDatumValue datum) =
     Just (datumValue datum)
 conwayDiffSummary (ConwayReferenceScriptValue referenceScript) =
     Just (referenceScriptValue referenceScript)
+conwayDiffSummary (ConwayScriptsValue scripts) =
+    Just (scriptsValue scripts)
+conwayDiffSummary (ConwayScriptValue script) =
+    Just (scriptValue script)
 conwayDiffSummary (ConwayTxValue _) =
     Nothing
 conwayDiffSummary (ConwayBodyValue _) =
     Nothing
+conwayDiffSummary (ConwayWitnessesValue _) =
+    Nothing
 
-conwayDiffProjection :: ConwayDiffValue -> DiffProjection ConwayDiffValue
-conwayDiffProjection (ConwayTxValue tx) =
-    DiffObjectChildren (Map.singleton "body" (ConwayBodyValue tx))
-conwayDiffProjection (ConwayBodyValue tx) =
+conwayDiffProjection ::
+    TxDiffOptions -> ConwayDiffValue -> DiffProjection ConwayDiffValue
+conwayDiffProjection options (ConwayTxValue tx) =
+    DiffObjectChildren $
+        if txDiffIncludeWitnesses options
+            then
+                Map.fromList
+                    [
+                        ( "body"
+                        , ConwayBodyValue tx
+                        )
+                    ,
+                        ( "witnesses"
+                        , ConwayWitnessesValue tx
+                        )
+                    ]
+            else Map.singleton "body" (ConwayBodyValue tx)
+conwayDiffProjection _ (ConwayBodyValue tx) =
     DiffObjectChildren $
         Map.fromList
             [
@@ -426,27 +474,27 @@ conwayDiffProjection (ConwayBodyValue tx) =
                 , ConwayOutputsValue (toList (tx ^. bodyTxL . outputsTxBodyL))
                 )
             ]
-conwayDiffProjection (ConwayCoinValue coin) =
+conwayDiffProjection _ (ConwayCoinValue coin) =
     DiffAtomic (coinValue coin)
-conwayDiffProjection (ConwayStrictMaybeCoinValue coin) =
+conwayDiffProjection _ (ConwayStrictMaybeCoinValue coin) =
     DiffAtomic (strictMaybeCoinValue coin)
-conwayDiffProjection (ConwayInputsValue inputs) =
+conwayDiffProjection _ (ConwayInputsValue inputs) =
     DiffArrayChildren (map ConwayTxInValue inputs)
-conwayDiffProjection (ConwayTxInValue txIn) =
+conwayDiffProjection _ (ConwayTxInValue txIn) =
     DiffAtomic (txInValue txIn)
-conwayDiffProjection (ConwayKeyHashesValue keyHashes) =
+conwayDiffProjection _ (ConwayKeyHashesValue keyHashes) =
     DiffArrayChildren (map ConwayKeyHashValue keyHashes)
-conwayDiffProjection (ConwayKeyHashValue keyHash) =
+conwayDiffProjection _ (ConwayKeyHashValue keyHash) =
     DiffAtomic (keyHashValue keyHash)
-conwayDiffProjection (ConwayMintValue mint) =
+conwayDiffProjection _ (ConwayMintValue mint) =
     DiffObjectChildren (mintChildren mint)
-conwayDiffProjection (ConwayAssetQuantitiesValue assets) =
+conwayDiffProjection _ (ConwayAssetQuantitiesValue assets) =
     DiffObjectChildren (assetQuantityChildren assets)
-conwayDiffProjection (ConwayIntegerValue quantity) =
+conwayDiffProjection _ (ConwayIntegerValue quantity) =
     DiffAtomic (Aeson.toJSON quantity)
-conwayDiffProjection (ConwayWithdrawalsValue withdrawals) =
+conwayDiffProjection _ (ConwayWithdrawalsValue withdrawals) =
     DiffObjectChildren (withdrawalChildren withdrawals)
-conwayDiffProjection (ConwayValidityIntervalValue validity) =
+conwayDiffProjection _ (ConwayValidityIntervalValue validity) =
     DiffObjectChildren $
         Map.fromList
             [
@@ -458,11 +506,11 @@ conwayDiffProjection (ConwayValidityIntervalValue validity) =
                 , ConwaySlotBoundValue (invalidHereafter validity)
                 )
             ]
-conwayDiffProjection (ConwaySlotBoundValue slotBound) =
+conwayDiffProjection _ (ConwaySlotBoundValue slotBound) =
     DiffAtomic (slotBoundValue slotBound)
-conwayDiffProjection (ConwayOutputsValue outputs) =
+conwayDiffProjection _ (ConwayOutputsValue outputs) =
     DiffArrayChildren (map ConwayTxOutValue outputs)
-conwayDiffProjection (ConwayTxOutValue output) =
+conwayDiffProjection _ (ConwayTxOutValue output) =
     DiffObjectChildren $
         Map.fromList
             [
@@ -482,12 +530,21 @@ conwayDiffProjection (ConwayTxOutValue output) =
                 , ConwayReferenceScriptValue (output ^. referenceScriptTxOutL)
                 )
             ]
-conwayDiffProjection (ConwayAddressValue address) =
+conwayDiffProjection _ (ConwayAddressValue address) =
     DiffAtomic (addressValue address)
-conwayDiffProjection (ConwayDatumValue datum) =
+conwayDiffProjection _ (ConwayDatumValue datum) =
     DiffAtomic (datumValue datum)
-conwayDiffProjection (ConwayReferenceScriptValue referenceScript) =
+conwayDiffProjection _ (ConwayReferenceScriptValue referenceScript) =
     DiffAtomic (referenceScriptValue referenceScript)
+conwayDiffProjection _ (ConwayWitnessesValue tx) =
+    DiffObjectChildren $
+        Map.singleton
+            "scripts"
+            (ConwayScriptsValue (tx ^. witsTxL . scriptTxWitsL))
+conwayDiffProjection _ (ConwayScriptsValue scripts) =
+    DiffObjectChildren (scriptChildren scripts)
+conwayDiffProjection _ (ConwayScriptValue script) =
+    DiffAtomic (scriptValue script)
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
@@ -551,8 +608,8 @@ assetQuantityChildren assets =
         ]
 
 policyIdKey :: PolicyID -> Text
-policyIdKey (PolicyID (ScriptHash policyHash)) =
-    hexText (hashToBytes policyHash)
+policyIdKey (PolicyID scriptHash) =
+    scriptHashKey scriptHash
 
 assetNameKey :: AssetName -> Text
 assetNameKey (AssetName bytes) =
@@ -617,9 +674,31 @@ referenceScriptValue :: StrictMaybe (Script ConwayEra) -> Aeson.Value
 referenceScriptValue SNothing =
     Aeson.Null
 referenceScriptValue (SJust script) =
+    scriptValue script
+
+scriptValue :: Script ConwayEra -> Aeson.Value
+scriptValue script =
     Aeson.object
         [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) script)
         ]
+
+scriptsValue :: Map ScriptHash (Script ConwayEra) -> Aeson.Value
+scriptsValue scripts =
+    objectValue
+        [ (scriptHashKey scriptHash, scriptValue script)
+        | (scriptHash, script) <- Map.toAscList scripts
+        ]
+
+scriptChildren :: Map ScriptHash (Script ConwayEra) -> Map Text ConwayDiffValue
+scriptChildren scripts =
+    Map.fromList
+        [ (scriptHashKey scriptHash, ConwayScriptValue script)
+        | (scriptHash, script) <- Map.toAscList scripts
+        ]
+
+scriptHashKey :: ScriptHash -> Text
+scriptHashKey (ScriptHash scriptHash) =
+    hexText (hashToBytes scriptHash)
 
 hexText :: ByteString -> Text
 hexText =

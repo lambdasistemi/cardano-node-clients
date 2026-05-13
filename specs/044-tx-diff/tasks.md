@@ -56,9 +56,10 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T043 Add Conway body traversal for `body.requiredSigners`.
 - [x] T044 Add Conway body traversal for `body.withdrawals`.
 - [x] T045 Add Conway body traversal for `body.mint`.
-- [ ] T016 Add output traversal with address, value/coin, datum, and script
+- [x] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.
+- [x] T046 Add opt-in witness traversal for witness scripts.
 - [ ] T018 Keep unknown unequal ledger values atomic at their current path.
 
 ## Phase 4: Blueprint Boundary
