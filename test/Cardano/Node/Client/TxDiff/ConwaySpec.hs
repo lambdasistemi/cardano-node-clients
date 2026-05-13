@@ -40,6 +40,7 @@ import Cardano.Ledger.Api.Tx.Body (
     inputsTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
+    totalCollateralTxBodyL,
     vldtTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
@@ -566,6 +567,32 @@ spec =
                         )
                     )
 
+        it "reports a Conway total collateral change at body.totalCollateral" $ do
+            tx <- loadFixture sampleHash
+            let oldTotalCollateral =
+                    tx ^. bodyTxL . totalCollateralTxBodyL
+                newTotalCollateral =
+                    SJust (Coin 42)
+            oldTotalCollateral `shouldNotBe` newTotalCollateral
+            let tx' =
+                    tx
+                        & bodyTxL
+                            . totalCollateralTxBodyL
+                            .~ newTotalCollateral
+            diffConwayTx tx tx'
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["totalCollateral"] tx)
+                    ( Map.singleton
+                        "totalCollateral"
+                        ( DiffNode
+                            (DiffPath ["body", "totalCollateral"])
+                            ( DiffChanged
+                                (strictMaybeCoinJson oldTotalCollateral)
+                                (strictMaybeCoinJson newTotalCollateral)
+                            )
+                        )
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -613,6 +640,12 @@ coinJson :: Coin -> Aeson.Value
 coinJson (Coin lovelace) =
     Aeson.object ["lovelace" .= lovelace]
 
+strictMaybeCoinJson :: StrictMaybe Coin -> Aeson.Value
+strictMaybeCoinJson SNothing =
+    Aeson.Null
+strictMaybeCoinJson (SJust coin) =
+    coinJson coin
+
 bodyCommonExcept ::
     [Text] ->
     ConwayTx ->
@@ -649,6 +682,10 @@ bodyFieldValues tx =
         ( "referenceInputs"
         , inputsJson $
             Set.toAscList (tx ^. bodyTxL . referenceInputsTxBodyL)
+        )
+    ,
+        ( "totalCollateral"
+        , strictMaybeCoinJson (tx ^. bodyTxL . totalCollateralTxBodyL)
         )
     ,
         ( "validityInterval"

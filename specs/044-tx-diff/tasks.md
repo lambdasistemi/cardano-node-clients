@@ -52,6 +52,7 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T039 Add Conway body traversal for `body.inputs`.
 - [x] T040 Add Conway body traversal for `body.referenceInputs`.
 - [x] T041 Add Conway body traversal for `body.collateralInputs`.
+- [x] T042 Add Conway body traversal for `body.totalCollateral`.
 - [ ] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.

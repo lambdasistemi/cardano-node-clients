@@ -46,6 +46,7 @@ import Cardano.Ledger.Api.Tx.Body (
     inputsTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
+    totalCollateralTxBodyL,
     vldtTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
@@ -109,6 +110,7 @@ data ConwayDiffValue
     = ConwayTxValue ConwayTx
     | ConwayBodyValue ConwayTx
     | ConwayCoinValue Coin
+    | ConwayStrictMaybeCoinValue (StrictMaybe Coin)
     | ConwayInputsValue [TxIn]
     | ConwayTxInValue TxIn
     | ConwayValidityIntervalValue ValidityInterval
@@ -267,6 +269,10 @@ conwayDiffEqual (ConwayBodyValue left) (ConwayBodyValue right) =
     left ^. bodyTxL == right ^. bodyTxL
 conwayDiffEqual (ConwayCoinValue left) (ConwayCoinValue right) =
     left == right
+conwayDiffEqual
+    (ConwayStrictMaybeCoinValue left)
+    (ConwayStrictMaybeCoinValue right) =
+        left == right
 conwayDiffEqual (ConwayInputsValue left) (ConwayInputsValue right) =
     left == right
 conwayDiffEqual (ConwayTxInValue left) (ConwayTxInValue right) =
@@ -293,6 +299,8 @@ conwayDiffEqual _ _ =
 conwayDiffSummary :: ConwayDiffValue -> Maybe Aeson.Value
 conwayDiffSummary (ConwayCoinValue coin) =
     Just (coinValue coin)
+conwayDiffSummary (ConwayStrictMaybeCoinValue coin) =
+    Just (strictMaybeCoinValue coin)
 conwayDiffSummary (ConwayInputsValue inputs) =
     Just (inputsValue inputs)
 conwayDiffSummary (ConwayTxInValue txIn) =
@@ -342,6 +350,11 @@ conwayDiffProjection (ConwayBodyValue tx) =
                     Set.toAscList (tx ^. bodyTxL . referenceInputsTxBodyL)
                 )
             ,
+                ( "totalCollateral"
+                , ConwayStrictMaybeCoinValue $
+                    tx ^. bodyTxL . totalCollateralTxBodyL
+                )
+            ,
                 ( "validityInterval"
                 , ConwayValidityIntervalValue (tx ^. bodyTxL . vldtTxBodyL)
                 )
@@ -352,6 +365,8 @@ conwayDiffProjection (ConwayBodyValue tx) =
             ]
 conwayDiffProjection (ConwayCoinValue coin) =
     DiffAtomic (coinValue coin)
+conwayDiffProjection (ConwayStrictMaybeCoinValue coin) =
+    DiffAtomic (strictMaybeCoinValue coin)
 conwayDiffProjection (ConwayInputsValue inputs) =
     DiffArrayChildren (map ConwayTxInValue inputs)
 conwayDiffProjection (ConwayTxInValue txIn) =
@@ -402,6 +417,12 @@ conwayDiffProjection (ConwayReferenceScriptValue referenceScript) =
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
     Aeson.object ["lovelace" .= lovelace]
+
+strictMaybeCoinValue :: StrictMaybe Coin -> Aeson.Value
+strictMaybeCoinValue SNothing =
+    Aeson.Null
+strictMaybeCoinValue (SJust coin) =
+    coinValue coin
 
 inputsValue :: [TxIn] -> Aeson.Value
 inputsValue inputs =
