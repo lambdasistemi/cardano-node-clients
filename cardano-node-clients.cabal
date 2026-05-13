@@ -48,6 +48,7 @@ library tx-build
 
   other-modules:
     Cardano.Node.Client.Credentials
+    Cardano.Node.Client.Deposits
     Cardano.Node.Client.Inputs
     Cardano.Node.Client.Scripts
     Cardano.Node.Client.Witnesses

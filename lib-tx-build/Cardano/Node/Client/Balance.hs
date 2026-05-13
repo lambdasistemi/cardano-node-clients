@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE LambdaCase #-}
 
 {- |
 Module      : Cardano.Node.Client.Balance
@@ -47,7 +46,6 @@ module Cardano.Node.Client.Balance (
     FeeLoopError (..),
 ) where
 
-import Data.Foldable (toList)
 import Data.Maybe (fromMaybe)
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
@@ -68,15 +66,12 @@ import Cardano.Ledger.Api.Tx (
     witsTxL,
  )
 import Cardano.Ledger.Api.Tx.Body (
-    TxBody,
-    certsTxBodyL,
     collateralInputsTxBodyL,
     collateralReturnTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
     mintTxBodyL,
     outputsTxBodyL,
-    proposalProceduresTxBodyL,
     referenceInputsTxBodyL,
     totalCollateralTxBodyL,
  )
@@ -95,18 +90,7 @@ import Cardano.Ledger.BaseTypes (
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Ledger.Conway.Governance (
-    ProposalProcedure (..),
- )
-import Cardano.Ledger.Conway.TxCert (
-    ConwayDelegCert (..),
-    ConwayGovCert (..),
-    ConwayTxCert (..),
- )
-import Cardano.Ledger.Core (
-    PParams,
-    getTotalDepositsTxCerts,
- )
+import Cardano.Ledger.Core (PParams)
 import Cardano.Ledger.Mary.Value (
     MaryValue (..),
     MultiAsset (..),
@@ -114,6 +98,7 @@ import Cardano.Ledger.Mary.Value (
     mapMaybeMultiAsset,
  )
 import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Node.Client.Deposits (bodyDepositDelta)
 import Cardano.Node.Client.Inputs (spendingIndex)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Scripts (
@@ -491,51 +476,6 @@ balanceTxWith
                                         result
                                         (length origOutputs)
                                     )
-
-bodyDepositDelta ::
-    PParams ConwayEra ->
-    TxBody l ConwayEra ->
-    Integer
-bodyDepositDelta pp body =
-    coinInteger
-        ( getTotalDepositsTxCerts
-            pp
-            (const False)
-            (body ^. certsTxBodyL)
-        )
-        - sum (certRefund <$> toList (body ^. certsTxBodyL))
-        + sum
-            ( proposalDeposit
-                <$> toList (body ^. proposalProceduresTxBodyL)
-            )
-
-certRefund ::
-    ConwayTxCert ConwayEra ->
-    Integer
-certRefund =
-    \case
-        ConwayTxCertDeleg (ConwayUnRegCert _ refund) ->
-            strictMaybeCoin refund
-        ConwayTxCertGov (ConwayUnRegDRep _ refund) ->
-            coinInteger refund
-        _ ->
-            0
-
-proposalDeposit :: ProposalProcedure ConwayEra -> Integer
-proposalDeposit (ProposalProcedure deposit _ _ _) =
-    coinInteger deposit
-
-strictMaybeCoin :: StrictMaybe Coin -> Integer
-strictMaybeCoin =
-    \case
-        SJust coin ->
-            coinInteger coin
-        SNothing ->
-            0
-
-coinInteger :: Coin -> Integer
-coinInteger (Coin value) =
-    value
 
 {- | Output function rejected the fee, or the
 iteration did not converge.
