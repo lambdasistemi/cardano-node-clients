@@ -13,6 +13,7 @@ module Cardano.Node.Client.TxDiff (
     DiffPath (..),
     DiffProjection (..),
     OpenValue (..),
+    diffConwayTx,
     diffOpenValue,
     diffWith,
 ) where
@@ -25,6 +26,12 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Lens.Micro ((^.))
+
+import Cardano.Ledger.Api.Tx (bodyTxL)
+import Cardano.Ledger.Api.Tx.Body (feeTxBodyL)
+import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Node.Client.Ledger (ConwayTx)
 
 newtype DiffPath = DiffPath [Text]
     deriving stock (Eq, Show)
@@ -65,6 +72,15 @@ data OpenValue
     | OpenText Text
     | OpenBytes Text
     deriving stock (Eq, Show)
+
+data ConwayDiffValue
+    = ConwayTxValue ConwayTx
+    | ConwayBodyValue ConwayTx
+    | ConwayCoinValue Coin
+
+diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
+diffConwayTx left right =
+    diffWith conwayDiffPlan (ConwayTxValue left) (ConwayTxValue right)
 
 diffOpenValue :: OpenValue -> OpenValue -> DiffNode
 diffOpenValue =
@@ -194,6 +210,47 @@ openValuePlan =
         , diffSummary = openValueSummary
         , diffProject = openValueProjection
         }
+
+conwayDiffPlan :: DiffPlan ConwayDiffValue
+conwayDiffPlan =
+    DiffPlan
+        { diffEqual = conwayDiffEqual
+        , diffSummary = conwayDiffSummary
+        , diffProject = conwayDiffProjection
+        }
+
+conwayDiffEqual :: ConwayDiffValue -> ConwayDiffValue -> Bool
+conwayDiffEqual (ConwayTxValue left) (ConwayTxValue right) =
+    left == right
+conwayDiffEqual (ConwayBodyValue left) (ConwayBodyValue right) =
+    left ^. bodyTxL == right ^. bodyTxL
+conwayDiffEqual (ConwayCoinValue left) (ConwayCoinValue right) =
+    left == right
+conwayDiffEqual _ _ =
+    False
+
+conwayDiffSummary :: ConwayDiffValue -> Maybe Aeson.Value
+conwayDiffSummary (ConwayCoinValue coin) =
+    Just (coinValue coin)
+conwayDiffSummary (ConwayTxValue _) =
+    Nothing
+conwayDiffSummary (ConwayBodyValue _) =
+    Nothing
+
+conwayDiffProjection :: ConwayDiffValue -> DiffProjection ConwayDiffValue
+conwayDiffProjection (ConwayTxValue tx) =
+    DiffObjectChildren (Map.singleton "body" (ConwayBodyValue tx))
+conwayDiffProjection (ConwayBodyValue tx) =
+    DiffObjectChildren $
+        Map.singleton
+            "fee"
+            (ConwayCoinValue (tx ^. bodyTxL . feeTxBodyL))
+conwayDiffProjection (ConwayCoinValue coin) =
+    DiffAtomic (coinValue coin)
+
+coinValue :: Coin -> Aeson.Value
+coinValue (Coin lovelace) =
+    Aeson.object ["lovelace" .= lovelace]
 
 openValueSummary :: OpenValue -> Maybe Aeson.Value
 openValueSummary (OpenInteger value) =

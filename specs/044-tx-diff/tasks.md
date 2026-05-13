@@ -9,7 +9,7 @@ blueprint handling have not started.
 
 - [x] T001 [P] Add a unit test proving equal roots stop traversal before any
   child access.
-- [ ] T002 [P] Add a unit test for one Conway fee change producing one changed
+- [x] T002 [P] Add a unit test for one Conway fee change producing one changed
   fee path.
 - [ ] T003 [P] Add a unit test for one output coin change preserving only the
   needed output context.
@@ -38,10 +38,11 @@ blueprint handling have not started.
 
 ## Phase 3: Conway Traversal
 
-- [ ] T014 Add the finite Conway transaction traversal table.
+- [x] T014 Add the finite Conway transaction traversal table.
 - [ ] T015 Add transaction body traversal for fee, validity interval, inputs,
   reference inputs, collateral inputs, outputs, mint, withdrawals, required
   signers, and total collateral.
+- [x] T033 Add the first Conway body traversal leaf: `body.fee`.
 - [ ] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.
