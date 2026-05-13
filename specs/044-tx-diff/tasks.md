@@ -2,21 +2,22 @@
 
 **Input**: `specs/044-tx-diff/spec.md` and
 `specs/044-tx-diff/plan.md`  
-**Status**: Fresh start. No implementation task below is complete yet.
+**Status**: First structural diff slice is implemented. Conway traversal and
+blueprint handling have not started.
 
 ## Phase 1: RED Tests
 
-- [ ] T001 [P] Add a unit test proving equal roots stop traversal before any
+- [x] T001 [P] Add a unit test proving equal roots stop traversal before any
   child access.
 - [ ] T002 [P] Add a unit test for one Conway fee change producing one changed
   fee path.
 - [ ] T003 [P] Add a unit test for one output coin change preserving only the
   needed output context.
-- [ ] T004 [P] Add a unit test for map factoring into `common`, `changed`,
+- [x] T004 [P] Add a unit test for map factoring into `common`, `changed`,
   `onlyA`, and `onlyB`.
-- [ ] T005 [P] Add a unit test for nested map factoring with equality stops at
+- [x] T005 [P] Add a unit test for nested map factoring with equality stops at
   equal inner values.
-- [ ] T006 [P] Add a unit test for deterministic sequence alignment by index
+- [x] T006 [P] Add a unit test for deterministic sequence alignment by index
   when no stable key exists.
 - [ ] T007 [P] Add a unit test for matched blueprint datum/redeemer traversal
   into an open application value.
@@ -24,13 +25,13 @@
 
 ## Phase 2: Diff Model
 
-- [ ] T009 Define the internal `DiffNode` model and path representation.
-- [ ] T010 Implement the equality-first diff combinator over a small test
+- [x] T009 Define the internal `DiffNode` model and path representation.
+- [x] T010 Implement the equality-first diff combinator over a small test
   fixture type.
-- [ ] T011 Implement render-independent collection of `same`, `changed`,
+- [x] T011 Implement render-independent collection of `same`, `changed`,
   `onlyA`, `onlyB`, and parent nodes.
-- [ ] T012 Implement map factoring with recursive changed children.
-- [ ] T013 Implement deterministic sequence alignment and tail
+- [x] T012 Implement map factoring with recursive changed children.
+- [x] T013 Implement deterministic sequence alignment and tail
   insertion/deletion reporting.
 
 ## Phase 3: Conway Traversal
@@ -65,7 +66,7 @@
 
 ## Phase 6: Verification
 
-- [ ] T029 Run the focused TxDiff unit tests.
-- [ ] T030 Run `just unit`.
+- [x] T029 Run the focused TxDiff unit tests.
+- [x] T030 Run `just unit`.
 - [ ] T031 Regenerate any gist/output artifacts only from the executable,
   after the executable exists again.
