@@ -19,10 +19,13 @@ module Cardano.Node.Client.TxDiff (
     TxInputDecodeError (..),
     defaultTxDiffOptions,
     decodeConwayTxInput,
+    diffConwayTxInput,
     diffConwayTx,
     diffConwayTxWith,
+    diffNodeHasChanges,
     diffOpenValue,
     diffWith,
+    renderConwayTxInputDiff,
     renderDiffNodeHuman,
 ) where
 
@@ -216,6 +219,18 @@ diffConwayTxWith :: TxDiffOptions -> ConwayTx -> ConwayTx -> DiffNode
 diffConwayTxWith options left right =
     diffWith (conwayDiffPlan options) (ConwayTxValue left) (ConwayTxValue right)
 
+diffConwayTxInput ::
+    ByteString -> ByteString -> Either TxInputDecodeError DiffNode
+diffConwayTxInput leftInput rightInput = do
+    left <- decodeConwayTxInput leftInput
+    right <- decodeConwayTxInput rightInput
+    pure (diffConwayTx left right)
+
+renderConwayTxInputDiff ::
+    ByteString -> ByteString -> Either TxInputDecodeError Text
+renderConwayTxInputDiff leftInput rightInput =
+    renderDiffNodeHuman <$> diffConwayTxInput leftInput rightInput
+
 decodeConwayTxInput :: ByteString -> Either TxInputDecodeError ConwayTx
 decodeConwayTxInput input =
     case Aeson.eitherDecodeStrict' input of
@@ -281,6 +296,22 @@ diffOpenValue =
 diffWith :: DiffPlan a -> a -> a -> DiffNode
 diffWith plan =
     diffAt plan (DiffPath [])
+
+diffNodeHasChanges :: DiffNode -> Bool
+diffNodeHasChanges (DiffNode _ change) =
+    case change of
+        DiffSame _ ->
+            False
+        DiffChanged _ _ ->
+            True
+        DiffObject _ changed onlyA onlyB ->
+            any diffNodeHasChanges changed
+                || not (Map.null onlyA)
+                || not (Map.null onlyB)
+        DiffArray _ changed onlyA onlyB ->
+            any (diffNodeHasChanges . snd) changed
+                || not (null onlyA)
+                || not (null onlyB)
 
 diffAt :: DiffPlan a -> DiffPath -> a -> a -> DiffNode
 diffAt plan path left right

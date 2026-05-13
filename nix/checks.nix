@@ -48,6 +48,7 @@ let
         test -e ${components.sublibs."utxo-indexer-lib"}
         test -e ${components.exes.cardano-tx-generator}
         test -e ${components.exes.utxo-indexer}
+        test -e ${components.exes.tx-diff}
         echo "build outputs realized"
       '';
     };

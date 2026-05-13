@@ -249,6 +249,17 @@ executable cardano-tx-generator
     , base
     , cardano-node-clients
 
+executable tx-diff
+  import:           warnings
+  hs-source-dirs:   app/tx-diff
+  main-is:          Main.hs
+  default-language: GHC2021
+  build-depends:
+    , base
+    , bytestring
+    , cardano-node-clients
+    , text
+
 test-suite unit-tests
   import:           warnings
   type:             exitcode-stdio-1.0

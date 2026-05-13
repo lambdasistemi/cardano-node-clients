@@ -128,6 +128,7 @@ import Cardano.Node.Client.TxDiff (
     defaultTxDiffOptions,
     diffConwayTx,
     diffConwayTxWith,
+    renderConwayTxInputDiff,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import PlutusCore.Data qualified as PLC
@@ -151,6 +152,23 @@ spec =
                 `shouldBe` Right expected
             decodeConwayTxInput raw `shouldBe` Right expected
             decodeConwayTxInput envelope `shouldBe` Right expected
+
+        it "renders a human diff from two encoded transaction inputs" $ do
+            tx <- loadFixture sampleHash
+            hex <- loadFixtureHex sampleHash
+            let tx' = tx & bodyTxL . feeTxBodyL .~ Coin 42
+                rendered =
+                    renderConwayTxInputDiff
+                        (Text.encodeUtf8 hex)
+                        (serialize' (eraProtVerLow @ConwayEra) tx')
+            case rendered of
+                Left err ->
+                    expectationFailure ("failed to render tx diff: " <> show err)
+                Right output -> do
+                    output `shouldSatisfy` Text.isInfixOf "~ body.fee"
+                    output
+                        `shouldSatisfy` Text.isInfixOf
+                            "  B: 0.000042 ADA (42 lovelace)"
 
         it "reports a Conway fee change at body.fee" $ do
             tx <- loadFixture sampleHash

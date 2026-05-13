@@ -9,7 +9,7 @@ hlint:
     find . -type f -name '*.hs' -not -path '*/dist-newstyle/*' -exec hlint {} +
 
 build:
-    cabal build cardano-node-clients:exe:cardano-tx-generator cardano-node-clients:exe:utxo-indexer -O0
+    cabal build cardano-node-clients:exe:cardano-tx-generator cardano-node-clients:exe:utxo-indexer cardano-node-clients:exe:tx-diff -O0
 
 e2e:
     cabal test e2e-tests -O0 --test-show-details=direct
