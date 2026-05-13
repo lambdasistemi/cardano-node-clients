@@ -19,13 +19,23 @@ import Test.Hspec
 
 import Cardano.Ledger.Address (Addr, serialiseAddr)
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Api.Scripts.Data (
+    Data (..),
+    Datum (..),
+    dataToBinaryData,
+ )
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     outputsTxBodyL,
     vldtTxBodyL,
  )
-import Cardano.Ledger.Api.Tx.Out (TxOut, addrTxOutL, coinTxOutL)
+import Cardano.Ledger.Api.Tx.Out (
+    TxOut,
+    addrTxOutL,
+    coinTxOutL,
+    datumTxOutL,
+ )
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Binary (
     Annotator,
@@ -33,9 +43,11 @@ import Cardano.Ledger.Binary (
     decCBOR,
     decodeFullAnnotatorFromHexText,
     natVersion,
+    serialize',
  )
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Core (eraProtVerLow)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.TxDiff (
     DiffChange (..),
@@ -44,6 +56,7 @@ import Cardano.Node.Client.TxDiff (
     diffConwayTx,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
+import PlutusCore.Data qualified as PLC
 
 spec :: Spec
 spec =
@@ -189,13 +202,22 @@ spec =
                                                     ["body", "outputs", "0"]
                                                 )
                                                 ( DiffObject
-                                                    ( Map.singleton
-                                                        "address"
-                                                        ( Just $
-                                                            addressJson $
-                                                                firstOutput
-                                                                    ^. addrTxOutL
-                                                        )
+                                                    ( Map.fromList
+                                                        [
+                                                            ( "address"
+                                                            , Just $
+                                                                addressJson $
+                                                                    firstOutput
+                                                                        ^. addrTxOutL
+                                                            )
+                                                        ,
+                                                            ( "datum"
+                                                            , Just $
+                                                                datumJson $
+                                                                    firstOutput
+                                                                        ^. datumTxOutL
+                                                            )
+                                                        ]
                                                     )
                                                     ( Map.singleton
                                                         "coin"
@@ -276,13 +298,22 @@ spec =
                                                     ["body", "outputs", "0"]
                                                 )
                                                 ( DiffObject
-                                                    ( Map.singleton
-                                                        "coin"
-                                                        ( Just $
-                                                            coinJson $
-                                                                firstOutput
-                                                                    ^. coinTxOutL
-                                                        )
+                                                    ( Map.fromList
+                                                        [
+                                                            ( "coin"
+                                                            , Just $
+                                                                coinJson $
+                                                                    firstOutput
+                                                                        ^. coinTxOutL
+                                                            )
+                                                        ,
+                                                            ( "datum"
+                                                            , Just $
+                                                                datumJson $
+                                                                    firstOutput
+                                                                        ^. datumTxOutL
+                                                            )
+                                                        ]
                                                     )
                                                     ( Map.singleton
                                                         "address"
@@ -316,6 +347,101 @@ spec =
                             )
                 _ ->
                     expectationFailure "fixture has fewer than two outputs"
+
+        it "reports a Conway output datum change at body.outputs.0.datum" $ do
+            tx <- loadFixture sampleHash
+            let outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
+            case outputs of
+                [] ->
+                    expectationFailure "fixture has no outputs"
+                firstOutput : otherOutputs -> do
+                    let oldDatum = firstOutput ^. datumTxOutL
+                        newDatum = inlineIntegerDatum 42
+                    oldDatum `shouldNotBe` newDatum
+                    let changedOutput =
+                            firstOutput & datumTxOutL .~ newDatum
+                        tx' =
+                            tx
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ StrictSeq.fromList
+                                        (changedOutput : otherOutputs)
+                    diffConwayTx tx tx'
+                        `shouldBe` bodyDiff
+                            ( Map.fromList
+                                [
+                                    ( "fee"
+                                    , Just (coinJson (tx ^. bodyTxL . feeTxBodyL))
+                                    )
+                                ,
+                                    ( "validityInterval"
+                                    , Just $
+                                        validityIntervalJson $
+                                            tx ^. bodyTxL . vldtTxBodyL
+                                    )
+                                ]
+                            )
+                            ( Map.singleton
+                                "outputs"
+                                ( DiffNode
+                                    (DiffPath ["body", "outputs"])
+                                    ( DiffArray
+                                        ( indexedOutputSummaries otherOutputs
+                                        )
+                                        [
+                                            ( 0
+                                            , DiffNode
+                                                ( DiffPath
+                                                    ["body", "outputs", "0"]
+                                                )
+                                                ( DiffObject
+                                                    ( Map.fromList
+                                                        [
+                                                            ( "address"
+                                                            , Just $
+                                                                addressJson $
+                                                                    firstOutput
+                                                                        ^. addrTxOutL
+                                                            )
+                                                        ,
+                                                            ( "coin"
+                                                            , Just $
+                                                                coinJson $
+                                                                    firstOutput
+                                                                        ^. coinTxOutL
+                                                            )
+                                                        ]
+                                                    )
+                                                    ( Map.singleton
+                                                        "datum"
+                                                        ( DiffNode
+                                                            ( DiffPath
+                                                                [ "body"
+                                                                , "outputs"
+                                                                , "0"
+                                                                , "datum"
+                                                                ]
+                                                            )
+                                                            ( DiffChanged
+                                                                ( datumJson
+                                                                    oldDatum
+                                                                )
+                                                                ( datumJson
+                                                                    newDatum
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+                                                    Map.empty
+                                                    Map.empty
+                                                )
+                                            )
+                                        ]
+                                        []
+                                        []
+                                    )
+                                )
+                            )
 
 rootPath :: DiffPath
 rootPath =
@@ -373,6 +499,7 @@ outputJson output =
     Aeson.object
         [ "address" .= addressJson (output ^. addrTxOutL)
         , "coin" .= coinJson (output ^. coinTxOutL)
+        , "datum" .= datumJson (output ^. datumTxOutL)
         ]
 
 addressJson :: Addr -> Aeson.Value
@@ -382,6 +509,18 @@ addressJson address =
 hexText :: ByteString -> Text
 hexText =
     Text.decodeUtf8 . Base16.encode
+
+datumJson :: Datum ConwayEra -> Aeson.Value
+datumJson datum =
+    Aeson.object
+        [ "cbor"
+            .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
+        ]
+
+inlineIntegerDatum :: Integer -> Datum ConwayEra
+inlineIntegerDatum value =
+    Datum $
+        dataToBinaryData (Data (PLC.I value) :: Data ConwayEra)
 
 validityIntervalJson :: ValidityInterval -> Aeson.Value
 validityIntervalJson validity =

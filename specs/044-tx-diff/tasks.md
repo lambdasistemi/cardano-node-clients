@@ -46,6 +46,7 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T034 Add Conway body traversal for `body.validityInterval`.
 - [x] T035 Add Conway body traversal for `body.outputs[*].coin`.
 - [x] T036 Add Conway output traversal for `body.outputs[*].address`.
+- [x] T037 Add Conway output traversal for `body.outputs[*].datum`.
 - [ ] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.

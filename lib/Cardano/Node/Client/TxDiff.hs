@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeApplications #-}
+
 {- |
 Module      : Cardano.Node.Client.TxDiff
 Description : Structural transaction diff primitives.
@@ -34,16 +36,24 @@ import Lens.Micro ((^.))
 
 import Cardano.Ledger.Address (Addr, serialiseAddr)
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Api.Scripts.Data (Datum)
 import Cardano.Ledger.Api.Tx (bodyTxL)
 import Cardano.Ledger.Api.Tx.Body (
     feeTxBodyL,
     outputsTxBodyL,
     vldtTxBodyL,
  )
-import Cardano.Ledger.Api.Tx.Out (TxOut, addrTxOutL, coinTxOutL)
+import Cardano.Ledger.Api.Tx.Out (
+    TxOut,
+    addrTxOutL,
+    coinTxOutL,
+    datumTxOutL,
+ )
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
+import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
+import Cardano.Ledger.Core (eraProtVerLow)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
 
@@ -96,6 +106,7 @@ data ConwayDiffValue
     | ConwayOutputsValue [TxOut ConwayEra]
     | ConwayTxOutValue (TxOut ConwayEra)
     | ConwayAddressValue Addr
+    | ConwayDatumValue (Datum ConwayEra)
 
 diffConwayTx :: ConwayTx -> ConwayTx -> DiffNode
 diffConwayTx left right =
@@ -255,6 +266,8 @@ conwayDiffEqual (ConwayTxOutValue left) (ConwayTxOutValue right) =
     left == right
 conwayDiffEqual (ConwayAddressValue left) (ConwayAddressValue right) =
     left == right
+conwayDiffEqual (ConwayDatumValue left) (ConwayDatumValue right) =
+    left == right
 conwayDiffEqual _ _ =
     False
 
@@ -271,6 +284,8 @@ conwayDiffSummary (ConwayTxOutValue output) =
     Just (txOutValue output)
 conwayDiffSummary (ConwayAddressValue address) =
     Just (addressValue address)
+conwayDiffSummary (ConwayDatumValue datum) =
+    Just (datumValue datum)
 conwayDiffSummary (ConwayTxValue _) =
     Nothing
 conwayDiffSummary (ConwayBodyValue _) =
@@ -324,9 +339,15 @@ conwayDiffProjection (ConwayTxOutValue output) =
                 ( "coin"
                 , ConwayCoinValue (output ^. coinTxOutL)
                 )
+            ,
+                ( "datum"
+                , ConwayDatumValue (output ^. datumTxOutL)
+                )
             ]
 conwayDiffProjection (ConwayAddressValue address) =
     DiffAtomic (addressValue address)
+conwayDiffProjection (ConwayDatumValue datum) =
+    DiffAtomic (datumValue datum)
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =
@@ -350,11 +371,18 @@ txOutValue output =
     Aeson.object
         [ "address" .= addressValue (output ^. addrTxOutL)
         , "coin" .= coinValue (output ^. coinTxOutL)
+        , "datum" .= datumValue (output ^. datumTxOutL)
         ]
 
 addressValue :: Addr -> Aeson.Value
 addressValue address =
     Aeson.object ["bytes" .= hexText (serialiseAddr address)]
+
+datumValue :: Datum ConwayEra -> Aeson.Value
+datumValue datum =
+    Aeson.object
+        [ "cbor" .= hexText (serialize' (eraProtVerLow @ConwayEra) datum)
+        ]
 
 hexText :: ByteString -> Text
 hexText =
