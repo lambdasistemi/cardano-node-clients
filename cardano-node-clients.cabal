@@ -46,6 +46,7 @@ library tx-build
     Cardano.Node.Client.Ledger
     Cardano.Node.Client.TxBuild
 
+  other-modules:    Cardano.Node.Client.Inputs
   build-depends:
     , base
     , bytestring
