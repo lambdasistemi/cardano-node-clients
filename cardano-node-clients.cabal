@@ -260,6 +260,8 @@ test-suite unit-tests
     Cardano.Node.Client.N2C.TraceSpec
     Cardano.Node.Client.TxBuildGoldenSpec
     Cardano.Node.Client.TxBuildSpec
+    Cardano.Node.Client.TxDiff.ConwaySpec
+    Cardano.Node.Client.TxDiff.CoreSpec
     Cardano.Node.Client.TxDiffSpec
     Cardano.Node.Client.TxGenerator.FanoutSpec
     Cardano.Node.Client.TxGenerator.PersistSpec
