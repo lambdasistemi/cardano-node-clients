@@ -2,6 +2,8 @@
 
 module Cardano.Node.Client.TxDiff.BlueprintSpec (spec) where
 
+import Data.Aeson ((.=))
+import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Map.Strict qualified as Map
@@ -9,7 +11,12 @@ import Test.Hspec
 
 import Cardano.Ledger.Api.Scripts.Data (Data (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Node.Client.TxDiff (OpenValue (..))
+import Cardano.Node.Client.TxDiff (
+    DiffChange (..),
+    DiffNode (..),
+    DiffPath (..),
+    OpenValue (..),
+ )
 import Cardano.Node.Client.TxDiff.Blueprint (
     Blueprint (..),
     BlueprintArgument (..),
@@ -20,6 +27,7 @@ import Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
     decodeBlueprintData,
+    diffBlueprintData,
     matchBlueprintArgument,
     parseBlueprintJSON,
  )
@@ -121,32 +129,7 @@ spec =
                                 }
 
         it "converts constructor data into an open application value" $ do
-            let schema =
-                    BlueprintSchema
-                        { schemaTitle = Just "Order"
-                        , schemaKind =
-                            SchemaConstructor
-                                0
-                                [ BlueprintSchema
-                                    { schemaTitle = Just "owner"
-                                    , schemaKind = SchemaBytes
-                                    }
-                                , BlueprintSchema
-                                    { schemaTitle = Just "amount"
-                                    , schemaKind = SchemaInteger
-                                    }
-                                ]
-                        }
-                datum =
-                    Data
-                        ( PLC.Constr
-                            0
-                            [ PLC.B (BS.pack [0xde, 0xad])
-                            , PLC.I 42
-                            ]
-                        ) ::
-                        Data ConwayEra
-            decodeBlueprintData schema datum
+            decodeBlueprintData orderSchema (orderDatum 42)
                 `shouldBe` Right
                     ( OpenObject
                         ( Map.fromList
@@ -155,6 +138,65 @@ spec =
                             ]
                         )
                     )
+
+        it "diffs decoded constructor fields as open application values" $ do
+            diffBlueprintData orderSchema (orderDatum 42) (orderDatum 43)
+                `shouldBe` Right
+                    ( DiffNode
+                        rootPath
+                        ( DiffObject
+                            ( Map.fromList
+                                [ ("owner", Just (Aeson.object ["bytes" .= ("dead" :: String)]))
+                                ]
+                            )
+                            ( Map.fromList
+                                [
+                                    ( "amount"
+                                    , DiffNode
+                                        (DiffPath ["amount"])
+                                        ( DiffChanged
+                                            (Aeson.Number 42)
+                                            (Aeson.Number 43)
+                                        )
+                                    )
+                                ]
+                            )
+                            Map.empty
+                            Map.empty
+                        )
+                    )
+
+rootPath :: DiffPath
+rootPath =
+    DiffPath []
+
+orderSchema :: BlueprintSchema
+orderSchema =
+    BlueprintSchema
+        { schemaTitle = Just "Order"
+        , schemaKind =
+            SchemaConstructor
+                0
+                [ BlueprintSchema
+                    { schemaTitle = Just "owner"
+                    , schemaKind = SchemaBytes
+                    }
+                , BlueprintSchema
+                    { schemaTitle = Just "amount"
+                    , schemaKind = SchemaInteger
+                    }
+                ]
+        }
+
+orderDatum :: Integer -> Data ConwayEra
+orderDatum amount =
+    Data
+        ( PLC.Constr
+            0
+            [ PLC.B (BS.pack [0xde, 0xad])
+            , PLC.I amount
+            ]
+        )
 
 blueprintJson :: LBS8.ByteString
 blueprintJson =

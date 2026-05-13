@@ -20,6 +20,7 @@ module Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
     decodeBlueprintData,
+    diffBlueprintData,
     matchBlueprintArgument,
     parseBlueprintJSON,
 ) where
@@ -45,7 +46,7 @@ import Data.Text.Encoding qualified as TextEncoding
 
 import Cardano.Ledger.Api.Scripts.Data (Data (..))
 import Cardano.Ledger.Conway (ConwayEra)
-import Cardano.Node.Client.TxDiff (OpenValue (..))
+import Cardano.Node.Client.TxDiff (DiffNode, OpenValue (..), diffOpenValue)
 import PlutusCore.Data qualified as PLC
 
 data Blueprint = Blueprint
@@ -126,6 +127,16 @@ decodeBlueprintData ::
     BlueprintSchema -> Data ConwayEra -> Either BlueprintDataError OpenValue
 decodeBlueprintData schema (Data value) =
     decodeBlueprintValue schema value
+
+diffBlueprintData ::
+    BlueprintSchema ->
+    Data ConwayEra ->
+    Data ConwayEra ->
+    Either BlueprintDataError DiffNode
+diffBlueprintData schema left right = do
+    leftOpen <- decodeBlueprintData schema left
+    rightOpen <- decodeBlueprintData schema right
+    pure (diffOpenValue leftOpen rightOpen)
 
 decodeBlueprintValue ::
     BlueprintSchema -> PLC.Data -> Either BlueprintDataError OpenValue
