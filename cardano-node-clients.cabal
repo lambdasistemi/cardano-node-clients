@@ -50,6 +50,7 @@ library tx-build
     Cardano.Node.Client.Credentials
     Cardano.Node.Client.Inputs
     Cardano.Node.Client.Scripts
+    Cardano.Node.Client.Witnesses
 
   build-depends:
     , base
