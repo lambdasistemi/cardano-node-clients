@@ -48,7 +48,6 @@ module Cardano.Node.Client.Balance (
 ) where
 
 import Data.Foldable (toList)
-import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Sequence.Strict (StrictSeq, (|>))
 import Data.Set qualified as Set
@@ -56,7 +55,6 @@ import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Ledger.Address (
     Addr,
-    Withdrawals (..),
  )
 import Cardano.Ledger.Alonzo.PParams (
     ppCollateralPercentageL,
@@ -80,14 +78,10 @@ import Cardano.Ledger.Api.Tx.Body (
     outputsTxBodyL,
     proposalProceduresTxBodyL,
     referenceInputsTxBodyL,
-    reqSignerHashesTxBodyL,
     totalCollateralTxBodyL,
-    votingProceduresTxBodyL,
-    withdrawalsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (
     TxOut,
-    addrTxOutL,
     coinTxOutL,
     getMinCoinTxOut,
     mkBasicTxOut,
@@ -103,13 +97,11 @@ import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Governance (
     ProposalProcedure (..),
-    VotingProcedures (..),
  )
 import Cardano.Ledger.Conway.TxCert (
     ConwayDelegCert (..),
     ConwayGovCert (..),
     ConwayTxCert (..),
-    getVKeyWitnessConwayTxCert,
  )
 import Cardano.Ledger.Core (
     PParams,
@@ -122,12 +114,6 @@ import Cardano.Ledger.Mary.Value (
     mapMaybeMultiAsset,
  )
 import Cardano.Ledger.TxIn (TxIn)
-import Cardano.Node.Client.Credentials (
-    accountKeyHashBytes,
-    addrPaymentKeyHashBytes,
-    keyHashBytes,
-    voterKeyHashBytes,
- )
 import Cardano.Node.Client.Inputs (spendingIndex)
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.Scripts (
@@ -136,6 +122,7 @@ import Cardano.Node.Client.Scripts (
     placeholderExUnits,
     refScriptsSize,
  )
+import Cardano.Node.Client.Witnesses (estimatedKeyWitnessCount)
 
 {- | Result of 'balanceTx'. Carries the balanced
 transaction and the index of the change output
@@ -521,55 +508,6 @@ bodyDepositDelta pp body =
             ( proposalDeposit
                 <$> toList (body ^. proposalProceduresTxBodyL)
             )
-
-estimatedKeyWitnessCount ::
-    TxBody l ConwayEra ->
-    Set.Set TxIn ->
-    [(TxIn, TxOut ConwayEra)] ->
-    Int
-estimatedKeyWitnessCount body bodyInputs inputUtxos =
-    max 1 $
-        Set.size $
-            inputWitnesses
-                <> certWitnesses
-                <> requiredSignerWitnesses
-                <> votingWitnesses
-                <> withdrawalWitnesses
-  where
-    inputWitnesses =
-        Set.fromList
-            [ kh
-            | (txIn, txOut) <- inputUtxos
-            , Set.member txIn bodyInputs
-            , Just kh <- [addrPaymentKeyHashBytes (txOut ^. addrTxOutL)]
-            ]
-    certWitnesses =
-        Set.fromList
-            [ keyHashBytes kh
-            | cert <- toList (body ^. certsTxBodyL)
-            , Just kh <- [getVKeyWitnessConwayTxCert cert]
-            ]
-    requiredSignerWitnesses =
-        Set.fromList
-            [ keyHashBytes kh
-            | kh <- Set.toList (body ^. reqSignerHashesTxBodyL)
-            ]
-    votingWitnesses =
-        let VotingProcedures procedures =
-                body ^. votingProceduresTxBodyL
-         in Set.fromList
-                [ bytes
-                | voter <- Map.keys procedures
-                , Just bytes <- [voterKeyHashBytes voter]
-                ]
-    withdrawalWitnesses =
-        let Withdrawals withdrawals =
-                body ^. withdrawalsTxBodyL
-         in Set.fromList
-                [ kh
-                | account <- Map.keys withdrawals
-                , Just kh <- [accountKeyHashBytes account]
-                ]
 
 certRefund ::
     ConwayTxCert ConwayEra ->
