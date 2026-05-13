@@ -22,6 +22,8 @@ blueprint handling have not started.
 - [ ] T007 [P] Add a unit test for matched blueprint datum/redeemer traversal
   into an open application value.
 - [ ] T008 [P] Add unit tests for missing and ambiguous blueprint fallback.
+- [x] T032 [P] Add QuickCheck properties for equality stopping, object
+  partitioning, array alignment, and scalar changed leaves.
 
 ## Phase 2: Diff Model
 
