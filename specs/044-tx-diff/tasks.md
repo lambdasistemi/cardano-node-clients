@@ -39,7 +39,7 @@ is proceeding field by field; blueprint handling has not started.
 ## Phase 3: Conway Traversal
 
 - [x] T014 Add the finite Conway transaction traversal table.
-- [ ] T015 Add transaction body traversal for fee, validity interval, inputs,
+- [x] T015 Add transaction body traversal for fee, validity interval, inputs,
   reference inputs, collateral inputs, outputs, mint, withdrawals, required
   signers, and total collateral.
 - [x] T033 Add the first Conway body traversal leaf: `body.fee`.
@@ -55,6 +55,7 @@ is proceeding field by field; blueprint handling has not started.
 - [x] T042 Add Conway body traversal for `body.totalCollateral`.
 - [x] T043 Add Conway body traversal for `body.requiredSigners`.
 - [x] T044 Add Conway body traversal for `body.withdrawals`.
+- [x] T045 Add Conway body traversal for `body.mint`.
 - [ ] T016 Add output traversal with address, value/coin, datum, and script
   leaves where exposed by the ledger API.
 - [ ] T017 Add opt-in witness traversal.

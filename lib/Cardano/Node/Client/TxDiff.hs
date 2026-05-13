@@ -26,6 +26,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Short qualified as SBS
 import Data.Foldable (toList)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -49,6 +50,7 @@ import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
+    mintTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
@@ -68,10 +70,15 @@ import Cardano.Ledger.Binary (serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
-import Cardano.Ledger.Hashes (extractHash)
+import Cardano.Ledger.Hashes (ScriptHash (..), extractHash)
 import Cardano.Ledger.Keys (
     KeyHash (..),
     KeyRole (Guard),
+ )
+import Cardano.Ledger.Mary.Value (
+    AssetName (..),
+    MultiAsset (..),
+    PolicyID (..),
  )
 import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
@@ -126,6 +133,9 @@ data ConwayDiffValue
     | ConwayTxInValue TxIn
     | ConwayKeyHashesValue [KeyHash Guard]
     | ConwayKeyHashValue (KeyHash Guard)
+    | ConwayMintValue MultiAsset
+    | ConwayAssetQuantitiesValue (Map AssetName Integer)
+    | ConwayIntegerValue Integer
     | ConwayWithdrawalsValue Withdrawals
     | ConwayValidityIntervalValue ValidityInterval
     | ConwaySlotBoundValue (StrictMaybe SlotNo)
@@ -295,6 +305,14 @@ conwayDiffEqual (ConwayKeyHashesValue left) (ConwayKeyHashesValue right) =
     left == right
 conwayDiffEqual (ConwayKeyHashValue left) (ConwayKeyHashValue right) =
     left == right
+conwayDiffEqual (ConwayMintValue left) (ConwayMintValue right) =
+    left == right
+conwayDiffEqual
+    (ConwayAssetQuantitiesValue left)
+    (ConwayAssetQuantitiesValue right) =
+        left == right
+conwayDiffEqual (ConwayIntegerValue left) (ConwayIntegerValue right) =
+    left == right
 conwayDiffEqual (ConwayWithdrawalsValue left) (ConwayWithdrawalsValue right) =
     left == right
 conwayDiffEqual (ConwayValidityIntervalValue left) (ConwayValidityIntervalValue right) =
@@ -329,6 +347,12 @@ conwayDiffSummary (ConwayKeyHashesValue keyHashes) =
     Just (keyHashesValue keyHashes)
 conwayDiffSummary (ConwayKeyHashValue keyHash) =
     Just (keyHashValue keyHash)
+conwayDiffSummary (ConwayMintValue mint) =
+    Just (mintValue mint)
+conwayDiffSummary (ConwayAssetQuantitiesValue assets) =
+    Just (assetQuantitiesValue assets)
+conwayDiffSummary (ConwayIntegerValue quantity) =
+    Just (Aeson.toJSON quantity)
 conwayDiffSummary (ConwayWithdrawalsValue withdrawals) =
     Just (withdrawalsValue withdrawals)
 conwayDiffSummary (ConwayValidityIntervalValue validity) =
@@ -371,6 +395,10 @@ conwayDiffProjection (ConwayBodyValue tx) =
                     Set.toAscList (tx ^. bodyTxL . inputsTxBodyL)
                 )
             ,
+                ( "mint"
+                , ConwayMintValue (tx ^. bodyTxL . mintTxBodyL)
+                )
+            ,
                 ( "referenceInputs"
                 , ConwayInputsValue $
                     Set.toAscList (tx ^. bodyTxL . referenceInputsTxBodyL)
@@ -410,6 +438,12 @@ conwayDiffProjection (ConwayKeyHashesValue keyHashes) =
     DiffArrayChildren (map ConwayKeyHashValue keyHashes)
 conwayDiffProjection (ConwayKeyHashValue keyHash) =
     DiffAtomic (keyHashValue keyHash)
+conwayDiffProjection (ConwayMintValue mint) =
+    DiffObjectChildren (mintChildren mint)
+conwayDiffProjection (ConwayAssetQuantitiesValue assets) =
+    DiffObjectChildren (assetQuantityChildren assets)
+conwayDiffProjection (ConwayIntegerValue quantity) =
+    DiffAtomic (Aeson.toJSON quantity)
 conwayDiffProjection (ConwayWithdrawalsValue withdrawals) =
     DiffObjectChildren (withdrawalChildren withdrawals)
 conwayDiffProjection (ConwayValidityIntervalValue validity) =
@@ -483,6 +517,46 @@ keyHashesValue keyHashes =
 keyHashValue :: KeyHash Guard -> Aeson.Value
 keyHashValue (KeyHash keyHash) =
     Aeson.String (hexText (hashToBytes keyHash))
+
+mintValue :: MultiAsset -> Aeson.Value
+mintValue mint =
+    objectValue
+        [ (policyIdKey policyId, assetQuantitiesValue assets)
+        | (policyId, assets) <- mintEntries mint
+        ]
+
+mintChildren :: MultiAsset -> Map Text ConwayDiffValue
+mintChildren mint =
+    Map.fromList
+        [ (policyIdKey policyId, ConwayAssetQuantitiesValue assets)
+        | (policyId, assets) <- mintEntries mint
+        ]
+
+mintEntries :: MultiAsset -> [(PolicyID, Map AssetName Integer)]
+mintEntries (MultiAsset policies) =
+    Map.toAscList policies
+
+assetQuantitiesValue :: Map AssetName Integer -> Aeson.Value
+assetQuantitiesValue assets =
+    objectValue
+        [ (assetNameKey assetName, Aeson.toJSON quantity)
+        | (assetName, quantity) <- Map.toAscList assets
+        ]
+
+assetQuantityChildren :: Map AssetName Integer -> Map Text ConwayDiffValue
+assetQuantityChildren assets =
+    Map.fromList
+        [ (assetNameKey assetName, ConwayIntegerValue quantity)
+        | (assetName, quantity) <- Map.toAscList assets
+        ]
+
+policyIdKey :: PolicyID -> Text
+policyIdKey (PolicyID (ScriptHash policyHash)) =
+    hexText (hashToBytes policyHash)
+
+assetNameKey :: AssetName -> Text
+assetNameKey (AssetName bytes) =
+    hexText (SBS.fromShort bytes)
 
 withdrawalsValue :: Withdrawals -> Aeson.Value
 withdrawalsValue withdrawals =

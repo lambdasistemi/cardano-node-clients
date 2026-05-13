@@ -46,6 +46,7 @@ import Cardano.Ledger.Api.Tx.Body (
     collateralInputsTxBodyL,
     feeTxBodyL,
     inputsTxBodyL,
+    mintTxBodyL,
     outputsTxBodyL,
     referenceInputsTxBodyL,
     reqSignerHashesTxBodyL,
@@ -73,10 +74,19 @@ import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (Script, eraProtVerLow)
 import Cardano.Ledger.Credential (Credential (KeyHashObj))
-import Cardano.Ledger.Hashes (extractHash, unsafeMakeSafeHash)
+import Cardano.Ledger.Hashes (
+    ScriptHash (..),
+    extractHash,
+    unsafeMakeSafeHash,
+ )
 import Cardano.Ledger.Keys (
     KeyHash (..),
     KeyRole (Guard),
+ )
+import Cardano.Ledger.Mary.Value (
+    AssetName (..),
+    MultiAsset (..),
+    PolicyID (..),
  )
 import Cardano.Ledger.Plutus.Language (
     Language (PlutusV3),
@@ -698,6 +708,78 @@ spec =
                         )
                     )
 
+        it "reports a Conway mint quantity change keyed by policy and asset" $ do
+            tx <- loadFixture sampleHash
+            let policyId = mkPolicyId 1
+                assetName = AssetName (SBS.pack [0xCA, 0xFE])
+                oldQuantity = 50
+                newQuantity = 60
+                txA =
+                    tx
+                        & bodyTxL
+                            . mintTxBodyL
+                            .~ MultiAsset
+                                ( Map.singleton
+                                    policyId
+                                    (Map.singleton assetName oldQuantity)
+                                )
+                txB =
+                    tx
+                        & bodyTxL
+                            . mintTxBodyL
+                            .~ MultiAsset
+                                ( Map.singleton
+                                    policyId
+                                    (Map.singleton assetName newQuantity)
+                                )
+                policyPath = policyIdKey policyId
+                assetPath = assetNameKey assetName
+            diffConwayTx txA txB
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["mint"] txA)
+                    ( Map.singleton
+                        "mint"
+                        ( DiffNode
+                            (DiffPath ["body", "mint"])
+                            ( DiffObject
+                                Map.empty
+                                ( Map.singleton
+                                    policyPath
+                                    ( DiffNode
+                                        (DiffPath ["body", "mint", policyPath])
+                                        ( DiffObject
+                                            Map.empty
+                                            ( Map.singleton
+                                                assetPath
+                                                ( DiffNode
+                                                    ( DiffPath
+                                                        [ "body"
+                                                        , "mint"
+                                                        , policyPath
+                                                        , assetPath
+                                                        ]
+                                                    )
+                                                    ( DiffChanged
+                                                        ( Aeson.toJSON
+                                                            oldQuantity
+                                                        )
+                                                        ( Aeson.toJSON
+                                                            newQuantity
+                                                        )
+                                                    )
+                                                )
+                                            )
+                                            Map.empty
+                                            Map.empty
+                                        )
+                                    )
+                                )
+                                Map.empty
+                                Map.empty
+                            )
+                        )
+                    )
+
 rootPath :: DiffPath
 rootPath =
     DiffPath []
@@ -779,6 +861,10 @@ bodyFieldValues tx =
             Set.toAscList (tx ^. bodyTxL . inputsTxBodyL)
         )
     ,
+        ( "mint"
+        , mintJson (tx ^. bodyTxL . mintTxBodyL)
+        )
+    ,
         ( "outputs"
         , outputsJson $
             toList (tx ^. bodyTxL . outputsTxBodyL)
@@ -853,6 +939,15 @@ mkRewardAccount n =
         Testnet
         (AccountId (KeyHashObj (mkKeyHash n)))
 
+mkPolicyId :: Int -> PolicyID
+mkPolicyId n =
+    let hexStr =
+            replicate 52 '0'
+                ++ hexByte (n `div` 256)
+                ++ hexByte (n `mod` 256)
+        h = fromJust (hashFromStringAsHex hexStr)
+     in PolicyID (ScriptHash h)
+
 keyHashesJson :: [KeyHash Guard] -> Aeson.Value
 keyHashesJson keyHashes =
     Aeson.toJSON (map keyHashJson keyHashes)
@@ -872,6 +967,30 @@ withdrawalsJson (Withdrawals withdrawals) =
 rewardAccountKey :: AccountAddress -> Text
 rewardAccountKey rewardAccount =
     hexText (serialize' (eraProtVerLow @ConwayEra) rewardAccount)
+
+mintJson :: MultiAsset -> Aeson.Value
+mintJson (MultiAsset policies) =
+    Aeson.Object $
+        KeyMap.fromList
+            [ (Key.fromText (policyIdKey policyId), assetQuantitiesJson assets)
+            | (policyId, assets) <- Map.toAscList policies
+            ]
+
+assetQuantitiesJson :: Map.Map AssetName Integer -> Aeson.Value
+assetQuantitiesJson assets =
+    Aeson.Object $
+        KeyMap.fromList
+            [ (Key.fromText (assetNameKey assetName), Aeson.toJSON quantity)
+            | (assetName, quantity) <- Map.toAscList assets
+            ]
+
+policyIdKey :: PolicyID -> Text
+policyIdKey (PolicyID (ScriptHash policyHash)) =
+    hexText (hashToBytes policyHash)
+
+assetNameKey :: AssetName -> Text
+assetNameKey (AssetName bytes) =
+    hexText (SBS.fromShort bytes)
 
 outputsJson :: [TxOut ConwayEra] -> Aeson.Value
 outputsJson outputs =
