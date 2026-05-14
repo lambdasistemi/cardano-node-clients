@@ -14,12 +14,18 @@ import Cardano.Node.Client.TxDiff (
     defaultTxDiffOptions,
     diffConwayTxInputWith,
     diffNodeHasChanges,
-    renderDiffNodeHuman,
+    renderDiffNodeHumanWith,
  )
 import Cardano.Node.Client.TxDiff.Blueprint (
     Blueprint,
     blueprintDataDecoder,
     parseBlueprintJSON,
+ )
+import Cardano.Node.Client.TxDiff.Cli (
+    TxDiffCliError (..),
+    TxDiffCliOptions (..),
+    parseTxDiffCliArgs,
+    txDiffCliUsage,
  )
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -28,36 +34,14 @@ import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure, exitSuccess)
 import System.IO (hPutStrLn, stderr)
 
-data CliOptions = CliOptions
-    { cliBlueprintPaths :: [FilePath]
-    , cliLeftPath :: FilePath
-    , cliRightPath :: FilePath
-    }
-
 main :: IO ()
 main = do
     args <- getArgs
-    maybe dieUsage runDiff (parseArgs args)
+    either dieUsage runDiff (parseTxDiffCliArgs args)
 
-parseArgs :: [String] -> Maybe CliOptions
-parseArgs =
-    go []
-  where
-    go blueprintPaths ("--blueprint" : blueprintPath : rest) =
-        go (blueprintPath : blueprintPaths) rest
-    go blueprintPaths [leftPath, rightPath] =
-        Just
-            CliOptions
-                { cliBlueprintPaths = reverse blueprintPaths
-                , cliLeftPath = leftPath
-                , cliRightPath = rightPath
-                }
-    go _ _ =
-        Nothing
-
-runDiff :: CliOptions -> IO ()
+runDiff :: TxDiffCliOptions -> IO ()
 runDiff cliOptions = do
-    blueprints <- traverse loadBlueprint (cliBlueprintPaths cliOptions)
+    blueprints <- traverse loadBlueprint (txDiffCliBlueprintPaths cliOptions)
     left <- BS.readFile leftPath
     right <- BS.readFile rightPath
     let options =
@@ -74,15 +58,18 @@ runDiff cliOptions = do
             hPutStrLn stderr ("tx-diff: failed to decode input: " <> show err)
             exitFailure
         Right diff -> do
-            TextIO.putStr (renderDiffNodeHuman diff)
+            TextIO.putStr $
+                renderDiffNodeHumanWith
+                    (txDiffCliHumanRenderOptions cliOptions)
+                    diff
             if diffNodeHasChanges diff
                 then exitFailure
                 else exitSuccess
   where
     leftPath =
-        cliLeftPath cliOptions
+        txDiffCliLeftPath cliOptions
     rightPath =
-        cliRightPath cliOptions
+        txDiffCliRightPath cliOptions
 
 loadBlueprint :: FilePath -> IO Blueprint
 loadBlueprint blueprintPath = do
@@ -96,8 +83,9 @@ loadBlueprint blueprintPath = do
         Right blueprint ->
             pure blueprint
 
-dieUsage :: IO a
-dieUsage = do
+dieUsage :: TxDiffCliError -> IO a
+dieUsage (TxDiffCliUsageError err) = do
     prog <- getProgName
-    hPutStrLn stderr $ "Usage: " <> prog <> " [--blueprint FILE ...] TX_A TX_B"
+    hPutStrLn stderr ("tx-diff: " <> err)
+    hPutStrLn stderr (txDiffCliUsage prog)
     exitFailure

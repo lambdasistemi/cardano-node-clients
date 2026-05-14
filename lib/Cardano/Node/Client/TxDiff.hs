@@ -14,12 +14,16 @@ module Cardano.Node.Client.TxDiff (
     DiffPlan (..),
     DiffPath (..),
     DiffProjection (..),
+    HumanRenderOptions (..),
     OpenValue (..),
+    RenderShape (..),
     TxDiffDataDecoder,
     TxDiffDataKind (..),
     TxDiffDataSelector (..),
     TxDiffOptions (..),
     TxInputDecodeError (..),
+    TreeArt (..),
+    defaultHumanRenderOptions,
     defaultTxDiffOptions,
     decodeConwayTxInput,
     diffConwayTxInput,
@@ -31,6 +35,7 @@ module Cardano.Node.Client.TxDiff (
     diffWith,
     renderConwayTxInputDiff,
     renderDiffNodeHuman,
+    renderDiffNodeHumanWith,
 ) where
 
 import Data.Aeson ((.:), (.=))
@@ -43,14 +48,17 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Short qualified as SBS
-import Data.Char (isHexDigit, isSpace)
+import Data.Char (isDigit, isHexDigit, isSpace)
 import Data.Foldable (toList)
+import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Tree qualified as Tree
+import Data.Tree.View qualified as TreeView
 import Lens.Micro ((^.))
 import Text.Read (readMaybe)
 
@@ -65,7 +73,7 @@ import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
 import Cardano.Ledger.Api.Scripts.Data (
-    Data,
+    Data (..),
     Datum (..),
     binaryDataToData,
  )
@@ -131,6 +139,7 @@ import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Slotting.Slot (SlotNo (..))
+import PlutusCore.Data qualified as PLC
 
 newtype DiffPath = DiffPath [Text]
     deriving stock (Eq, Show)
@@ -207,6 +216,33 @@ defaultTxDiffOptions =
     TxDiffOptions
         { txDiffIncludeWitnesses = False
         , txDiffDecodeData = Nothing
+        }
+
+-- | Human diff render shape.
+data RenderShape
+    = RenderTree
+    | RenderPaths
+    deriving stock (Eq, Show)
+
+-- | Tree connector style for tree-shaped human output.
+data TreeArt
+    = TreeArtAscii
+    | TreeArtUnicode
+    deriving stock (Eq, Show)
+
+-- | Options for human-oriented diff rendering.
+data HumanRenderOptions = HumanRenderOptions
+    { humanRenderShape :: RenderShape
+    , humanTreeArt :: TreeArt
+    }
+    deriving stock (Eq, Show)
+
+-- | Default human renderer: grouped tree output with portable ASCII art.
+defaultHumanRenderOptions :: HumanRenderOptions
+defaultHumanRenderOptions =
+    HumanRenderOptions
+        { humanRenderShape = RenderTree
+        , humanTreeArt = TreeArtAscii
         }
 
 data ConwayDiffValue
@@ -461,7 +497,202 @@ objectValue fields =
 
 renderDiffNodeHuman :: DiffNode -> Text
 renderDiffNodeHuman =
-    Text.unlines . renderDiffNodeLines
+    renderDiffNodeHumanWith defaultHumanRenderOptions
+
+renderDiffNodeHumanWith :: HumanRenderOptions -> DiffNode -> Text
+renderDiffNodeHumanWith options diff =
+    case humanRenderShape options of
+        RenderPaths ->
+            Text.unlines (renderDiffNodeLines diff)
+        RenderTree ->
+            renderDiffNodeTree (humanTreeArt options) diff
+
+data RenderTrie = RenderTrie
+    { renderTrieLeaves :: [Tree.Tree Text]
+    , renderTrieChildren :: Map Text RenderTrie
+    }
+
+data RenderSegmentSortKey
+    = RenderSegmentNumber Integer Text
+    | RenderSegmentText Text
+    deriving stock (Eq, Ord, Show)
+
+emptyRenderTrie :: RenderTrie
+emptyRenderTrie =
+    RenderTrie
+        { renderTrieLeaves = []
+        , renderTrieChildren = Map.empty
+        }
+
+renderDiffNodeTree :: TreeArt -> DiffNode -> Text
+renderDiffNodeTree treeArt diff@(DiffNode _ change) =
+    case change of
+        DiffSame _ ->
+            Text.unlines (renderDiffNodeLines diff)
+        _ ->
+            renderForest treeArt $
+                renderTrieForest (collectDiffTree emptyRenderTrie diff)
+
+collectDiffTree :: RenderTrie -> DiffNode -> RenderTrie
+collectDiffTree trie (DiffNode path change) =
+    case change of
+        DiffSame _ ->
+            trie
+        DiffChanged left right ->
+            insertPath
+                (renderChangedPathSegments path left right)
+                []
+                trie
+        DiffObject _ changed onlyA onlyB ->
+            let withChanged =
+                    foldl' collectDiffTree trie (Map.elems changed)
+                withOnlyA =
+                    foldl'
+                        (insertObjectOnly "-" path)
+                        withChanged
+                        (Map.toAscList onlyA)
+             in foldl'
+                    (insertObjectOnly "+" path)
+                    withOnlyA
+                    (Map.toAscList onlyB)
+        DiffArray _ changed onlyA onlyB ->
+            let withChanged =
+                    foldl'
+                        collectDiffTree
+                        trie
+                        (map snd changed)
+                withOnlyA =
+                    foldl'
+                        (insertArrayOnly "-" path)
+                        withChanged
+                        onlyA
+             in foldl'
+                    (insertArrayOnly "+" path)
+                    withOnlyA
+                    onlyB
+
+insertObjectOnly ::
+    Text ->
+    DiffPath ->
+    RenderTrie ->
+    (Text, Aeson.Value) ->
+    RenderTrie
+insertObjectOnly prefix path trie (key, value) =
+    insertOnlyValue prefix (path </> key) value trie
+
+insertArrayOnly ::
+    Text ->
+    DiffPath ->
+    RenderTrie ->
+    (Int, Aeson.Value) ->
+    RenderTrie
+insertArrayOnly prefix path trie (index, value) =
+    insertOnlyValue prefix (path </> Text.pack (show index)) value trie
+
+insertOnlyValue :: Text -> DiffPath -> Aeson.Value -> RenderTrie -> RenderTrie
+insertOnlyValue prefix (DiffPath segments) value =
+    case reverse segments of
+        [] ->
+            insertPath
+                ["<root>"]
+                [Tree.Node (prefix <> " " <> renderJsonValue value) []]
+        key : parentSegments ->
+            insertPath
+                (reverse parentSegments)
+                [ Tree.Node
+                    ( prefix
+                        <> " "
+                        <> key
+                        <> ": "
+                        <> renderJsonValue value
+                    )
+                    []
+                ]
+
+insertPath :: [Text] -> [Tree.Tree Text] -> RenderTrie -> RenderTrie
+insertPath [] leaves trie =
+    trie
+        { renderTrieLeaves = renderTrieLeaves trie <> leaves
+        }
+insertPath (segment : segments) leaves trie =
+    let children =
+            renderTrieChildren trie
+        child =
+            Map.findWithDefault emptyRenderTrie segment children
+     in trie
+            { renderTrieChildren =
+                Map.insert segment (insertPath segments leaves child) children
+            }
+
+renderedPathSegments :: DiffPath -> [Text]
+renderedPathSegments (DiffPath []) =
+    ["<root>"]
+renderedPathSegments (DiffPath segments) =
+    segments
+
+renderTrieForest :: RenderTrie -> [Tree.Tree Text]
+renderTrieForest trie =
+    renderTrieLeaves trie
+        <> [ Tree.Node label (renderTrieForest child)
+           | (label, child) <-
+                List.sortOn
+                    (renderSegmentSortKey . fst)
+                    (Map.toList (renderTrieChildren trie))
+           ]
+
+renderForest :: TreeArt -> [Tree.Tree Text] -> Text
+renderForest treeArt forest =
+    case treeArt of
+        TreeArtAscii ->
+            Text.unlines (concatMap renderAsciiTree forest)
+        TreeArtUnicode ->
+            Text.pack $
+                concatMap (TreeView.showTree . fmap Text.unpack) forest
+
+renderAsciiTree :: Tree.Tree Text -> [Text]
+renderAsciiTree (Tree.Node label children) =
+    label : renderAsciiChildren "" children
+
+renderAsciiChildren :: Text -> [Tree.Tree Text] -> [Text]
+renderAsciiChildren prefix children =
+    concat
+        [ (prefix <> connector <> label)
+            : renderAsciiChildren (prefix <> extension) grandchildren
+        | (index, Tree.Node label grandchildren) <- zip [0 :: Int ..] children
+        , let isLast = index == length children - 1
+              connector =
+                if isLast then "`- " else "+- "
+              extension =
+                if isLast then "   " else "|  "
+        ]
+
+renderChangedPathSegments :: DiffPath -> Aeson.Value -> Aeson.Value -> [Text]
+renderChangedPathSegments path left right =
+    case reverse (renderedPathSegments path) of
+        [] ->
+            [changedLabel "<root>" left right]
+        key : parentSegments ->
+            reverse parentSegments <> [changedLabel key left right]
+
+changedLabel :: Text -> Aeson.Value -> Aeson.Value -> Text
+changedLabel key left right =
+    key
+        <> ": A: "
+        <> renderJsonValue left
+        <> " | B: "
+        <> renderJsonValue right
+
+renderSegmentSortKey :: Text -> RenderSegmentSortKey
+renderSegmentSortKey label =
+    case readMaybe (Text.unpack sortText) of
+        Just number
+            | not (Text.null sortText) && Text.all isDigit sortText ->
+                RenderSegmentNumber number label
+        _ ->
+            RenderSegmentText label
+  where
+    sortText =
+        Text.takeWhile (/= ':') label
 
 renderDiffNodeLines :: DiffNode -> [Text]
 renderDiffNodeLines (DiffNode path change) =
@@ -947,21 +1178,21 @@ dataDiffProjection ::
 dataDiffProjection options selector datum =
     case txDiffDecodeData options of
         Nothing ->
-            DiffAtomic (dataValue datum)
+            openValueDiffProjection (dataOpenValue datum)
         Just decodeData ->
             case decodeData selector datum of
                 Right value ->
                     openValueDiffProjection value
-                Left reason ->
-                    DiffAtomic (dataDecodeFallbackValue reason datum)
+                Left _ ->
+                    openValueDiffProjection (dataOpenValue datum)
 
 datumDiffProjection ::
     TxDiffOptions -> Datum ConwayEra -> DiffProjection ConwayDiffValue
 datumDiffProjection options datum =
-    case (txDiffDecodeData options, inlineDatumData datum) of
-        (Just _, Just datumData) ->
+    case inlineDatumData datum of
+        Just datumData ->
             dataDiffProjection options datumDataSelector datumData
-        _ ->
+        Nothing ->
             DiffAtomic (datumValue datum)
 
 inlineDatumData :: Datum ConwayEra -> Maybe (Data ConwayEra)
@@ -980,12 +1211,32 @@ openValueDiffProjection value =
         DiffArrayChildren values ->
             DiffArrayChildren (map ConwayOpenValue values)
 
-dataDecodeFallbackValue :: Text -> Data ConwayEra -> Aeson.Value
-dataDecodeFallbackValue reason datum =
-    Aeson.object
-        [ "fallback" .= reason
-        , "raw" .= dataValue datum
+dataOpenValue :: Data ConwayEra -> OpenValue
+dataOpenValue (Data value) =
+    plutusDataOpenValue value
+
+plutusDataOpenValue :: PLC.Data -> OpenValue
+plutusDataOpenValue (PLC.I integer) =
+    OpenInteger integer
+plutusDataOpenValue (PLC.B bytes) =
+    OpenBytes (hexText bytes)
+plutusDataOpenValue (PLC.List values) =
+    OpenArray (map plutusDataOpenValue values)
+plutusDataOpenValue (PLC.Map entries) =
+    OpenArray
+        [ OpenObject $
+            Map.fromList
+                [ ("key", plutusDataOpenValue key)
+                , ("value", plutusDataOpenValue itemValue)
+                ]
+        | (key, itemValue) <- entries
         ]
+plutusDataOpenValue (PLC.Constr index fields) =
+    OpenObject $
+        Map.fromList
+            [ ("constructor", OpenInteger index)
+            , ("fields", OpenArray (map plutusDataOpenValue fields))
+            ]
 
 coinValue :: Coin -> Aeson.Value
 coinValue (Coin lovelace) =

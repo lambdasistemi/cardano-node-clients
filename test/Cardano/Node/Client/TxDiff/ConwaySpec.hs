@@ -175,10 +175,10 @@ spec =
                 Left err ->
                     expectationFailure ("failed to render tx diff: " <> show err)
                 Right output -> do
-                    output `shouldSatisfy` Text.isInfixOf "~ body.fee"
+                    output `shouldSatisfy` Text.isInfixOf "`- fee"
                     output
                         `shouldSatisfy` Text.isInfixOf
-                            "  B: 0.000042 ADA (42 lovelace)"
+                            "B: 0.000042 ADA (42 lovelace)"
 
         it "reports a Conway fee change at body.fee" $ do
             tx <- loadFixture sampleHash
@@ -447,9 +447,7 @@ spec =
                                                                 ( datumJson
                                                                     oldDatum
                                                                 )
-                                                                ( datumJson
-                                                                    newDatum
-                                                                )
+                                                                (Aeson.Number 42)
                                                             )
                                                         )
                                                     )
@@ -952,7 +950,7 @@ spec =
                                                 Map.empty
                                                 ( Map.singleton
                                                     datumPath
-                                                    (dataJson datumData)
+                                                    (Aeson.Number 42)
                                                 )
                                             )
                                         )
@@ -1036,12 +1034,8 @@ spec =
                                                                         ]
                                                                     )
                                                                     ( DiffChanged
-                                                                        ( dataJson
-                                                                            oldRedeemer
-                                                                        )
-                                                                        ( dataJson
-                                                                            newRedeemer
-                                                                        )
+                                                                        (Aeson.Number 1)
+                                                                        (Aeson.Number 2)
                                                                     )
                                                                 )
                                                             )
@@ -1101,9 +1095,44 @@ spec =
                         output = renderDiffNodeHuman (diffConwayTxWith options txA txB)
                     output
                         `shouldSatisfy` Text.isInfixOf
-                            "~ body.outputs.0.datum.amount"
-                    output `shouldSatisfy` Text.isInfixOf "  A: 42"
-                    output `shouldSatisfy` Text.isInfixOf "  B: 43"
+                            "amount: A: 42 | B: 43"
+
+        it "descends into inline output datum as raw Plutus data without a matching blueprint" $ do
+            tx <- loadFixture sampleHash
+            let outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
+            case outputs of
+                [] ->
+                    expectationFailure "fixture has no outputs"
+                firstOutput : otherOutputs -> do
+                    let oldDatum = inlineOrderDatum 42
+                        newDatum = inlineOrderDatum 43
+                        txA =
+                            tx
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ StrictSeq.fromList
+                                        ( ( firstOutput
+                                                & datumTxOutL .~ oldDatum
+                                          )
+                                            : otherOutputs
+                                        )
+                        txB =
+                            tx
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ StrictSeq.fromList
+                                        ( ( firstOutput
+                                                & datumTxOutL .~ newDatum
+                                          )
+                                            : otherOutputs
+                                        )
+                        output =
+                            renderDiffNodeHuman
+                                (diffConwayTxWith defaultTxDiffOptions txA txB)
+                    output `shouldSatisfy` Text.isInfixOf "`- datum"
+                    output `shouldSatisfy` Text.isInfixOf "`- fields"
+                    output `shouldSatisfy` Text.isInfixOf "0: A: 42 | B: 43"
+                    output `shouldNotSatisfy` Text.isInfixOf "cbor:"
 
         it "uses a matched blueprint decoder to descend into redeemer data fields" $ do
             tx <- loadFixture sampleHash
@@ -1132,10 +1161,9 @@ spec =
                 output = renderDiffNodeHuman (diffConwayTxWith options txA txB)
             output
                 `shouldSatisfy` Text.isInfixOf
-                    "~ witnesses.redeemers.spending.0.data.amount"
+                    "amount: A: 42 | B: 43"
             output
-                `shouldSatisfy` Text.isInfixOf
-                    "  B: 43"
+                `shouldNotSatisfy` Text.isInfixOf "cbor:"
 
         it "reports an opt-in Conway key witness deletion keyed by key hash" $ do
             tx <- loadFixture sampleHash

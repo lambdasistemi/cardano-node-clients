@@ -94,6 +94,7 @@ library
     Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
     Cardano.Node.Client.TxDiff
+    Cardano.Node.Client.TxDiff.Cli
     Cardano.Node.Client.TxGenerator.Build
     Cardano.Node.Client.TxGenerator.Daemon
     Cardano.Node.Client.TxGenerator.Fanout
@@ -170,6 +171,7 @@ library
     , text
     , time
     , transformers
+    , tree-view
     , typed-protocols
     , unix
 
@@ -304,6 +306,7 @@ test-suite unit-tests
     Cardano.Node.Client.TxBuildGoldenSpec
     Cardano.Node.Client.TxBuildSpec
     Cardano.Node.Client.TxDiff.BlueprintSpec
+    Cardano.Node.Client.TxDiff.CliSpec
     Cardano.Node.Client.TxDiff.ConwaySpec
     Cardano.Node.Client.TxDiff.CoreSpec
     Cardano.Node.Client.TxDiffSpec

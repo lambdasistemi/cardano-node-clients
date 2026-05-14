@@ -31,10 +31,15 @@ import Cardano.Node.Client.TxDiff (
     DiffNode (..),
     DiffPath (..),
     DiffPlan (..),
+    HumanRenderOptions (..),
     OpenValue (..),
+    RenderShape (..),
+    TreeArt (..),
+    defaultHumanRenderOptions,
     diffOpenValue,
     diffWith,
     renderDiffNodeHuman,
+    renderDiffNodeHumanWith,
  )
 
 spec :: Spec
@@ -182,7 +187,37 @@ spec =
                         [(3, Aeson.String "inserted")]
                     )
 
-        it "renders collected diff tree as human-readable path lines" $ do
+        it "renders collected diff tree as grouped ASCII tree by default" $ do
+            let left =
+                    OpenObject
+                        [
+                            ( "body"
+                            , OpenObject
+                                [ ("fee", OpenInteger 1)
+                                , ("ttl", OpenInteger 10)
+                                , ("same", OpenText "keep")
+                                ]
+                            )
+                        ]
+                right =
+                    OpenObject
+                        [
+                            ( "body"
+                            , OpenObject
+                                [ ("fee", OpenInteger 2)
+                                , ("ttl", OpenInteger 11)
+                                , ("same", OpenText "keep")
+                                ]
+                            )
+                        ]
+            renderDiffNodeHuman (diffOpenValue left right)
+                `shouldBe` Text.unlines
+                    [ "body"
+                    , "+- fee: A: 1 | B: 2"
+                    , "`- ttl: A: 10 | B: 11"
+                    ]
+
+        it "renders collected diff tree as explicit path lines" $ do
             let left =
                     OpenObject
                         [ ("same", OpenInteger 1)
@@ -195,13 +230,119 @@ spec =
                         , ("changed", OpenText "right")
                         , ("onlyB", OpenBytes "bb")
                         ]
-            renderDiffNodeHuman (diffOpenValue left right)
+                options =
+                    defaultHumanRenderOptions
+                        { humanRenderShape = RenderPaths
+                        }
+            renderDiffNodeHumanWith options (diffOpenValue left right)
                 `shouldBe` Text.unlines
                     [ "~ changed"
                     , "  A: \"left\""
                     , "  B: \"right\""
                     , "- onlyA: {\"bytes\":\"aa\"}"
                     , "+ onlyB: {\"bytes\":\"bb\"}"
+                    ]
+
+        it "preserves array-only tail entries in explicit path mode" $ do
+            let left =
+                    OpenArray
+                        [ OpenText "same"
+                        , OpenText "left-tail"
+                        ]
+                right =
+                    OpenArray
+                        [ OpenText "same"
+                        , OpenText "right-tail"
+                        , OpenText "inserted"
+                        ]
+                options =
+                    defaultHumanRenderOptions
+                        { humanRenderShape = RenderPaths
+                        }
+            renderDiffNodeHumanWith options (diffOpenValue left right)
+                `shouldBe` Text.unlines
+                    [ "~ 1"
+                    , "  A: \"left-tail\""
+                    , "  B: \"right-tail\""
+                    , "+ 2: \"inserted\""
+                    ]
+
+        it "renders tree output with Unicode connector art on request" $ do
+            let left =
+                    OpenObject
+                        [
+                            ( "body"
+                            , OpenObject
+                                [ ("fee", OpenInteger 1)
+                                , ("ttl", OpenInteger 10)
+                                ]
+                            )
+                        ]
+                right =
+                    OpenObject
+                        [
+                            ( "body"
+                            , OpenObject
+                                [ ("fee", OpenInteger 2)
+                                , ("ttl", OpenInteger 11)
+                                ]
+                            )
+                        ]
+                options =
+                    defaultHumanRenderOptions
+                        { humanTreeArt = TreeArtUnicode
+                        }
+            renderDiffNodeHumanWith options (diffOpenValue left right)
+                `shouldBe` Text.unlines
+                    [ "body"
+                    , " ├╴fee: A: 1 | B: 2"
+                    , " └╴ttl: A: 10 | B: 11"
+                    ]
+
+        it "orders numeric tree path segments numerically" $ do
+            let left =
+                    OpenObject
+                        [
+                            ( "outputs"
+                            , OpenArray
+                                [ OpenText "same"
+                                , OpenText "same"
+                                , OpenInteger 2
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenInteger 10
+                                ]
+                            )
+                        ]
+                right =
+                    OpenObject
+                        [
+                            ( "outputs"
+                            , OpenArray
+                                [ OpenText "same"
+                                , OpenText "same"
+                                , OpenInteger 20
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenText "same"
+                                , OpenInteger 100
+                                ]
+                            )
+                        ]
+            renderDiffNodeHuman (diffOpenValue left right)
+                `shouldBe` Text.unlines
+                    [ "outputs"
+                    , "+- 2: A: 2 | B: 20"
+                    , "`- 10: A: 10 | B: 100"
                     ]
 
         it "renders known coin values with exact ADA and lovelace units" $ do
@@ -214,9 +355,8 @@ spec =
                         )
             renderDiffNodeHuman diff
                 `shouldBe` Text.unlines
-                    [ "~ body.fee"
-                    , "  A: 1.000000 ADA (1000000 lovelace)"
-                    , "  B: 1.500000 ADA (1500000 lovelace)"
+                    [ "body"
+                    , "`- fee: A: 1.000000 ADA (1000000 lovelace) | B: 1.500000 ADA (1500000 lovelace)"
                     ]
 
         it "summarizes raw CBOR payloads in human-readable output" $ do
@@ -229,9 +369,10 @@ spec =
                         )
             renderDiffNodeHuman diff
                 `shouldBe` Text.unlines
-                    [ "~ body.outputs.0.datum"
-                    , "  A: cbor:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... (40 bytes)"
-                    , "  B: cbor:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... (40 bytes)"
+                    [ "body"
+                    , "`- outputs"
+                    , "   `- 0"
+                    , "      `- datum: A: cbor:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... (40 bytes) | B: cbor:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... (40 bytes)"
                     ]
 
         it "reports any equal generated value as same at the root" $
