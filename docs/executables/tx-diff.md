@@ -124,7 +124,10 @@ tx-diff --collapse-rules collapse.yaml --blueprint plutus.json tx-a.cbor tx-b.cb
 
 ```text
 tx-diff [--render tree|paths] [--tree-art ascii|unicode] \
-  [--collapse-rules FILE] [--blueprint FILE ...] TX_A TX_B
+  [--collapse-rules FILE] [--blueprint FILE ...] \
+  [--resolve-n2c SOCKET --network-magic N] \
+  [--resolve-web2 URL [--web2-api-key-file PATH]] \
+  TX_A TX_B
 ```
 
 Arguments:
@@ -140,6 +143,18 @@ Options:
 - `--tree-art unicode`: use Unicode tree connectors.
 - `--blueprint FILE`: load a Plutus blueprint. The option can be repeated.
 - `--collapse-rules FILE`: load YAML rules for named list-diff views.
+- `--resolve-n2c SOCKET`: resolve inputs against a local cardano-node Unix
+  socket. Requires `--network-magic`.
+- `--network-magic N`: network magic (e.g. `764824073` for mainnet,
+  `2` for preview, `1` for preprod). Required alongside `--resolve-n2c`.
+- `--resolve-web2 URL`: resolve inputs against a Blockfrost-compatible web2
+  endpoint that exposes `GET <URL>/txs/<txid>/cbor`.
+- `--web2-api-key-file PATH`: file containing the API key sent as the
+  `project_id` header. Surrounding whitespace is stripped. Only valid with
+  `--resolve-web2`. Falls back to the `TX_DIFF_WEB2_API_KEY` environment
+  variable when this flag is absent; if neither is set, the request goes
+  out without a key, which suits self-hosted Blockfrost-compatible
+  endpoints.
 
 Exit status:
 
@@ -266,6 +281,85 @@ With `views.raw: hide`, the raw branch is omitted, but unrepresented diffs are
 not dropped. Changed leaves, insertions, and deletions not represented by a
 named view render directly under their original numeric indexes.
 
+## Input Resolution
+
+By default, `tx-diff` is offline: each input of either transaction renders as
+an atomic `txId#ix` leaf. Two opt-in resolvers can attach the referenced
+`TxOut` (address, coin, datum, reference script) to every input the resolver
+can find. Both spending, reference, and collateral inputs are covered.
+
+### N2C: local cardano-node
+
+```bash
+tx-diff \
+  --resolve-n2c /run/cardano-node/node.socket \
+  --network-magic 764824073 \
+  tx-a.cbor tx-b.cbor
+```
+
+`--resolve-n2c` opens an N2C `LocalStateQuery` session against a running
+node. It returns only *currently unspent* UTxOs: inputs whose referenced
+output has already been consumed will not be resolved by this path.
+
+The user owns the socket, so this path has no third-party exposure. The
+resolver name reported in diagnostics is `n2c`.
+
+### Web2: Blockfrost-compatible CBOR endpoint
+
+```bash
+# canonical: secret on disk, no exposure via `ps` or shell history
+tx-diff \
+  --resolve-web2 https://cardano-mainnet.blockfrost.io/api/v0 \
+  --web2-api-key-file /run/secrets/blockfrost-mainnet \
+  tx-a.cbor tx-b.cbor
+
+# alternative: env var fallback when --web2-api-key-file is absent
+TX_DIFF_WEB2_API_KEY=mainnetXXXX tx-diff \
+  --resolve-web2 https://cardano-mainnet.blockfrost.io/api/v0 \
+  tx-a.cbor tx-b.cbor
+```
+
+`--resolve-web2` issues one HTTPS GET per *distinct* referenced transaction
+id (`GET <URL>/txs/<txId>/cbor`) and indexes into the decoded transaction's
+outputs to recover the referenced `TxOut`. Spent inputs resolve through this
+path because the provider returns the historical transaction.
+
+**Privacy and trust.** Web2 resolution sends transaction identifiers to a
+third party. The provider learns which transactions you are inspecting. Use
+the N2C path or a self-hosted Blockfrost-compatible service when this is a
+concern.
+
+The resolver name reported in diagnostics is `web2`.
+
+### Combining N2C and web2
+
+When both flags are present, the N2C resolver is asked first: it is cheap,
+local, and leaks nothing. The web2 resolver only sees the inputs N2C could
+not resolve — typically inputs that are already spent.
+
+```bash
+tx-diff \
+  --resolve-n2c /run/cardano-node/node.socket \
+  --network-magic 764824073 \
+  --resolve-web2 https://cardano-mainnet.blockfrost.io/api/v0 \
+  --web2-api-key-file /run/secrets/blockfrost-mainnet \
+  tx-a.cbor tx-b.cbor
+```
+
+### Unresolved inputs
+
+If no configured resolver returns an entry for some input, `tx-diff` does not
+fail: the input renders without the resolved subtree, the rest of the diff
+continues, and one stderr line per unresolved input names the input and the
+resolvers that were asked:
+
+```text
+tx-diff: input 8b3a…#0 not resolved by [n2c]
+tx-diff: input 12ef…#1 not resolved by [n2c, web2]
+```
+
+The order in the bracket matches the order resolvers were tried.
+
 ## Tutorial: Swap Order Review
 
 This example groups repeated output differences under a semantic `swapOrders`
@@ -370,18 +464,12 @@ The collapse view hides something I expected to see
 
 ## Roadmap
 
-The current release compares the two transaction bodies provided on disk. Two
-follow-up capabilities are planned:
+The current release compares the two transaction bodies provided on disk and
+optionally resolves their referenced UTxOs via N2C or a Blockfrost-compatible
+endpoint (see *Input Resolution* above). The next planned capability is:
 
 - **WASM support**: make the tx-diff engine available in browser and other
   WebAssembly environments.
-- **Input resolution through cardano-node N2C**: connect to a local
-  cardano-node socket to resolve transaction inputs while diffing, so the
-  output can include context that is not present in the signed transaction
-  bytes alone.
-
-These are not required for the release artifacts above. They are listed here
-so users know where the executable is heading.
 
 ## Specification Contract
 
