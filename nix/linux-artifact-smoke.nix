@@ -86,6 +86,14 @@ pkgs.writeShellApplication {
       smoke_cli "$bin"
     }
 
+    reject_duplicate_appimage() {
+      duplicate="$artifacts_dir/$executable_name.AppImage"
+      if [ -e "$duplicate" ]; then
+        echo "unexpected duplicate AppImage asset: $duplicate" >&2
+        exit 1
+      fi
+    }
+
     smoke_deb() {
       deb="$artifacts_dir/$executable_name-$artifact_version-$system_suffix.deb"
       test -f "$deb"
@@ -109,6 +117,7 @@ pkgs.writeShellApplication {
       smoke_cli "$bin"
     }
 
+    reject_duplicate_appimage
     smoke_appimage
     smoke_deb
     smoke_rpm
