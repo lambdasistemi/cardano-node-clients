@@ -23,7 +23,6 @@ pkgs.runCommand
   mkdir -p "$out"
 
   cp -L ${appImage} "$out/${executableName}-${artifactVersion}-${system}.AppImage"
-  cp -L ${appImage} "$out/${executableName}.AppImage"
 
   deb_file="$(find ${deb} -maxdepth 1 -type f -name '*.deb' | head -1)"
   rpm_file="$(find ${rpm} -maxdepth 1 -type f -name '*.rpm' | head -1)"
