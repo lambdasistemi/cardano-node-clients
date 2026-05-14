@@ -119,7 +119,21 @@
             };
           };
           components = project.hsPkgs.cardano-node-clients.components;
-          txDiff = components.exes.tx-diff;
+          # tx-diff's web2 resolver uses http-client-tls and needs a CA
+          # bundle at runtime. Wrap the raw executable so it points at the
+          # cacert store baked into the nix closure. AppImage/DEB/RPM
+          # bundlers include the wrapper and its closure, so HTTPS works
+          # without the user setting SSL_CERT_FILE themselves.
+          txDiff = pkgs.symlinkJoin {
+            name = "tx-diff";
+            paths = [ components.exes.tx-diff ];
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postBuild = ''
+              wrapProgram $out/bin/tx-diff \
+                --set-default SSL_CERT_FILE \
+                  ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+            '';
+          };
           packageVersion =
             let
               versionLines =

@@ -32,6 +32,7 @@ pkgs.dockerTools.buildImage {
       pkgs.jq
       pkgs.gnugrep
       pkgs.netcat-openbsd
+      pkgs.cacert
       usrBinEnv
       components.exes.cardano-tx-generator
     ];
