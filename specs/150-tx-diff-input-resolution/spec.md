@@ -11,7 +11,7 @@ for `tx-diff`.
 ### User Story 1 - Resolve Spent Inputs Via Blockfrost (Priority: P1)
 
 A `tx-diff` user passes `--resolve-web2 https://cardano-mainnet.blockfrost.io
---web2-api-key $BLOCKFROST_KEY` and the renderer shows, for each spending,
+--web2-api-key-file /run/secrets/blockfrost-mainnet` and the renderer shows, for each spending,
 collateral, and reference input, the address, coin, datum, and reference
 script of the output the input refers to. Spent UTxOs resolve too because
 Blockfrost returns the historical transaction CBOR.
@@ -133,8 +133,8 @@ it). Both render with resolution children.
 ### Functional Requirements
 
 - **FR-001**: tx-diff MUST accept `--resolve-web2 URL` and
-  `--web2-api-key KEY` flags that select Blockfrost-style transaction CBOR
-  download for input resolution. `--web2-api-key` MAY be omitted if the URL
+  `--web2-api-key-file PATH` flags that select Blockfrost-style transaction CBOR
+  download for input resolution. `--web2-api-key-file` MAY be omitted if the URL
   needs no key.
 - **FR-002**: tx-diff MUST accept `--resolve-n2c PATH` and
   `--network-magic N` flags that select a local cardano-node N2C resolver.
