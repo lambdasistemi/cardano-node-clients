@@ -1,0 +1,161 @@
+name: Darwin Dev Homebrew
+
+on:
+  workflow_dispatch:
+    inputs:
+      update_tap:
+        description: "Update lambdasistemi/homebrew-tap with the dev formula"
+        type: choice
+        options: [ "yes", "no" ]
+        default: "yes"
+  pull_request:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/darwin-dev-homebrew.yml"
+      - ".github/workflows/darwin-release.yml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "scripts/release/**"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: darwin-dev-homebrew-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-register:
+    name: Build and register tx-diff dev Homebrew formula
+    runs-on: macos-14
+    env:
+      DEV_TAG: dev-homebrew
+      UPDATE_TAP: ${{ inputs.update_tap || 'yes' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            extra-substituters = https://cache.iog.io https://paolino.cachix.org
+            extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= paolino.cachix.org-1:ecmgO3CXdgSWA2cHlm4srknd/cLFMLmK3i3NrzeDFaE=
+
+      - uses: cachix/cachix-action@v17
+        with:
+          name: paolino
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Build dev Homebrew artifacts
+        id: dev-artifacts
+        run: |
+          set -euo pipefail
+          artifacts="$(
+            nix build -L --print-out-paths \
+              --out-link /tmp/darwin-dev-homebrew-artifacts \
+              .#darwin-dev-homebrew-artifacts
+          )"
+          tarball="$(
+            find "$artifacts" -maxdepth 1 -type f \
+              -name 'tx-diff-*-aarch64-darwin.tar.gz'
+          )"
+          formula="$artifacts/tx-diff-dev.rb"
+
+          if [ -z "$tarball" ]; then
+            echo "missing Darwin dev tarball in $artifacts" >&2
+            exit 1
+          fi
+          if [ ! -f "$formula" ]; then
+            echo "missing dev Homebrew formula: $formula" >&2
+            exit 1
+          fi
+
+          cat "$artifacts/SHA256SUMS"
+          {
+            printf 'path=%s\n' "$artifacts"
+            printf 'tarball=%s\n' "$tarball"
+            printf 'formula=%s\n' "$formula"
+            printf 'asset=%s\n' "$(basename "$tarball")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: darwin-dev-homebrew-artifacts
+          path: |
+            ${{ steps.dev-artifacts.outputs.tarball }}
+            ${{ steps.dev-artifacts.outputs.formula }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish dev GitHub release asset
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$(mktemp)"
+          {
+            printf "Development Homebrew build for \`%s\`.\n\n" "$GITHUB_SHA"
+            printf "Formula: \`tx-diff-dev\`\n"
+            printf "Asset: \`%s\`\n" "${{ steps.dev-artifacts.outputs.asset }}"
+          } > "$notes"
+
+          git tag -f "$DEV_TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$DEV_TAG"
+
+          gh release view "$DEV_TAG" >/dev/null 2>&1 \
+            || gh release create "$DEV_TAG" \
+              --title "tx-diff dev Homebrew" \
+              --notes-file "$notes" \
+              --prerelease
+          gh release edit "$DEV_TAG" \
+            --title "tx-diff dev Homebrew" \
+            --notes-file "$notes" \
+            --prerelease
+          gh release upload \
+            "$DEV_TAG" \
+            "${{ steps.dev-artifacts.outputs.tarball }}" \
+            --clobber
+
+      - name: Update Homebrew dev formula
+        if: ${{ github.event_name == 'workflow_dispatch' && env.UPDATE_TAP == 'yes' }}
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone \
+            "https://x-access-token:${TAP_TOKEN}@github.com/lambdasistemi/homebrew-tap.git" \
+            /tmp/tap
+          mkdir -p /tmp/tap/Formula
+          cp \
+            "${{ steps.dev-artifacts.outputs.formula }}" \
+            /tmp/tap/Formula/tx-diff-dev.rb
+
+          cd /tmp/tap
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add Formula/tx-diff-dev.rb
+          git diff --cached --quiet \
+            || git commit -m "update tx-diff dev to ${GITHUB_SHA::12}"
+          git push
+
+      - name: Test Homebrew dev install
+        if: ${{ github.event_name == 'workflow_dispatch' && env.UPDATE_TAP == 'yes' }}
+        run: |
+          set -euo pipefail
+          brew tap lambdasistemi/tap
+          brew install lambdasistemi/tap/tx-diff-dev
+          if tx-diff >/tmp/tx-diff.out 2>&1; then
+            cat /tmp/tx-diff.out
+            exit 1
+          fi
+          cat /tmp/tx-diff.out
+          grep -F "Usage:" /tmp/tx-diff.out >/dev/null
+          grep -F "[--blueprint FILE ...]" /tmp/tx-diff.out >/dev/null
+          otool -L "$(which tx-diff)"

@@ -93,6 +93,7 @@ library
     Cardano.Node.Client.Provider
     Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
+    Cardano.Node.Client.TxDiff
     Cardano.Node.Client.TxGenerator.Build
     Cardano.Node.Client.TxGenerator.Daemon
     Cardano.Node.Client.TxGenerator.Fanout
@@ -171,6 +172,26 @@ library
     , transformers
     , typed-protocols
     , unix
+
+library plutus-blueprint
+  import:           warnings
+  visibility:       public
+  hs-source-dirs:   lib-plutus-blueprint
+  default-language: GHC2021
+  exposed-modules:  Cardano.Node.Client.TxDiff.Blueprint
+  build-depends:
+    , aeson
+    , base
+    , base16-bytestring
+    , bytestring
+    , cardano-ledger-api
+    , cardano-ledger-binary
+    , cardano-ledger-conway
+    , cardano-ledger-core
+    , cardano-node-clients
+    , containers
+    , plutus-core
+    , text
 
 library devnet
   import:           warnings
@@ -256,6 +277,18 @@ executable cardano-tx-generator
     , base
     , cardano-node-clients
 
+executable tx-diff
+  import:           warnings
+  hs-source-dirs:   app/tx-diff
+  main-is:          Main.hs
+  default-language: GHC2021
+  build-depends:
+    , base
+    , bytestring
+    , cardano-node-clients
+    , cardano-node-clients:plutus-blueprint
+    , text
+
 test-suite unit-tests
   import:           warnings
   type:             exitcode-stdio-1.0
@@ -270,6 +303,10 @@ test-suite unit-tests
     Cardano.Node.Client.N2C.TraceSpec
     Cardano.Node.Client.TxBuildGoldenSpec
     Cardano.Node.Client.TxBuildSpec
+    Cardano.Node.Client.TxDiff.BlueprintSpec
+    Cardano.Node.Client.TxDiff.ConwaySpec
+    Cardano.Node.Client.TxDiff.CoreSpec
+    Cardano.Node.Client.TxDiffSpec
     Cardano.Node.Client.TxGenerator.FanoutSpec
     Cardano.Node.Client.TxGenerator.PersistSpec
     Cardano.Node.Client.TxGenerator.PopulationSpec
@@ -300,6 +337,7 @@ test-suite unit-tests
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-node-clients
+    , cardano-node-clients:plutus-blueprint
     , cardano-node-clients:tx-build
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting

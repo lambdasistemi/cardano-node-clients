@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+version="$(scripts/release/get-cabal-version)"
+
+changelog_has_release() {
+  local release_version="$1"
+  local line
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "## [$release_version]"* ]] \
+      || [[ "$line" == "## $release_version" ]] \
+      || [[ "$line" == "## $release_version "* ]]; then
+      return 0
+    fi
+  done <CHANGELOG.md
+
+  return 1
+}
+
+case "$version" in
+  *[!0-9.]* | .* | *..* | *.)
+    echo "invalid Cabal version: $version" >&2
+    exit 1
+    ;;
+esac
+
+if [[ -e release-please-config.json ]]; then
+  echo "release-please-config.json must not exist; Cabal owns releases" >&2
+  exit 1
+fi
+
+if [[ -e .release-please-manifest.json ]]; then
+  echo ".release-please-manifest.json must not exist; Cabal owns releases" >&2
+  exit 1
+fi
+
+if [[ -e version.txt ]]; then
+  echo "version.txt must not exist; Cabal owns releases" >&2
+  exit 1
+fi
+
+tag="${1:-}"
+if [[ -z "$tag" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+  tag="${GITHUB_REF_NAME:-}"
+fi
+
+branch_name="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}"
+if [[ -z "$tag" && "$branch_name" == "${RELEASE_BRANCH:-release/cabal-release}" ]]; then
+  tag="v$version"
+fi
+
+if [[ -n "$tag" ]]; then
+  tag_version="${tag#refs/tags/}"
+  tag_version="${tag_version#v}"
+
+  if [[ "$tag_version" != "$version" ]]; then
+    echo "tag version $tag_version does not match Cabal version $version" >&2
+    exit 1
+  fi
+
+  if ! changelog_has_release "$version"; then
+    echo "CHANGELOG.md has no release section for $version" >&2
+    exit 1
+  fi
+fi
+
+echo "release version contract ok: Cabal $version"

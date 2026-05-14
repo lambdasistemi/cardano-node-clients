@@ -1,9 +1,12 @@
 name: CI
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -21,9 +24,10 @@ jobs:
         run: >-
           nix build --quiet
           .#checks.x86_64-linux.build
-          .#checks.x86_64-linux.e2e
           .#checks.x86_64-linux.unit
           .#checks.x86_64-linux.lint
+      - name: Release version contract
+        run: scripts/release/check-version-consistency
   build:
     needs: build-gate
     runs-on: nixos

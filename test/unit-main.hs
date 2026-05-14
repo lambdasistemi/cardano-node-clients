@@ -8,6 +8,7 @@ import Cardano.Node.Client.N2C.ProbeSpec qualified as N2CProbeSpec
 import Cardano.Node.Client.N2C.TraceSpec qualified as N2CTraceSpec
 import Cardano.Node.Client.TxBuildGoldenSpec qualified as TxBuildGoldenSpec
 import Cardano.Node.Client.TxBuildSpec qualified as TxBuildSpec
+import Cardano.Node.Client.TxDiffSpec qualified as TxDiffSpec
 import Cardano.Node.Client.TxGenerator.FanoutSpec qualified as TxGeneratorFanoutSpec
 import Cardano.Node.Client.TxGenerator.PersistSpec qualified as TxGeneratorPersistSpec
 import Cardano.Node.Client.TxGenerator.PopulationSpec qualified as TxGeneratorPopulationSpec
@@ -29,6 +30,7 @@ main = hspec $ do
     BalanceSpec.spec
     TxBuildSpec.spec
     TxBuildGoldenSpec.spec
+    TxDiffSpec.spec
     UTxOIndexerTypesSpec.spec
     UTxOIndexerSpec.spec
     UTxOIndexerServerSpec.spec
