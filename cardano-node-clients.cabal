@@ -96,6 +96,7 @@ library
     Cardano.Node.Client.TxDiff
     Cardano.Node.Client.TxDiff.Cli
     Cardano.Node.Client.TxDiff.Resolver
+    Cardano.Node.Client.TxDiff.Resolver.N2C
     Cardano.Node.Client.TxGenerator.Build
     Cardano.Node.Client.TxGenerator.Daemon
     Cardano.Node.Client.TxGenerator.Fanout
