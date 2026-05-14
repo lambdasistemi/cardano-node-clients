@@ -1,0 +1,43 @@
+name: Release Planner
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: release-planner
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      RELEASE_BOT_SSH_KEY_SET: ${{ secrets.RELEASE_BOT_SSH_KEY != '' }}
+    steps:
+      - name: Validate release bot deploy key secret
+        if: ${{ env.RELEASE_BOT_SSH_KEY_SET != 'true' }}
+        run: |
+          echo "::error::Configure RELEASE_BOT_SSH_KEY with the release deploy key private half."
+          exit 1
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_BOT_SSH_KEY }}
+
+      - name: Use deploy key for release git writes
+        run: git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
+
+      - name: Plan or tag Cabal release
+        run: scripts/release/plan

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cabal_file="${1:-cardano-node-clients.cabal}"
+
+while read -r field version _; do
+  if [[ "$field" == "version:" ]]; then
+    printf '%s\n' "$version"
+    exit 0
+  fi
+done <"$cabal_file"
+
+exit 1

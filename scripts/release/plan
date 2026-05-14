@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+owner_repo="${GITHUB_REPOSITORY:-lambdasistemi/cardano-node-clients}"
+base_branch="${BASE_BRANCH:-main}"
+release_branch="${RELEASE_BRANCH:-release/cabal-release}"
+dry_run="${RELEASE_PLAN_DRY_RUN:-0}"
+cabal_file="cardano-node-clients.cabal"
+package_name="cardano-node-clients"
+
+if [[ -n "${GITHUB_ACTIONS:-}" && "${RELEASE_BOT_SSH_KEY_SET:-true}" != "true" ]]; then
+  echo "::error::Configure RELEASE_BOT_SSH_KEY so release PR and tag pushes are made by the deploy key."
+  exit 1
+fi
+
+current_version="$(scripts/release/get-cabal-version "$cabal_file")"
+current_tag="v$current_version"
+
+latest_tag="$(
+  git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname \
+    | head -1
+)"
+
+changelog_has_release() {
+  local version="$1"
+  grep -Eq "^## \\[$version\\]|^## $version( |$)" CHANGELOG.md
+}
+
+open_release_pr_number() {
+  gh pr list \
+    --repo "$owner_repo" \
+    --state open \
+    --head "$release_branch" \
+    --json number \
+    --jq '.[0].number // empty'
+}
+
+if ! git rev-parse -q --verify "refs/tags/$current_tag" >/dev/null \
+  && changelog_has_release "$current_version"; then
+  if [[ "$dry_run" == "1" ]]; then
+    echo "would tag $current_tag"
+    exit 0
+  fi
+
+  git config user.name "amaru-release-bot"
+  git config user.email "actions@github.com"
+  git tag -a "$current_tag" -m "$package_name $current_tag"
+  git push origin "$current_tag"
+  echo "tagged $current_tag"
+  exit 0
+fi
+
+range=()
+if [[ -n "$latest_tag" ]]; then
+  range=("$latest_tag..HEAD")
+fi
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+commits_tsv="$tmpdir/commits.tsv"
+git log --reverse --format='%H%x09%s' "${range[@]}" >"$commits_tsv"
+
+bump="none"
+features="$tmpdir/features.md"
+fixes="$tmpdir/fixes.md"
+performance="$tmpdir/performance.md"
+breaking="$tmpdir/breaking.md"
+: >"$features"
+: >"$fixes"
+: >"$performance"
+: >"$breaking"
+
+escape_markdown() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g'
+}
+
+while IFS=$'\t' read -r sha subject; do
+  [[ -n "$sha" ]] || continue
+
+  body="$(git log -n1 --format=%B "$sha")"
+  type=""
+  scope=""
+  bang=""
+  desc="$subject"
+
+  if [[ "$subject" =~ ^([A-Za-z]+)(\(([A-Za-z0-9_.-]+)\))?(!)?:[[:space:]](.+)$ ]]; then
+    type="${BASH_REMATCH[1]}"
+    scope="${BASH_REMATCH[3]:-}"
+    bang="${BASH_REMATCH[4]:-}"
+    desc="${BASH_REMATCH[5]}"
+  fi
+
+  is_breaking=0
+  if [[ "$bang" == "!" ]] \
+    || grep -Eq '(^|[[:space:]])BREAKING[- ]CHANGE:' <<<"$body"; then
+    is_breaking=1
+  fi
+
+  if [[ "$is_breaking" == "1" ]]; then
+    bump="major"
+    printf '* %s ([%s](https://github.com/%s/commit/%s))\n' \
+      "$(escape_markdown "$desc")" "${sha:0:7}" "$owner_repo" "$sha" \
+      >>"$breaking"
+    continue
+  fi
+
+  case "$type" in
+    feat)
+      if [[ "$bump" != "major" ]]; then
+        bump="minor"
+      fi
+      if [[ -n "$scope" ]]; then
+        printf '* **%s:** %s ([%s](https://github.com/%s/commit/%s))\n' \
+          "$scope" "$(escape_markdown "$desc")" "${sha:0:7}" "$owner_repo" "$sha" \
+          >>"$features"
+      else
+        printf '* %s ([%s](https://github.com/%s/commit/%s))\n' \
+          "$(escape_markdown "$desc")" "${sha:0:7}" "$owner_repo" "$sha" \
+          >>"$features"
+      fi
+      ;;
+    fix)
+      if [[ "$bump" == "none" ]]; then
+        bump="patch"
+      fi
+      if [[ -n "$scope" ]]; then
+        printf '* **%s:** %s ([%s](https://github.com/%s/commit/%s))\n' \
+          "$scope" "$(escape_markdown "$desc")" "${sha:0:7}" "$owner_repo" "$sha" \
+          >>"$fixes"
+      else
+        printf '* %s ([%s](https://github.com/%s/commit/%s))\n' \
+          "$(escape_markdown "$desc")" "${sha:0:7}" "$owner_repo" "$sha" \
+          >>"$fixes"
+      fi
+      ;;
+    perf)
+      if [[ "$bump" == "none" ]]; then
+        bump="patch"
+      fi
+      if [[ -n "$scope" ]]; then
+        printf '* **%s:** %s ([%s](https://github.com/%s/commit/%s))\n' \
+          "$scope" "$(escape_markdown "$desc")" "${sha:0:7}" "$owner_repo" "$sha" \
+          >>"$performance"
+      else
+        printf '* %s ([%s](https://github.com/%s/commit/%s))\n' \
+          "$(escape_markdown "$desc")" "${sha:0:7}" "$owner_repo" "$sha" \
+          >>"$performance"
+      fi
+      ;;
+  esac
+done <"$commits_tsv"
+
+if [[ "$bump" == "none" ]]; then
+  echo "no releasable commits since ${latest_tag:-repository start}"
+  if [[ "$dry_run" != "1" ]]; then
+    open_pr_number="$(open_release_pr_number)"
+    if [[ -n "$open_pr_number" ]]; then
+      gh pr close "$open_pr_number" \
+        --repo "$owner_repo" \
+        --comment "Closing: no releasable commits remain since ${latest_tag:-repository start}."
+    fi
+  fi
+  exit 0
+fi
+
+IFS=. read -r -a parts <<<"$current_version"
+while ((${#parts[@]} < 4)); do
+  parts+=("0")
+done
+
+case "$bump" in
+  major)
+    parts[1]=$((parts[1] + 1))
+    parts[2]=0
+    parts[3]=0
+    bump_label="PVP major"
+    ;;
+  minor)
+    parts[2]=$((parts[2] + 1))
+    parts[3]=0
+    bump_label="PVP minor"
+    ;;
+  patch)
+    parts[3]=$((parts[3] + 1))
+    bump_label="PVP patch"
+    ;;
+esac
+
+next_version="${parts[*]}"
+next_version="${next_version// /.}"
+next_tag="v$next_version"
+
+release_section="$tmpdir/release-section.md"
+{
+  if [[ -n "$latest_tag" ]]; then
+    printf '## [%s](https://github.com/%s/compare/%s...%s) (%s)\n\n' \
+      "$next_version" "$owner_repo" "$latest_tag" "$next_tag" "$(date +%F)"
+  else
+    printf '## [%s](https://github.com/%s/releases/tag/%s) (%s)\n\n' \
+      "$next_version" "$owner_repo" "$next_tag" "$(date +%F)"
+  fi
+
+  if [[ -s "$breaking" ]]; then
+    printf '### Breaking Changes\n\n'
+    cat "$breaking"
+    printf '\n'
+  fi
+  if [[ -s "$features" ]]; then
+    printf '### Features\n\n'
+    cat "$features"
+    printf '\n'
+  fi
+  if [[ -s "$fixes" ]]; then
+    printf '### Bug Fixes\n\n'
+    cat "$fixes"
+    printf '\n'
+  fi
+  if [[ -s "$performance" ]]; then
+    printf '### Performance\n\n'
+    cat "$performance"
+    printf '\n'
+  fi
+} >"$release_section"
+
+if [[ "$dry_run" == "1" ]]; then
+  echo "current version: $current_version"
+  echo "next version: $next_version"
+  echo "bump: $bump_label"
+  cat "$release_section"
+  exit 0
+fi
+
+git config user.name "amaru-release-bot"
+git config user.email "actions@github.com"
+git fetch origin "$base_branch"
+git fetch origin \
+  "+refs/heads/$release_branch:refs/remotes/origin/$release_branch" \
+  >/dev/null 2>&1 || true
+git switch -C "$release_branch" "origin/$base_branch"
+
+awk -v version="$next_version" '
+  !done && match($0, /^([[:space:]]*version:[[:space:]]*)/) {
+    printf "%s%s\n", substr($0, RSTART, RLENGTH), version
+    done = 1
+    next
+  }
+  { print }
+' "$cabal_file" >"$tmpdir/$cabal_file"
+mv "$tmpdir/$cabal_file" "$cabal_file"
+
+changelog_out="$tmpdir/CHANGELOG.md"
+awk -v section="$release_section" '
+  function dump_section() {
+    while ((getline line < section) > 0) {
+      print line
+    }
+    close(section)
+  }
+  /^## Unreleased[[:space:]]*$/ {
+    print
+    print ""
+    dump_section()
+    in_unreleased = 1
+    seen_unreleased = 1
+    next
+  }
+  in_unreleased && /^## / {
+    in_unreleased = 0
+  }
+  !in_unreleased {
+    print
+  }
+  END {
+    if (!seen_unreleased) {
+      print ""
+      print "## Unreleased"
+      print ""
+      dump_section()
+    }
+  }
+' CHANGELOG.md >"$changelog_out"
+mv "$changelog_out" CHANGELOG.md
+
+scripts/release/check-version-consistency "$next_tag"
+
+if git diff --quiet; then
+  echo "release branch already up to date for $next_version"
+else
+  git add "$cabal_file" CHANGELOG.md
+  git commit -m "chore(release): $next_version"
+fi
+
+if remote_release_sha="$(
+  git rev-parse -q --verify "refs/remotes/origin/$release_branch"
+)"; then
+  git push \
+    --force-with-lease="refs/heads/$release_branch:$remote_release_sha" \
+    origin "$release_branch"
+else
+  git push origin "$release_branch"
+fi
+
+body_file="$tmpdir/pr-body.md"
+{
+  echo "## Summary"
+  echo
+  echo "- Bump \`$package_name\` to \`$next_version\`."
+  echo "- Add generated release notes for the $bump_label release."
+  echo
+  echo "## Release notes"
+  echo
+  awk '/^#/ { print "#" $0; next } { print }' "$release_section"
+  echo
+  echo "## Publishing"
+  echo
+  echo "- Version source of truth: \`$cabal_file\`"
+  echo "- Proposed version: \`$next_version\`"
+  echo "- Bump class: $bump_label"
+  echo "- Previous tag: \`${latest_tag:-none}\`"
+  echo
+  echo "## Verification"
+  echo
+  echo "The release planner validated Cabal and CHANGELOG version consistency before pushing this proposal."
+  echo
+  echo "Merging this PR does not publish directly. The next main-branch run tags \`$next_tag\`, and the tag workflows publish the release artifacts."
+} >"$body_file"
+
+open_pr_number="$(open_release_pr_number)"
+if [[ -n "$open_pr_number" ]]; then
+  gh pr edit "$open_pr_number" \
+    --repo "$owner_repo" \
+    --title "chore(release): $next_version" \
+    --body-file "$body_file"
+else
+  gh pr create \
+    --repo "$owner_repo" \
+    --base "$base_branch" \
+    --head "$release_branch" \
+    --title "chore(release): $next_version" \
+    --body-file "$body_file"
+fi
+
+gh workflow run ci.yml --repo "$owner_repo" --ref "$release_branch"

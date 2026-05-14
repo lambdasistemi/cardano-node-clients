@@ -159,11 +159,10 @@ parseBlueprintJSON =
 
 blueprintDataDecoder ::
     [Blueprint] -> TxDiffDataSelector -> Data ConwayEra -> Either Text OpenValue
-blueprintDataDecoder blueprints selector datum =
+blueprintDataDecoder blueprints selector =
     decodeMatchingBlueprintArgument
         blueprints
         (blueprintArgumentSelector selector)
-        datum
 
 decodeMatchingBlueprintArgument ::
     [Blueprint] ->

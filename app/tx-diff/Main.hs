@@ -37,11 +37,7 @@ data CliOptions = CliOptions
 main :: IO ()
 main = do
     args <- getArgs
-    case parseArgs args of
-        Just options ->
-            runDiff options
-        Nothing ->
-            dieUsage
+    maybe dieUsage runDiff (parseArgs args)
 
 parseArgs :: [String] -> Maybe CliOptions
 parseArgs =
