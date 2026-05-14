@@ -95,6 +95,7 @@ library
     Cardano.Node.Client.Submitter
     Cardano.Node.Client.TxDiff
     Cardano.Node.Client.TxDiff.Cli
+    Cardano.Node.Client.TxDiff.Resolver
     Cardano.Node.Client.TxGenerator.Build
     Cardano.Node.Client.TxGenerator.Daemon
     Cardano.Node.Client.TxGenerator.Fanout
@@ -310,6 +311,7 @@ test-suite unit-tests
     Cardano.Node.Client.TxDiff.CliSpec
     Cardano.Node.Client.TxDiff.ConwaySpec
     Cardano.Node.Client.TxDiff.CoreSpec
+    Cardano.Node.Client.TxDiff.ResolverSpec
     Cardano.Node.Client.TxDiffSpec
     Cardano.Node.Client.TxGenerator.FanoutSpec
     Cardano.Node.Client.TxGenerator.PersistSpec
