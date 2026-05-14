@@ -85,7 +85,6 @@ library
     Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
     Cardano.Node.Client.TxDiff
-    Cardano.Node.Client.TxDiff.Blueprint
     Cardano.Node.Client.TxGenerator.Build
     Cardano.Node.Client.TxGenerator.Daemon
     Cardano.Node.Client.TxGenerator.Fanout
@@ -164,6 +163,26 @@ library
     , transformers
     , typed-protocols
     , unix
+
+library plutus-blueprint
+  import:           warnings
+  visibility:       public
+  hs-source-dirs:   lib-plutus-blueprint
+  default-language: GHC2021
+  exposed-modules:  Cardano.Node.Client.TxDiff.Blueprint
+  build-depends:
+    , aeson
+    , base
+    , base16-bytestring
+    , bytestring
+    , cardano-ledger-api
+    , cardano-ledger-binary
+    , cardano-ledger-conway
+    , cardano-ledger-core
+    , cardano-node-clients
+    , containers
+    , plutus-core
+    , text
 
 library devnet
   import:           warnings
@@ -258,6 +277,7 @@ executable tx-diff
     , base
     , bytestring
     , cardano-node-clients
+    , cardano-node-clients:plutus-blueprint
     , text
 
 test-suite unit-tests
@@ -305,6 +325,7 @@ test-suite unit-tests
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-node-clients
+    , cardano-node-clients:plutus-blueprint
     , cardano-node-clients:tx-build
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting

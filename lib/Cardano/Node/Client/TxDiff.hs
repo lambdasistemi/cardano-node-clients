@@ -23,6 +23,7 @@ module Cardano.Node.Client.TxDiff (
     defaultTxDiffOptions,
     decodeConwayTxInput,
     diffConwayTxInput,
+    diffConwayTxInputWith,
     diffConwayTx,
     diffConwayTxWith,
     diffNodeHasChanges,
@@ -63,7 +64,11 @@ import Cardano.Ledger.Address (
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
-import Cardano.Ledger.Api.Scripts.Data (Data, Datum)
+import Cardano.Ledger.Api.Scripts.Data (
+    Data,
+    Datum (..),
+    binaryDataToData,
+ )
 import Cardano.Ledger.Api.Tx (
     addrTxWitsL,
     bodyTxL,
@@ -248,10 +253,15 @@ diffConwayTxWith options left right =
 
 diffConwayTxInput ::
     ByteString -> ByteString -> Either TxInputDecodeError DiffNode
-diffConwayTxInput leftInput rightInput = do
+diffConwayTxInput =
+    diffConwayTxInputWith defaultTxDiffOptions
+
+diffConwayTxInputWith ::
+    TxDiffOptions -> ByteString -> ByteString -> Either TxInputDecodeError DiffNode
+diffConwayTxInputWith options leftInput rightInput = do
     left <- decodeConwayTxInput leftInput
     right <- decodeConwayTxInput rightInput
-    pure (diffConwayTx left right)
+    pure (diffConwayTxWith options left right)
 
 renderConwayTxInputDiff ::
     ByteString -> ByteString -> Either TxInputDecodeError Text
@@ -874,8 +884,8 @@ conwayDiffProjection _ (ConwayTxOutValue output) =
             ]
 conwayDiffProjection _ (ConwayAddressValue address) =
     DiffAtomic (addressValue address)
-conwayDiffProjection _ (ConwayDatumValue datum) =
-    DiffAtomic (datumValue datum)
+conwayDiffProjection options (ConwayDatumValue datum) =
+    datumDiffProjection options datum
 conwayDiffProjection _ (ConwayReferenceScriptValue referenceScript) =
     DiffAtomic (referenceScriptValue referenceScript)
 conwayDiffProjection _ (ConwayWitnessesValue tx) =
@@ -944,6 +954,21 @@ dataDiffProjection options selector datum =
                     openValueDiffProjection value
                 Left reason ->
                     DiffAtomic (dataDecodeFallbackValue reason datum)
+
+datumDiffProjection ::
+    TxDiffOptions -> Datum ConwayEra -> DiffProjection ConwayDiffValue
+datumDiffProjection options datum =
+    case (txDiffDecodeData options, inlineDatumData datum) of
+        (Just _, Just datumData) ->
+            dataDiffProjection options datumDataSelector datumData
+        _ ->
+            DiffAtomic (datumValue datum)
+
+inlineDatumData :: Datum ConwayEra -> Maybe (Data ConwayEra)
+inlineDatumData (Datum datum) =
+    Just (binaryDataToData datum)
+inlineDatumData _ =
+    Nothing
 
 openValueDiffProjection :: OpenValue -> DiffProjection ConwayDiffValue
 openValueDiffProjection value =

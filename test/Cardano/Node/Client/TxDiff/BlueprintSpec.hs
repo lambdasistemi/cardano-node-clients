@@ -17,6 +17,8 @@ import Cardano.Node.Client.TxDiff (
     DiffNode (..),
     DiffPath (..),
     OpenValue (..),
+    TxDiffDataKind (..),
+    TxDiffDataSelector (..),
  )
 import Cardano.Node.Client.TxDiff.Blueprint (
     Blueprint (..),
@@ -30,6 +32,7 @@ import Cardano.Node.Client.TxDiff.Blueprint (
     BlueprintSchema (..),
     BlueprintSchemaKind (..),
     BlueprintValidator (..),
+    blueprintDataDecoder,
     decodeBlueprintData,
     diffBlueprintArgumentData,
     diffBlueprintData,
@@ -132,6 +135,83 @@ spec =
                                             }
                                         ]
                                 }
+
+        it "parses Aiken blueprints with generic data and list definitions" $
+            case parseBlueprintJSON aikenSubsetBlueprintJson of
+                Left err ->
+                    expectationFailure err
+                Right blueprint -> do
+                    Map.lookup "Data" (blueprintDefinitions blueprint)
+                        `shouldBe` Just
+                            ( BlueprintSchema
+                                { schemaTitle = Just "Data"
+                                , schemaKind = SchemaData
+                                }
+                            )
+                    Map.lookup "List$Int" (blueprintDefinitions blueprint)
+                        `shouldBe` Just
+                            ( BlueprintSchema
+                                { schemaTitle = Nothing
+                                , schemaKind =
+                                    SchemaListOf
+                                        BlueprintSchema
+                                            { schemaTitle = Nothing
+                                            , schemaKind = SchemaReference "Int"
+                                            }
+                                }
+                            )
+
+        it "selects the only matching blueprint argument that decodes the datum" $ do
+            let wrongDatum =
+                    BlueprintArgument
+                        { argumentTitle = Just "Wrong datum"
+                        , argumentSchema =
+                            BlueprintSchema
+                                { schemaTitle = Just "Wrong datum"
+                                , schemaKind = SchemaConstructor 99 []
+                                }
+                        }
+                rightValidator =
+                    BlueprintValidator
+                        { validatorTitle = Just "right"
+                        , validatorDatum =
+                            Just
+                                BlueprintArgument
+                                    { argumentTitle = Just "Order datum"
+                                    , argumentSchema = orderSchema
+                                    }
+                        , validatorRedeemer = Nothing
+                        }
+                wrongValidator =
+                    rightValidator
+                        { validatorTitle = Just "wrong"
+                        , validatorDatum = Just wrongDatum
+                        }
+                blueprint =
+                    Blueprint
+                        { blueprintPreamble =
+                            BlueprintPreamble
+                                { preambleTitle = "ambiguous"
+                                , preamblePlutusVersion = "v3"
+                                }
+                        , blueprintValidators = [wrongValidator, rightValidator]
+                        , blueprintDefinitions = Map.empty
+                        }
+            blueprintDataDecoder
+                [blueprint]
+                TxDiffDataSelector
+                    { txDiffDataValidatorTitle = Nothing
+                    , txDiffDataKind = TxDiffDatum
+                    }
+                (orderDatum 42)
+                `shouldBe` Right
+                    ( OpenObject
+                        ( Map.fromList
+                            [ ("amount", OpenInteger 42)
+                            , ("owner", OpenBytes "dead")
+                            ]
+                        )
+                    )
 
         it "converts constructor data into an open application value" $ do
             decodeBlueprintData orderSchema (orderDatum 42)
@@ -293,6 +373,34 @@ blueprintJson =
     \      \"fields\": [\
     \        {\"title\": \"owner\", \"dataType\": \"bytes\"}\
     \      ]\
+    \    }\
+    \  }\
+    \}"
+
+aikenSubsetBlueprintJson :: LBS8.ByteString
+aikenSubsetBlueprintJson =
+    "{\
+    \  \"preamble\": {\
+    \    \"title\": \"Aiken subset\",\
+    \    \"plutusVersion\": \"v3\"\
+    \  },\
+    \  \"validators\": [],\
+    \  \"definitions\": {\
+    \    \"Bool\": {\
+    \      \"title\": \"Bool\",\
+    \      \"anyOf\": [\
+    \        {\"title\": \"False\", \"dataType\": \"constructor\", \"index\": 0},\
+    \        {\"title\": \"True\", \"dataType\": \"constructor\", \"index\": 1}\
+    \      ]\
+    \    },\
+    \    \"Data\": {\
+    \      \"title\": \"Data\",\
+    \      \"description\": \"Any Plutus data.\"\
+    \    },\
+    \    \"Int\": {\"dataType\": \"integer\"},\
+    \    \"List$Int\": {\
+    \      \"dataType\": \"list\",\
+    \      \"items\": {\"$ref\": \"#/definitions/Int\"}\
     \    }\
     \  }\
     \}"

@@ -40,10 +40,13 @@ import Data.Aeson (
     (.=),
  )
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Types (Parser, (.!=))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (Parser, parseEither, (.!=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
+import Data.Foldable (toList)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -143,6 +146,10 @@ data BlueprintSchemaKind
     = SchemaInteger
     | SchemaBytes
     | SchemaConstructor Integer [BlueprintSchema]
+    | SchemaAnyOf [BlueprintSchema]
+    | SchemaList [BlueprintSchema]
+    | SchemaListOf BlueprintSchema
+    | SchemaData
     | SchemaReference Text
     deriving stock (Eq, Show)
 
@@ -152,18 +159,58 @@ parseBlueprintJSON =
 
 blueprintDataDecoder ::
     [Blueprint] -> TxDiffDataSelector -> Data ConwayEra -> Either Text OpenValue
-blueprintDataDecoder blueprints selector datum = do
-    schema <-
-        case matchBlueprintArgument blueprints (blueprintArgumentSelector selector) of
-            Left err ->
-                Left (Text.pack (show (BlueprintMatchFallback err)))
-            Right matchedSchema ->
-                Right matchedSchema
-    case decodeBlueprintData schema datum of
-        Left err ->
-            Left (Text.pack (show (BlueprintDataFallback err)))
-        Right value ->
-            Right value
+blueprintDataDecoder blueprints selector datum =
+    decodeMatchingBlueprintArgument
+        blueprints
+        (blueprintArgumentSelector selector)
+        datum
+
+decodeMatchingBlueprintArgument ::
+    [Blueprint] ->
+    BlueprintArgumentSelector ->
+    Data ConwayEra ->
+    Either Text OpenValue
+decodeMatchingBlueprintArgument blueprints selector datum =
+    case matches of
+        [] ->
+            Left (Text.pack (show (BlueprintMatchFallback BlueprintArgumentMissing)))
+        _ ->
+            case decodedMatches of
+                [(_, value)] ->
+                    Right value
+                [] ->
+                    Left (Text.intercalate "; " failedMatches)
+                multiple ->
+                    Left $
+                        Text.pack $
+                            show $
+                                BlueprintMatchFallback $
+                                    BlueprintArgumentAmbiguous (map fst multiple)
+  where
+    matches =
+        matchingArguments blueprints selector
+    attempts =
+        [ ( matchLabel blueprint validator
+          , case resolveBlueprintSchema blueprint (argumentSchema argument) of
+                Left err ->
+                    Left (Text.pack (show (BlueprintMatchFallback err)))
+                Right schema ->
+                    case decodeBlueprintData schema datum of
+                        Left err ->
+                            Left (Text.pack (show (BlueprintDataFallback err)))
+                        Right value ->
+                            Right value
+          )
+        | (blueprint, validator, argument) <- matches
+        ]
+    decodedMatches =
+        [ (label, value)
+        | (label, Right value) <- attempts
+        ]
+    failedMatches =
+        [ label <> ": " <> reason
+        | (label, Left reason) <- attempts
+        ]
 
 blueprintArgumentSelector :: TxDiffDataSelector -> BlueprintArgumentSelector
 blueprintArgumentSelector selector =
@@ -273,12 +320,82 @@ decodeBlueprintValue schema value =
                                 (zip [0 :: Int ..] (zip fields values))
                 _ ->
                     Left (BlueprintDataTypeMismatch "constructor")
+        SchemaAnyOf alternatives ->
+            decodeAnyOf alternatives value
+        SchemaList fields ->
+            case value of
+                PLC.List values
+                    | length fields /= length values ->
+                        Left
+                            BlueprintFieldCountMismatch
+                                { expectedFieldCount = length fields
+                                , actualFieldCount = length values
+                                }
+                    | otherwise ->
+                        OpenArray
+                            <$> traverse
+                                (uncurry decodeBlueprintValue)
+                                (zip fields values)
+                _ ->
+                    Left (BlueprintDataTypeMismatch "list")
+        SchemaListOf item ->
+            case value of
+                PLC.List values ->
+                    OpenArray <$> traverse (decodeBlueprintValue item) values
+                _ ->
+                    Left (BlueprintDataTypeMismatch "list")
+        SchemaData ->
+            Right (plutusDataOpenValue value)
         SchemaReference reference ->
             Left (BlueprintUnresolvedReference reference)
   where
     decodeField (index, (fieldSchema, fieldValue)) = do
         decodedValue <- decodeBlueprintValue fieldSchema fieldValue
         pure (fieldName index fieldSchema, decodedValue)
+
+decodeAnyOf ::
+    [BlueprintSchema] -> PLC.Data -> Either BlueprintDataError OpenValue
+decodeAnyOf alternatives value =
+    case successes of
+        [decoded] ->
+            Right decoded
+        [] ->
+            case alternatives of
+                firstAlternative : _ ->
+                    decodeBlueprintValue firstAlternative value
+                [] ->
+                    Left (BlueprintDataTypeMismatch "anyOf")
+        _ ->
+            Left (BlueprintDataTypeMismatch "ambiguous anyOf")
+  where
+    successes =
+        [ decoded
+        | alternative <- alternatives
+        , Right decoded <- [decodeBlueprintValue alternative value]
+        ]
+
+plutusDataOpenValue :: PLC.Data -> OpenValue
+plutusDataOpenValue (PLC.I integer) =
+    OpenInteger integer
+plutusDataOpenValue (PLC.B bytes) =
+    OpenBytes (hexText bytes)
+plutusDataOpenValue (PLC.List values) =
+    OpenArray (map plutusDataOpenValue values)
+plutusDataOpenValue (PLC.Map entries) =
+    OpenArray
+        [ OpenObject $
+            Map.fromList
+                [ ("key", plutusDataOpenValue key)
+                , ("value", plutusDataOpenValue itemValue)
+                ]
+        | (key, itemValue) <- entries
+        ]
+plutusDataOpenValue (PLC.Constr index fields) =
+    OpenObject $
+        Map.fromList
+            [ ("constructor", OpenInteger index)
+            , ("fields", OpenArray (map plutusDataOpenValue fields))
+            ]
 
 fieldName :: Int -> BlueprintSchema -> Text
 fieldName index schema =
@@ -367,9 +484,23 @@ resolveBlueprintSchema blueprint =
                 BlueprintSchema (schemaTitle schema)
                     . SchemaConstructor index
                     <$> traverse (go seen) fields
+            SchemaAnyOf alternatives ->
+                BlueprintSchema (schemaTitle schema)
+                    . SchemaAnyOf
+                    <$> traverse (go seen) alternatives
+            SchemaList fields ->
+                BlueprintSchema (schemaTitle schema)
+                    . SchemaList
+                    <$> traverse (go seen) fields
+            SchemaListOf item ->
+                BlueprintSchema (schemaTitle schema)
+                    . SchemaListOf
+                    <$> go seen item
             SchemaInteger ->
                 Right schema
             SchemaBytes ->
+                Right schema
+            SchemaData ->
                 Right schema
 
 instance FromJSON Blueprint where
@@ -378,7 +509,17 @@ instance FromJSON Blueprint where
             Blueprint
                 <$> value .: "preamble"
                 <*> value .:? "validators" .!= []
-                <*> value .:? "definitions" .!= Map.empty
+                <*> parseBlueprintDefinitions value
+
+parseBlueprintDefinitions :: Object -> Parser (Map Text BlueprintSchema)
+parseBlueprintDefinitions value = do
+    definitions <- value .:? "definitions" .!= KeyMap.empty
+    pure $
+        Map.fromList
+            [ (Key.toText key, schema)
+            | (key, definitionValue) <- KeyMap.toList definitions
+            , Right schema <- [parseEither parseJSON definitionValue]
+            ]
 
 instance FromJSON BlueprintPreamble where
     parseJSON =
@@ -420,31 +561,66 @@ schemaKindFromObject value = do
     case reference of
         Just ref ->
             SchemaReference <$> definitionReference ref
+        Nothing ->
+            schemaKindBody value
+
+schemaKindBody :: Object -> Parser BlueprintSchemaKind
+schemaKindBody value = do
+    alternatives <- value .:? "anyOf"
+    case alternatives of
+        Just schemas ->
+            pure (SchemaAnyOf schemas)
         Nothing -> do
-            dataType <- value .: "dataType"
-            case dataType :: Text of
-                "integer" ->
+            dataType <- value .:? "dataType"
+            case dataType :: Maybe Text of
+                Nothing ->
+                    pure SchemaData
+                Just "integer" ->
                     pure SchemaInteger
-                "bytes" ->
+                Just "bytes" ->
                     pure SchemaBytes
-                "constructor" ->
+                Just "constructor" ->
                     SchemaConstructor
                         <$> value .: "index"
                         <*> value .:? "fields" .!= []
-                unknown ->
+                Just "list" ->
+                    listSchemaKind value
+                Just unknown ->
                     fail
                         ( "unsupported Plutus blueprint dataType: "
                             <> Text.unpack unknown
                         )
+
+listSchemaKind :: Object -> Parser BlueprintSchemaKind
+listSchemaKind value = do
+    items <- value .:? "items"
+    case items of
+        Nothing ->
+            pure (SchemaListOf anyDataSchema)
+        Just (Aeson.Array itemValues) ->
+            SchemaList <$> traverse parseJSON (toList itemValues)
+        Just itemValue ->
+            SchemaListOf <$> parseJSON itemValue
+
+anyDataSchema :: BlueprintSchema
+anyDataSchema =
+    BlueprintSchema
+        { schemaTitle = Nothing
+        , schemaKind = SchemaData
+        }
 
 definitionReference :: Text -> Parser Text
 definitionReference reference =
     case Text.stripPrefix "#/definitions/" reference of
         Just definition
             | not (Text.null definition) ->
-                pure definition
+                pure (jsonPointerToken definition)
         _ ->
             fail
                 ( "unsupported Plutus blueprint reference: "
                     <> Text.unpack reference
                 )
+
+jsonPointerToken :: Text -> Text
+jsonPointerToken =
+    Text.replace "~0" "~" . Text.replace "~1" "/"

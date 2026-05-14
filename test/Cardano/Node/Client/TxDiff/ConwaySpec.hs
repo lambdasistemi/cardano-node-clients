@@ -1064,6 +1064,47 @@ spec =
                         Map.empty
                     )
 
+        it "uses a matched blueprint decoder to descend into inline output datum fields" $ do
+            tx <- loadFixture sampleHash
+            let outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
+            case outputs of
+                [] ->
+                    expectationFailure "fixture has no outputs"
+                firstOutput : otherOutputs -> do
+                    let oldDatum = inlineOrderDatum 42
+                        newDatum = inlineOrderDatum 43
+                        txA =
+                            tx
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ StrictSeq.fromList
+                                        ( ( firstOutput
+                                                & datumTxOutL .~ oldDatum
+                                          )
+                                            : otherOutputs
+                                        )
+                        txB =
+                            tx
+                                & bodyTxL
+                                    . outputsTxBodyL
+                                    .~ StrictSeq.fromList
+                                        ( ( firstOutput
+                                                & datumTxOutL .~ newDatum
+                                          )
+                                            : otherOutputs
+                                        )
+                        options =
+                            defaultTxDiffOptions
+                                { txDiffDecodeData =
+                                    Just (blueprintDataDecoder [orderBlueprint])
+                                }
+                        output = renderDiffNodeHuman (diffConwayTxWith options txA txB)
+                    output
+                        `shouldSatisfy` Text.isInfixOf
+                            "~ body.outputs.0.datum.amount"
+                    output `shouldSatisfy` Text.isInfixOf "  A: 42"
+                    output `shouldSatisfy` Text.isInfixOf "  B: 43"
+
         it "uses a matched blueprint decoder to descend into redeemer data fields" $ do
             tx <- loadFixture sampleHash
             let purpose = ConwaySpending (AsIx 0)
@@ -1296,7 +1337,12 @@ orderBlueprint =
         , blueprintValidators =
             [ BlueprintValidator
                 { validatorTitle = Just "swap"
-                , validatorDatum = Nothing
+                , validatorDatum =
+                    Just
+                        BlueprintArgument
+                            { argumentTitle = Just "Order datum"
+                            , argumentSchema = orderRedeemerSchema
+                            }
                 , validatorRedeemer =
                     Just
                         BlueprintArgument
@@ -1733,6 +1779,11 @@ inlineIntegerDatum :: Integer -> Datum ConwayEra
 inlineIntegerDatum value =
     Datum $
         dataToBinaryData (integerData value)
+
+inlineOrderDatum :: Integer -> Datum ConwayEra
+inlineOrderDatum amount =
+    Datum $
+        dataToBinaryData (orderRedeemerData amount)
 
 referenceScriptJson :: StrictMaybe (Script ConwayEra) -> Aeson.Value
 referenceScriptJson SNothing =
