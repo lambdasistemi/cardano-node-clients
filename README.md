@@ -10,6 +10,7 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 - **Submitter** -- submit signed transactions
 - **Balance** -- exact-fee transaction balancing plus fee-dependent output convergence
 - **TxBuild** -- Conway-era transaction builder DSL with `Peek`, `Ctx`, and `Valid`
+- **TxDiff** -- structural Conway transaction diffing with blueprint-aware datum/redeemer decoding
 - **N2C** -- LocalStateQuery + LocalTxSubmission over Unix socket
 
 `Balance`, `TxBuild`, and the shared Conway transaction alias are also
@@ -21,6 +22,12 @@ existing users.
 
 ## Executables
 
+- [`tx-diff`](app/tx-diff/) -- compare two Conway
+  transactions, decode application-level datum/redeemer fields with Plutus
+  blueprints, and group repeated list diffs with YAML collapse rules. See the
+  [manual](docs/executables/tx-diff.md). Released builds are distributed as
+  Linux AppImage/DEB/RPM assets and as a macOS Homebrew formula:
+  `brew tap lambdasistemi/tap && brew install tx-diff`.
 - [`utxo-indexer`](app/utxo-indexer/) -- address->UTxO indexer daemon
   (in-memory or RocksDB-backed) exposing NDJSON snapshot/await over a
   Unix socket. In-process auto-reconnect on upstream-relay disconnect

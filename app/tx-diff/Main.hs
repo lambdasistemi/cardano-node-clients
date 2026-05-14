@@ -10,10 +10,13 @@ non-zero status when differences are present.
 module Main (main) where
 
 import Cardano.Node.Client.TxDiff (
+    CollapseRules,
+    HumanRenderOptions (..),
     TxDiffOptions (..),
     defaultTxDiffOptions,
     diffConwayTxInputWith,
     diffNodeHasChanges,
+    parseCollapseRulesYaml,
     renderDiffNodeHumanWith,
  )
 import Cardano.Node.Client.TxDiff.Blueprint (
@@ -42,6 +45,7 @@ main = do
 runDiff :: TxDiffCliOptions -> IO ()
 runDiff cliOptions = do
     blueprints <- traverse loadBlueprint (txDiffCliBlueprintPaths cliOptions)
+    collapseRules <- traverse loadCollapseRules (txDiffCliCollapseRulesPath cliOptions)
     left <- BS.readFile leftPath
     right <- BS.readFile rightPath
     let options =
@@ -60,7 +64,10 @@ runDiff cliOptions = do
         Right diff -> do
             TextIO.putStr $
                 renderDiffNodeHumanWith
-                    (txDiffCliHumanRenderOptions cliOptions)
+                    ( (txDiffCliHumanRenderOptions cliOptions)
+                        { humanCollapseRules = collapseRules
+                        }
+                    )
                     diff
             if diffNodeHasChanges diff
                 then exitFailure
@@ -82,6 +89,22 @@ loadBlueprint blueprintPath = do
             exitFailure
         Right blueprint ->
             pure blueprint
+
+loadCollapseRules :: FilePath -> IO CollapseRules
+loadCollapseRules collapseRulesPath = do
+    input <- BS.readFile collapseRulesPath
+    case parseCollapseRulesYaml input of
+        Left err -> do
+            hPutStrLn
+                stderr
+                ( "tx-diff: failed to decode collapse rules "
+                    <> collapseRulesPath
+                    <> ": "
+                    <> err
+                )
+            exitFailure
+        Right rules ->
+            pure rules
 
 dieUsage :: TxDiffCliError -> IO a
 dieUsage (TxDiffCliUsageError err) = do
