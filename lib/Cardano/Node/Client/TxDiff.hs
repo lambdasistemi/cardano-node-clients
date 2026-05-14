@@ -208,6 +208,12 @@ data TxDiffDataSelector = TxDiffDataSelector
 data TxDiffOptions = TxDiffOptions
     { txDiffIncludeWitnesses :: Bool
     , txDiffDecodeData :: Maybe TxDiffDataDecoder
+    , txDiffResolvedInputs :: Maybe (Map TxIn (TxOut ConwayEra))
+    -- ^ When 'Nothing' (default), every 'TxIn' renders as today: an atomic
+    -- @{txId, index}@ leaf. When 'Just', resolution is treated as enabled;
+    -- each 'TxIn' renders as an object with a @txIn@ child and, only if
+    -- present in the map, a @resolved@ child reusing the body-output
+    -- projection.
     }
 
 instance Show TxDiffOptions where
@@ -216,6 +222,11 @@ instance Show TxDiffOptions where
             <> show (txDiffIncludeWitnesses options)
             <> ", txDiffDecodeData = "
             <> maybe "Nothing" (const "Just <decoder>") (txDiffDecodeData options)
+            <> ", txDiffResolvedInputs = "
+            <> maybe
+                "Nothing"
+                (\m -> "Just <" <> show (Map.size m) <> " resolved>")
+                (txDiffResolvedInputs options)
             <> "}"
 
 defaultTxDiffOptions :: TxDiffOptions
@@ -223,6 +234,7 @@ defaultTxDiffOptions =
     TxDiffOptions
         { txDiffIncludeWitnesses = False
         , txDiffDecodeData = Nothing
+        , txDiffResolvedInputs = Nothing
         }
 
 -- | Human diff render shape.
@@ -345,6 +357,7 @@ data ConwayDiffValue
     | ConwayStrictMaybeCoinValue (StrictMaybe Coin)
     | ConwayInputsValue [TxIn]
     | ConwayTxInValue TxIn
+    | ConwayTxInIdValue TxIn
     | ConwayKeyHashesValue [KeyHash Guard]
     | ConwayKeyHashValue (KeyHash Guard)
     | ConwayMintValue MultiAsset
@@ -1272,6 +1285,8 @@ conwayDiffEqual (ConwayInputsValue left) (ConwayInputsValue right) =
     left == right
 conwayDiffEqual (ConwayTxInValue left) (ConwayTxInValue right) =
     left == right
+conwayDiffEqual (ConwayTxInIdValue left) (ConwayTxInIdValue right) =
+    left == right
 conwayDiffEqual (ConwayKeyHashesValue left) (ConwayKeyHashesValue right) =
     left == right
 conwayDiffEqual (ConwayKeyHashValue left) (ConwayKeyHashValue right) =
@@ -1349,6 +1364,8 @@ conwayDiffSummary (ConwayStrictMaybeCoinValue coin) =
 conwayDiffSummary (ConwayInputsValue inputs) =
     Just (inputsValue inputs)
 conwayDiffSummary (ConwayTxInValue txIn) =
+    Just (txInValue txIn)
+conwayDiffSummary (ConwayTxInIdValue txIn) =
     Just (txInValue txIn)
 conwayDiffSummary (ConwayKeyHashesValue keyHashes) =
     Just (keyHashesValue keyHashes)
@@ -1479,7 +1496,18 @@ conwayDiffProjection _ (ConwayStrictMaybeCoinValue coin) =
     DiffAtomic (strictMaybeCoinValue coin)
 conwayDiffProjection _ (ConwayInputsValue inputs) =
     DiffArrayChildren (map ConwayTxInValue inputs)
-conwayDiffProjection _ (ConwayTxInValue txIn) =
+conwayDiffProjection options (ConwayTxInValue txIn) =
+    case txDiffResolvedInputs options of
+        Nothing ->
+            DiffAtomic (txInValue txIn)
+        Just resolutionMap ->
+            DiffObjectChildren $
+                Map.fromList $
+                    ("txIn", ConwayTxInIdValue txIn)
+                        : [ ("resolved", ConwayTxOutValue resolved)
+                          | Just resolved <- [Map.lookup txIn resolutionMap]
+                          ]
+conwayDiffProjection _ (ConwayTxInIdValue txIn) =
     DiffAtomic (txInValue txIn)
 conwayDiffProjection _ (ConwayKeyHashesValue keyHashes) =
     DiffArrayChildren (map ConwayKeyHashValue keyHashes)

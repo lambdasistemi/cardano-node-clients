@@ -662,6 +662,164 @@ spec =
                         )
                     )
 
+        it "renders resolved inputs as TxOut subtrees when resolution is enabled" $ do
+            tx <- loadFixture sampleHash
+            let outputs = toList (tx ^. bodyTxL . outputsTxBodyL)
+            case outputs of
+                firstOutput : _ -> do
+                    let resolvedOutA = firstOutput
+                        resolvedOutB = firstOutput & coinTxOutL .~ Coin 42
+                        oldInput = mkTxIn 1
+                        newInput = mkTxIn 2
+                        txA =
+                            tx
+                                & bodyTxL
+                                    . inputsTxBodyL
+                                    .~ Set.singleton oldInput
+                        txB =
+                            tx
+                                & bodyTxL
+                                    . inputsTxBodyL
+                                    .~ Set.singleton newInput
+                        resolutionMap =
+                            Map.fromList
+                                [ (oldInput, resolvedOutA)
+                                , (newInput, resolvedOutB)
+                                ]
+                        options =
+                            defaultTxDiffOptions
+                                { txDiffResolvedInputs = Just resolutionMap
+                                }
+                    diffConwayTxWith options txA txB
+                        `shouldBe` bodyDiff
+                            (bodyCommonExcept ["inputs"] txA)
+                            ( Map.singleton
+                                "inputs"
+                                ( DiffNode
+                                    (DiffPath ["body", "inputs"])
+                                    ( DiffArray
+                                        []
+                                        [
+                                            ( 0
+                                            , DiffNode
+                                                (DiffPath ["body", "inputs", "0"])
+                                                ( DiffObject
+                                                    Map.empty
+                                                    ( Map.fromList
+                                                        [
+                                                            ( "txIn"
+                                                            , DiffNode
+                                                                ( DiffPath
+                                                                    ["body", "inputs", "0", "txIn"]
+                                                                )
+                                                                ( DiffChanged
+                                                                    (txInJson oldInput)
+                                                                    (txInJson newInput)
+                                                                )
+                                                            )
+                                                        ,
+                                                            ( "resolved"
+                                                            , DiffNode
+                                                                ( DiffPath
+                                                                    ["body", "inputs", "0", "resolved"]
+                                                                )
+                                                                ( DiffObject
+                                                                    ( outputCommonExcept
+                                                                        ["coin"]
+                                                                        resolvedOutA
+                                                                    )
+                                                                    ( Map.singleton
+                                                                        "coin"
+                                                                        ( DiffNode
+                                                                            ( DiffPath
+                                                                                [ "body"
+                                                                                , "inputs"
+                                                                                , "0"
+                                                                                , "resolved"
+                                                                                , "coin"
+                                                                                ]
+                                                                            )
+                                                                            ( DiffChanged
+                                                                                (coinJson (resolvedOutA ^. coinTxOutL))
+                                                                                (coinJson (Coin 42))
+                                                                            )
+                                                                        )
+                                                                    )
+                                                                    Map.empty
+                                                                    Map.empty
+                                                                )
+                                                            )
+                                                        ]
+                                                    )
+                                                    Map.empty
+                                                    Map.empty
+                                                )
+                                            )
+                                        ]
+                                        []
+                                        []
+                                    )
+                                )
+                            )
+                [] ->
+                    expectationFailure "fixture has no outputs"
+
+        it "renders unresolved inputs as txIn-only subtrees when resolution is enabled but the map is empty" $ do
+            tx <- loadFixture sampleHash
+            let oldInput = mkTxIn 1
+                newInput = mkTxIn 2
+                txA =
+                    tx
+                        & bodyTxL
+                            . inputsTxBodyL
+                            .~ Set.singleton oldInput
+                txB =
+                    tx
+                        & bodyTxL
+                            . inputsTxBodyL
+                            .~ Set.singleton newInput
+                options =
+                    defaultTxDiffOptions
+                        { txDiffResolvedInputs = Just Map.empty
+                        }
+            diffConwayTxWith options txA txB
+                `shouldBe` bodyDiff
+                    (bodyCommonExcept ["inputs"] txA)
+                    ( Map.singleton
+                        "inputs"
+                        ( DiffNode
+                            (DiffPath ["body", "inputs"])
+                            ( DiffArray
+                                []
+                                [
+                                    ( 0
+                                    , DiffNode
+                                        (DiffPath ["body", "inputs", "0"])
+                                        ( DiffObject
+                                            Map.empty
+                                            ( Map.singleton
+                                                "txIn"
+                                                ( DiffNode
+                                                    ( DiffPath
+                                                        ["body", "inputs", "0", "txIn"]
+                                                    )
+                                                    ( DiffChanged
+                                                        (txInJson oldInput)
+                                                        (txInJson newInput)
+                                                    )
+                                                )
+                                            )
+                                            Map.empty
+                                            Map.empty
+                                        )
+                                    )
+                                ]
+                                []
+                                []
+                            )
+                        )
+                    )
+
         it "reports a Conway total collateral change at body.totalCollateral" $ do
             tx <- loadFixture sampleHash
             let oldTotalCollateral =
