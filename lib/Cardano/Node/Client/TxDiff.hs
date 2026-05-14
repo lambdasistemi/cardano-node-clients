@@ -9,6 +9,9 @@ diff feature. The central rule is equality first: paired values are compared
 before any child projection is requested.
 -}
 module Cardano.Node.Client.TxDiff (
+    CollapseRawView (..),
+    CollapseRule (..),
+    CollapseRules (..),
     DiffChange (..),
     DiffNode (..),
     DiffPlan (..),
@@ -33,15 +36,18 @@ module Cardano.Node.Client.TxDiff (
     diffNodeHasChanges,
     diffOpenValue,
     diffWith,
+    parseCollapseRulesYaml,
     renderConwayTxInputDiff,
     renderDiffNodeHuman,
     renderDiffNodeHumanWith,
 ) where
 
-import Data.Aeson ((.:), (.=))
+import Control.Monad (when)
+import Data.Aeson (FromJSON (..), (.:), (.:?), (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types ((.!=))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
@@ -59,6 +65,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Tree qualified as Tree
 import Data.Tree.View qualified as TreeView
+import Data.Yaml qualified as Yaml
 import Lens.Micro ((^.))
 import Text.Read (readMaybe)
 
@@ -142,7 +149,7 @@ import Cardano.Slotting.Slot (SlotNo (..))
 import PlutusCore.Data qualified as PLC
 
 newtype DiffPath = DiffPath [Text]
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Ord, Show)
 
 data DiffNode = DiffNode DiffPath DiffChange
     deriving stock (Eq, Show)
@@ -234,6 +241,7 @@ data TreeArt
 data HumanRenderOptions = HumanRenderOptions
     { humanRenderShape :: RenderShape
     , humanTreeArt :: TreeArt
+    , humanCollapseRules :: Maybe CollapseRules
     }
     deriving stock (Eq, Show)
 
@@ -243,7 +251,92 @@ defaultHumanRenderOptions =
     HumanRenderOptions
         { humanRenderShape = RenderTree
         , humanTreeArt = TreeArtAscii
+        , humanCollapseRules = Nothing
         }
+
+data CollapseRawView
+    = CollapseRawShow
+    | CollapseRawHide
+    deriving stock (Eq, Show)
+
+data CollapseRules = CollapseRules
+    { collapseRawView :: CollapseRawView
+    , collapseRules :: [CollapseRule]
+    }
+    deriving stock (Eq, Show)
+
+data CollapseRule = CollapseRule
+    { collapseRuleName :: Text
+    , collapseRuleAt :: DiffPath
+    , collapseRuleRequired :: [DiffPath]
+    }
+    deriving stock (Eq, Show)
+
+newtype CollapseRuleMatch = CollapseRuleMatch [DiffPath]
+
+newtype CollapseViews = CollapseViews CollapseRawView
+
+parseCollapseRulesYaml :: BS.ByteString -> Either String CollapseRules
+parseCollapseRulesYaml input =
+    case Yaml.decodeEither' input of
+        Left err ->
+            Left (Yaml.prettyPrintParseException err)
+        Right rules ->
+            Right rules
+
+instance FromJSON CollapseRules where
+    parseJSON =
+        Aeson.withObject "CollapseRules" $ \value -> do
+            version <- value .:? "version" .!= (1 :: Int)
+            when (version /= 1) $
+                fail ("unsupported collapse rules version: " <> show version)
+            CollapseViews rawView <- value .:? "views" .!= CollapseViews CollapseRawShow
+            rules <- value .:? "collapse" .!= []
+            pure
+                CollapseRules
+                    { collapseRawView = rawView
+                    , collapseRules = rules
+                    }
+
+instance FromJSON CollapseViews where
+    parseJSON =
+        Aeson.withObject "CollapseViews" $ \value ->
+            CollapseViews <$> value .:? "raw" .!= CollapseRawShow
+
+instance FromJSON CollapseRawView where
+    parseJSON =
+        Aeson.withText "CollapseRawView" $ \value ->
+            case value of
+                "show" ->
+                    pure CollapseRawShow
+                "hide" ->
+                    pure CollapseRawHide
+                _ ->
+                    fail ("unsupported raw collapse view: " <> Text.unpack value)
+
+instance FromJSON CollapseRule where
+    parseJSON =
+        Aeson.withObject "CollapseRule" $ \value -> do
+            name <- value .: "name"
+            at <- value .: "at"
+            CollapseRuleMatch required <- value .: "match"
+            when (null required) $
+                fail "collapse rule match.required must not be empty"
+            pure
+                CollapseRule
+                    { collapseRuleName = name
+                    , collapseRuleAt = at
+                    , collapseRuleRequired = required
+                    }
+
+instance FromJSON CollapseRuleMatch where
+    parseJSON =
+        Aeson.withObject "CollapseRuleMatch" $ \value ->
+            CollapseRuleMatch <$> value .: "required"
+
+instance FromJSON DiffPath where
+    parseJSON =
+        Aeson.withText "DiffPath" (pure . textDiffPath)
 
 data ConwayDiffValue
     = ConwayTxValue ConwayTx
@@ -505,7 +598,7 @@ renderDiffNodeHumanWith options diff =
         RenderPaths ->
             Text.unlines (renderDiffNodeLines diff)
         RenderTree ->
-            renderDiffNodeTree (humanTreeArt options) diff
+            renderDiffNodeTree options diff
 
 data RenderTrie = RenderTrie
     { renderTrieLeaves :: [Tree.Tree Text]
@@ -513,9 +606,12 @@ data RenderTrie = RenderTrie
     }
 
 data RenderSegmentSortKey
-    = RenderSegmentNumber Integer Text
-    | RenderSegmentText Text
+    = RenderSegmentText Text
+    | RenderSegmentNumber Integer Text
     deriving stock (Eq, Ord, Show)
+
+data LeafDiff = LeafDiff Aeson.Value Aeson.Value
+    deriving stock (Eq, Show)
 
 emptyRenderTrie :: RenderTrie
 emptyRenderTrie =
@@ -524,28 +620,35 @@ emptyRenderTrie =
         , renderTrieChildren = Map.empty
         }
 
-renderDiffNodeTree :: TreeArt -> DiffNode -> Text
-renderDiffNodeTree treeArt diff@(DiffNode _ change) =
+renderDiffNodeTree :: HumanRenderOptions -> DiffNode -> Text
+renderDiffNodeTree options diff@(DiffNode _ change) =
     case change of
         DiffSame _ ->
             Text.unlines (renderDiffNodeLines diff)
         _ ->
-            renderForest treeArt $
-                renderTrieForest (collectDiffTree emptyRenderTrie diff)
+            renderForest (humanTreeArt options) $
+                renderTrieForest $
+                    collectDiffTree
+                        (humanCollapseRules options)
+                        emptyRenderTrie
+                        diff
 
-collectDiffTree :: RenderTrie -> DiffNode -> RenderTrie
-collectDiffTree trie (DiffNode path change) =
+collectDiffTree :: Maybe CollapseRules -> RenderTrie -> DiffNode -> RenderTrie
+collectDiffTree collapseRules trie node@(DiffNode path change) =
     case change of
         DiffSame _ ->
             trie
         DiffChanged left right ->
             insertPath
-                (renderChangedPathSegments path left right)
-                []
+                (renderChangedPathSegments path)
+                (renderChangedValueLeaves left right)
                 trie
         DiffObject _ changed onlyA onlyB ->
             let withChanged =
-                    foldl' collectDiffTree trie (Map.elems changed)
+                    foldl'
+                        (collectDiffTree collapseRules)
+                        trie
+                        (Map.elems changed)
                 withOnlyA =
                     foldl'
                         (insertObjectOnly "-" path)
@@ -555,10 +658,64 @@ collectDiffTree trie (DiffNode path change) =
                     (insertObjectOnly "+" path)
                     withOnlyA
                     (Map.toAscList onlyB)
+        DiffArray common changed onlyA onlyB ->
+            collectDiffArray collapseRules trie node path common changed onlyA onlyB
+
+collectDiffArray ::
+    Maybe CollapseRules ->
+    RenderTrie ->
+    DiffNode ->
+    DiffPath ->
+    [(Int, Maybe Aeson.Value)] ->
+    [(Int, DiffNode)] ->
+    [(Int, Aeson.Value)] ->
+    [(Int, Aeson.Value)] ->
+    RenderTrie
+collectDiffArray collapseConfig trie node path common changed onlyA onlyB =
+    let matchingRules =
+            collapseRulesAt collapseConfig path
+        (withViews, hasView) =
+            foldl'
+                (insertCollapseView path changed)
+                (trie, False)
+                matchingRules
+        coveredLeaves =
+            collapseCoveredLeafPaths matchingRules changed
+        remainderChanged =
+            [ (index, remainderItem)
+            | (index, item) <- changed
+            , Just remainderItem <-
+                [ pruneCoveredLeaves
+                    (Map.findWithDefault Set.empty index coveredLeaves)
+                    item
+                ]
+            ]
+        remainderNode =
+            DiffNode path (DiffArray common remainderChanged onlyA onlyB)
+     in case (hasView, collapseRawViewEnabled collapseConfig) of
+            (False, _) ->
+                collectRawDiffArray collapseConfig trie node
+            (True, CollapseRawShow) ->
+                collectRawDiffArray
+                    collapseConfig
+                    withViews
+                    (rebaseDiffNode path (path </> "raw") node)
+            (True, CollapseRawHide)
+                | diffNodeHasChanges remainderNode ->
+                    collectRawDiffArray
+                        collapseConfig
+                        withViews
+                        remainderNode
+                | otherwise ->
+                    withViews
+
+collectRawDiffArray :: Maybe CollapseRules -> RenderTrie -> DiffNode -> RenderTrie
+collectRawDiffArray collapseRules trie (DiffNode path change) =
+    case change of
         DiffArray _ changed onlyA onlyB ->
             let withChanged =
                     foldl'
-                        collectDiffTree
+                        (collectDiffTree collapseRules)
                         trie
                         (map snd changed)
                 withOnlyA =
@@ -570,6 +727,240 @@ collectDiffTree trie (DiffNode path change) =
                     (insertArrayOnly "+" path)
                     withOnlyA
                     onlyB
+        _ ->
+            collectDiffTree collapseRules trie (DiffNode path change)
+
+collapseRulesAt :: Maybe CollapseRules -> DiffPath -> [CollapseRule]
+collapseRulesAt Nothing _ =
+    []
+collapseRulesAt (Just rules) path =
+    [ rule
+    | rule <- collapseRules rules
+    , collapseRuleAt rule == path
+    ]
+
+collapseRawViewEnabled :: Maybe CollapseRules -> CollapseRawView
+collapseRawViewEnabled Nothing =
+    CollapseRawShow
+collapseRawViewEnabled (Just rules) =
+    collapseRawView rules
+
+collapseCoveredLeafPaths ::
+    [CollapseRule] ->
+    [(Int, DiffNode)] ->
+    Map Int (Set.Set DiffPath)
+collapseCoveredLeafPaths rules changed =
+    foldl' coverRule Map.empty rules
+  where
+    coverRule covered rule =
+        foldl' (coverItem rule) covered changed
+    coverItem rule covered (index, item)
+        | ruleMatchesItem rule item =
+            Map.insertWith
+                Set.union
+                index
+                (Set.fromList (collapseRuleRequired rule))
+                covered
+        | otherwise =
+            covered
+
+pruneCoveredLeaves :: Set.Set DiffPath -> DiffNode -> Maybe DiffNode
+pruneCoveredLeaves covered node@(DiffNode rootPath _) =
+    prune node
+  where
+    prune current@(DiffNode path change) =
+        case change of
+            DiffSame _ ->
+                Nothing
+            DiffChanged _ _
+                | leafCovered path ->
+                    Nothing
+                | otherwise ->
+                    Just current
+            DiffObject common changed onlyA onlyB ->
+                keepIfChanged $
+                    DiffNode
+                        path
+                        ( DiffObject
+                            common
+                            (Map.mapMaybe prune changed)
+                            onlyA
+                            onlyB
+                        )
+            DiffArray common changed onlyA onlyB ->
+                keepIfChanged $
+                    DiffNode
+                        path
+                        ( DiffArray
+                            common
+                            [ (index, pruned)
+                            | (index, item) <- changed
+                            , Just pruned <- [prune item]
+                            ]
+                            onlyA
+                            onlyB
+                        )
+    keepIfChanged pruned
+        | diffNodeHasChanges pruned =
+            Just pruned
+        | otherwise =
+            Nothing
+    leafCovered path =
+        case stripDiffPathPrefix rootPath path of
+            Just relativePath ->
+                relativePath `Set.member` covered
+            Nothing ->
+                False
+
+insertCollapseView ::
+    DiffPath ->
+    [(Int, DiffNode)] ->
+    (RenderTrie, Bool) ->
+    CollapseRule ->
+    (RenderTrie, Bool)
+insertCollapseView listPath changed (trie, hasView) rule =
+    case matchingItems of
+        [] ->
+            (trie, hasView)
+        _ ->
+            ( foldl'
+                insertRequiredPath
+                trie
+                (collapseRuleRequired rule)
+            , True
+            )
+  where
+    matchingItems =
+        [ (index, item, changedLeavesFromItem item)
+        | (index, item) <- changed
+        , ruleMatchesItem rule item
+        ]
+    viewPath =
+        listPath </> collapseRuleName rule
+    insertRequiredPath currentTrie requiredPath =
+        let grouped =
+                groupLeafDiffs
+                    [ (index, leaf)
+                    | (index, _, leaves) <- matchingItems
+                    , Just leaf <- [lookup requiredPath leaves]
+                    ]
+         in foldl'
+                (insertLeafGroup requiredPath)
+                currentTrie
+                grouped
+    insertLeafGroup requiredPath currentTrie (indices, LeafDiff left right) =
+        insertPath
+            ( diffPathSegments (viewPath </!> requiredPath)
+                <> [renderIndexRanges indices]
+            )
+            (renderChangedValueLeaves left right)
+            currentTrie
+
+ruleMatchesItem :: CollapseRule -> DiffNode -> Bool
+ruleMatchesItem rule item =
+    all
+        (`elem` map fst leaves)
+        (collapseRuleRequired rule)
+  where
+    leaves =
+        changedLeavesFromItem item
+
+changedLeavesFromItem :: DiffNode -> [(DiffPath, LeafDiff)]
+changedLeavesFromItem item@(DiffNode rootPath _) =
+    [ (relativePath, leaf)
+    | (absolutePath, leaf) <- changedLeaves item
+    , Just relativePath <- [stripDiffPathPrefix rootPath absolutePath]
+    ]
+
+changedLeaves :: DiffNode -> [(DiffPath, LeafDiff)]
+changedLeaves (DiffNode path change) =
+    case change of
+        DiffSame _ ->
+            []
+        DiffChanged left right ->
+            [(path, LeafDiff left right)]
+        DiffObject _ changed _ _ ->
+            concatMap changedLeaves (Map.elems changed)
+        DiffArray _ changed _ _ ->
+            concatMap (changedLeaves . snd) changed
+
+groupLeafDiffs :: [(Int, LeafDiff)] -> [([Int], LeafDiff)]
+groupLeafDiffs =
+    foldl' addLeafDiffGroup []
+  where
+    addLeafDiffGroup [] (index, leaf) =
+        [([index], leaf)]
+    addLeafDiffGroup ((indices, leaf) : rest) (index, newLeaf)
+        | leaf == newLeaf =
+            (indices <> [index], leaf) : rest
+    addLeafDiffGroup (group : rest) indexedLeaf =
+        group : addLeafDiffGroup rest indexedLeaf
+
+renderIndexRanges :: [Int] -> Text
+renderIndexRanges indices =
+    Text.intercalate "," $
+        map renderRange $
+            contiguousRanges (List.sort indices)
+  where
+    renderRange (start, end)
+        | start == end =
+            Text.pack (show start)
+        | otherwise =
+            Text.pack (show start) <> ".." <> Text.pack (show end)
+
+contiguousRanges :: [Int] -> [(Int, Int)]
+contiguousRanges [] =
+    []
+contiguousRanges (firstIndex : rest) =
+    reverse (foldl' step [(firstIndex, firstIndex)] rest)
+  where
+    step [] index =
+        [(index, index)]
+    step ((start, end) : ranges) index
+        | index == end + 1 =
+            (start, index) : ranges
+        | otherwise =
+            (index, index) : (start, end) : ranges
+
+rebaseDiffNode :: DiffPath -> DiffPath -> DiffNode -> DiffNode
+rebaseDiffNode oldPath newPath (DiffNode path change) =
+    DiffNode (replaceDiffPathPrefix oldPath newPath path) $
+        case change of
+            DiffSame value ->
+                DiffSame value
+            DiffChanged left right ->
+                DiffChanged left right
+            DiffObject common changed onlyA onlyB ->
+                DiffObject
+                    common
+                    (Map.map (rebaseDiffNode oldPath newPath) changed)
+                    onlyA
+                    onlyB
+            DiffArray common changed onlyA onlyB ->
+                DiffArray
+                    common
+                    [ ( index
+                      , rebaseDiffNode oldPath newPath child
+                      )
+                    | (index, child) <- changed
+                    ]
+                    onlyA
+                    onlyB
+
+stripDiffPathPrefix :: DiffPath -> DiffPath -> Maybe DiffPath
+stripDiffPathPrefix (DiffPath prefix) (DiffPath path)
+    | prefix `List.isPrefixOf` path =
+        Just (DiffPath (drop (length prefix) path))
+    | otherwise =
+        Nothing
+
+replaceDiffPathPrefix :: DiffPath -> DiffPath -> DiffPath -> DiffPath
+replaceDiffPathPrefix oldPath newPath path =
+    case stripDiffPathPrefix oldPath path of
+        Just relativePath ->
+            newPath </!> relativePath
+        Nothing ->
+            path
 
 insertObjectOnly ::
     Text ->
@@ -666,33 +1057,44 @@ renderAsciiChildren prefix children =
                 if isLast then "   " else "|  "
         ]
 
-renderChangedPathSegments :: DiffPath -> Aeson.Value -> Aeson.Value -> [Text]
-renderChangedPathSegments path left right =
+renderChangedPathSegments :: DiffPath -> [Text]
+renderChangedPathSegments path =
     case reverse (renderedPathSegments path) of
         [] ->
-            [changedLabel "<root>" left right]
+            ["<root>"]
         key : parentSegments ->
-            reverse parentSegments <> [changedLabel key left right]
+            reverse parentSegments <> [key]
 
-changedLabel :: Text -> Aeson.Value -> Aeson.Value -> Text
-changedLabel key left right =
-    key
-        <> ": A: "
-        <> renderJsonValue left
-        <> " | B: "
-        <> renderJsonValue right
+renderChangedValueLeaves :: Aeson.Value -> Aeson.Value -> [Tree.Tree Text]
+renderChangedValueLeaves left right =
+    [ Tree.Node ("A: " <> rightAlignRenderedValue width leftText) []
+    , Tree.Node ("B: " <> rightAlignRenderedValue width rightText) []
+    ]
+  where
+    leftText =
+        renderJsonValue left
+    rightText =
+        renderJsonValue right
+    width =
+        max (Text.length leftText) (Text.length rightText)
+
+rightAlignRenderedValue :: Int -> Text -> Text
+rightAlignRenderedValue width value =
+    Text.replicate (width - Text.length value) " " <> value
 
 renderSegmentSortKey :: Text -> RenderSegmentSortKey
 renderSegmentSortKey label =
-    case readMaybe (Text.unpack sortText) of
+    case readMaybe (Text.unpack numericSortPrefix) of
         Just number
-            | not (Text.null sortText) && Text.all isDigit sortText ->
+            | not (Text.null numericSortPrefix) ->
                 RenderSegmentNumber number label
         _ ->
             RenderSegmentText label
   where
     sortText =
         Text.takeWhile (/= ':') label
+    numericSortPrefix =
+        Text.takeWhile isDigit sortText
 
 renderDiffNodeLines :: DiffNode -> [Text]
 renderDiffNodeLines (DiffNode path change) =
@@ -824,6 +1226,20 @@ renderLovelace lovelace =
 (</>) :: DiffPath -> Text -> DiffPath
 DiffPath segments </> segment =
     DiffPath (segments <> [segment])
+
+(</!>) :: DiffPath -> DiffPath -> DiffPath
+DiffPath left </!> DiffPath right =
+    DiffPath (left <> right)
+
+diffPathSegments :: DiffPath -> [Text]
+diffPathSegments (DiffPath segments) =
+    segments
+
+textDiffPath :: Text -> DiffPath
+textDiffPath text =
+    DiffPath $
+        filter (not . Text.null) $
+            Text.splitOn "." text
 
 openValuePlan :: DiffPlan OpenValue
 openValuePlan =

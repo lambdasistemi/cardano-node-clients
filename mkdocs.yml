@@ -39,5 +39,8 @@ nav:
       - Submitter: modules/submitter.md
       - Balance: modules/balance.md
       - TxBuild: modules/txbuild.md
+      - TxDiff: modules/tx-diff.md
       - N2C: modules/n2c.md
       - Validity: modules/validity.md
+  - Executables:
+      - tx-diff: executables/tx-diff.md

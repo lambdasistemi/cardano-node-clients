@@ -5,6 +5,7 @@ module Cardano.Node.Client.TxDiff.CoreSpec (spec) where
 import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
+import Data.ByteString.Char8 qualified as BS8
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -27,6 +28,9 @@ import Test.QuickCheck (
  )
 
 import Cardano.Node.Client.TxDiff (
+    CollapseRawView (..),
+    CollapseRule (..),
+    CollapseRules (..),
     DiffChange (..),
     DiffNode (..),
     DiffPath (..),
@@ -38,6 +42,7 @@ import Cardano.Node.Client.TxDiff (
     defaultHumanRenderOptions,
     diffOpenValue,
     diffWith,
+    parseCollapseRulesYaml,
     renderDiffNodeHuman,
     renderDiffNodeHumanWith,
  )
@@ -204,7 +209,7 @@ spec =
                         [
                             ( "body"
                             , OpenObject
-                                [ ("fee", OpenInteger 2)
+                                [ ("fee", OpenInteger 20)
                                 , ("ttl", OpenInteger 11)
                                 , ("same", OpenText "keep")
                                 ]
@@ -213,8 +218,12 @@ spec =
             renderDiffNodeHuman (diffOpenValue left right)
                 `shouldBe` Text.unlines
                     [ "body"
-                    , "+- fee: A: 1 | B: 2"
-                    , "`- ttl: A: 10 | B: 11"
+                    , "+- fee"
+                    , "|  +- A:  1"
+                    , "|  `- B: 20"
+                    , "`- ttl"
+                    , "   +- A: 10"
+                    , "   `- B: 11"
                     ]
 
         it "renders collected diff tree as explicit path lines" $ do
@@ -283,7 +292,7 @@ spec =
                         [
                             ( "body"
                             , OpenObject
-                                [ ("fee", OpenInteger 2)
+                                [ ("fee", OpenInteger 20)
                                 , ("ttl", OpenInteger 11)
                                 ]
                             )
@@ -295,8 +304,12 @@ spec =
             renderDiffNodeHumanWith options (diffOpenValue left right)
                 `shouldBe` Text.unlines
                     [ "body"
-                    , " ├╴fee: A: 1 | B: 2"
-                    , " └╴ttl: A: 10 | B: 11"
+                    , " ├╴fee"
+                    , " │  ├╴A:  1"
+                    , " │  └╴B: 20"
+                    , " └╴ttl"
+                    , "    ├╴A: 10"
+                    , "    └╴B: 11"
                     ]
 
         it "orders numeric tree path segments numerically" $ do
@@ -341,8 +354,269 @@ spec =
             renderDiffNodeHuman (diffOpenValue left right)
                 `shouldBe` Text.unlines
                     [ "outputs"
-                    , "+- 2: A: 2 | B: 20"
-                    , "`- 10: A: 10 | B: 100"
+                    , "+- 2"
+                    , "|  +- A:  2"
+                    , "|  `- B: 20"
+                    , "`- 10"
+                    , "   +- A:  10"
+                    , "   `- B: 100"
+                    ]
+
+        it "parses YAML collapse rules as named overlays" $ do
+            parseCollapseRulesYaml
+                ( BS8.pack
+                    "version: 1\n\
+                    \views:\n\
+                    \  raw: hide\n\
+                    \collapse:\n\
+                    \  - name: swapOrders\n\
+                    \    at: outputs\n\
+                    \    match:\n\
+                    \      required:\n\
+                    \        - coin\n\
+                    \        - datum.fields.4.fields.0.2\n"
+                )
+                `shouldBe` Right
+                    CollapseRules
+                        { collapseRawView = CollapseRawHide
+                        , collapseRules =
+                            [ CollapseRule
+                                { collapseRuleName = "swapOrders"
+                                , collapseRuleAt = DiffPath ["outputs"]
+                                , collapseRuleRequired =
+                                    [ DiffPath ["coin"]
+                                    , DiffPath
+                                        [ "datum"
+                                        , "fields"
+                                        , "4"
+                                        , "fields"
+                                        , "0"
+                                        , "2"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+
+        it "moves list indexes down to named collapse view leaves" $ do
+            let options =
+                    defaultHumanRenderOptions
+                        { humanCollapseRules =
+                            Just
+                                CollapseRules
+                                    { collapseRawView = CollapseRawHide
+                                    , collapseRules =
+                                        [ CollapseRule
+                                            { collapseRuleName = "swapOrders"
+                                            , collapseRuleAt = DiffPath ["outputs"]
+                                            , collapseRuleRequired =
+                                                [ DiffPath ["coin"]
+                                                , DiffPath
+                                                    [ "datum"
+                                                    , "fields"
+                                                    , "4"
+                                                    , "fields"
+                                                    , "0"
+                                                    , "2"
+                                                    ]
+                                                , DiffPath
+                                                    [ "datum"
+                                                    , "fields"
+                                                    , "4"
+                                                    , "fields"
+                                                    , "1"
+                                                    , "2"
+                                                    ]
+                                                ]
+                                            }
+                                        ]
+                                    }
+                        }
+                output =
+                    renderDiffNodeHumanWith
+                        options
+                        (diffOpenValue collapsedLeft collapsedRight)
+            output
+                `shouldBe` Text.unlines
+                    [ "outputs"
+                    , "`- swapOrders"
+                    , "   +- coin"
+                    , "   |  +- 0..1"
+                    , "   |  |  +- A: 10"
+                    , "   |  |  `- B: 20"
+                    , "   |  `- 2"
+                    , "   |     +- A: 11"
+                    , "   |     `- B: 21"
+                    , "   `- datum"
+                    , "      `- fields"
+                    , "         `- 4"
+                    , "            `- fields"
+                    , "               +- 0"
+                    , "               |  `- 2"
+                    , "               |     +- 0..1"
+                    , "               |     |  +- A: 100"
+                    , "               |     |  `- B: 200"
+                    , "               |     `- 2"
+                    , "               |        +- A: 101"
+                    , "               |        `- B: 201"
+                    , "               `- 1"
+                    , "                  `- 2"
+                    , "                     `- 0..2"
+                    , "                        +- A: 300"
+                    , "                        `- B: 400"
+                    ]
+
+        it "renders intersecting collapse rules as independent named overlays" $ do
+            let options =
+                    defaultHumanRenderOptions
+                        { humanCollapseRules =
+                            Just
+                                CollapseRules
+                                    { collapseRawView = CollapseRawHide
+                                    , collapseRules =
+                                        [ CollapseRule
+                                            { collapseRuleName = "swapOrders"
+                                            , collapseRuleAt = DiffPath ["outputs"]
+                                            , collapseRuleRequired =
+                                                [ DiffPath ["coin"]
+                                                , DiffPath
+                                                    [ "datum"
+                                                    , "fields"
+                                                    , "4"
+                                                    , "fields"
+                                                    , "0"
+                                                    , "2"
+                                                    ]
+                                                ]
+                                            }
+                                        , CollapseRule
+                                            { collapseRuleName = "coinChanges"
+                                            , collapseRuleAt = DiffPath ["outputs"]
+                                            , collapseRuleRequired =
+                                                [DiffPath ["coin"]]
+                                            }
+                                        ]
+                                    }
+                        }
+                output =
+                    renderDiffNodeHumanWith
+                        options
+                        (diffOpenValue collapsedLeft collapsedRight)
+            output `shouldSatisfy` Text.isInfixOf "coinChanges"
+            output `shouldSatisfy` Text.isInfixOf "swapOrders"
+            output `shouldSatisfy` Text.isInfixOf "0..1"
+            output `shouldSatisfy` Text.isInfixOf "A: 10"
+            output `shouldSatisfy` Text.isInfixOf "B: 20"
+
+        it "keeps raw list rendering visible unless collapse rules hide it" $ do
+            let rules rawView =
+                    CollapseRules
+                        { collapseRawView = rawView
+                        , collapseRules =
+                            [ CollapseRule
+                                { collapseRuleName = "coinChanges"
+                                , collapseRuleAt = DiffPath ["outputs"]
+                                , collapseRuleRequired = [DiffPath ["coin"]]
+                                }
+                            ]
+                        }
+                renderWith rawView =
+                    renderDiffNodeHumanWith
+                        defaultHumanRenderOptions
+                            { humanCollapseRules = Just (rules rawView)
+                            }
+                        (diffOpenValue collapsedLeft collapsedRight)
+                rawOutput =
+                    renderWith CollapseRawShow
+                hiddenOutput =
+                    renderWith CollapseRawHide
+            rawOutput `shouldSatisfy` Text.isInfixOf "`- raw"
+            hiddenOutput `shouldNotSatisfy` Text.isInfixOf "raw"
+
+        it "keeps numeric list item diffs visible when raw view is hidden" $ do
+            let options =
+                    defaultHumanRenderOptions
+                        { humanCollapseRules =
+                            Just
+                                CollapseRules
+                                    { collapseRawView = CollapseRawHide
+                                    , collapseRules =
+                                        [ CollapseRule
+                                            { collapseRuleName = "swapOrders"
+                                            , collapseRuleAt = DiffPath ["outputs"]
+                                            , collapseRuleRequired =
+                                                [ DiffPath ["coin"]
+                                                , DiffPath
+                                                    [ "datum"
+                                                    , "fields"
+                                                    , "4"
+                                                    , "fields"
+                                                    , "0"
+                                                    , "2"
+                                                    ]
+                                                ]
+                                            }
+                                        ]
+                                    }
+                        }
+                output =
+                    renderDiffNodeHumanWith
+                        options
+                        (diffOpenValue remainderLeft remainderRight)
+            output
+                `shouldBe` Text.unlines
+                    [ "outputs"
+                    , "+- swapOrders"
+                    , "|  +- coin"
+                    , "|  |  +- 0..1"
+                    , "|  |  |  +- A: 10"
+                    , "|  |  |  `- B: 20"
+                    , "|  |  `- 2"
+                    , "|  |     +- A: 11"
+                    , "|  |     `- B: 21"
+                    , "|  `- datum"
+                    , "|     `- fields"
+                    , "|        `- 4"
+                    , "|           `- fields"
+                    , "|              `- 0"
+                    , "|                 `- 2"
+                    , "|                    +- 0..1"
+                    , "|                    |  +- A: 100"
+                    , "|                    |  `- B: 200"
+                    , "|                    `- 2"
+                    , "|                       +- A: 101"
+                    , "|                       `- B: 201"
+                    , "+- 0"
+                    , "|  `- datum"
+                    , "|     `- fields"
+                    , "|        `- 4"
+                    , "|           `- fields"
+                    , "|              `- 1"
+                    , "|                 `- 2"
+                    , "|                    +- A: 300"
+                    , "|                    `- B: 400"
+                    , "+- 1"
+                    , "|  `- datum"
+                    , "|     `- fields"
+                    , "|        `- 4"
+                    , "|           `- fields"
+                    , "|              `- 1"
+                    , "|                 `- 2"
+                    , "|                    +- A: 300"
+                    , "|                    `- B: 400"
+                    , "+- 2"
+                    , "|  `- datum"
+                    , "|     `- fields"
+                    , "|        `- 4"
+                    , "|           `- fields"
+                    , "|              `- 1"
+                    , "|                 `- 2"
+                    , "|                    +- A: 300"
+                    , "|                    `- B: 400"
+                    , "`- 3"
+                    , "   `- coin"
+                    , "      +- A: 12"
+                    , "      `- B: 22"
                     ]
 
         it "renders known coin values with exact ADA and lovelace units" $ do
@@ -356,7 +630,9 @@ spec =
             renderDiffNodeHuman diff
                 `shouldBe` Text.unlines
                     [ "body"
-                    , "`- fee: A: 1.000000 ADA (1000000 lovelace) | B: 1.500000 ADA (1500000 lovelace)"
+                    , "`- fee"
+                    , "   +- A: 1.000000 ADA (1000000 lovelace)"
+                    , "   `- B: 1.500000 ADA (1500000 lovelace)"
                     ]
 
         it "summarizes raw CBOR payloads in human-readable output" $ do
@@ -372,7 +648,9 @@ spec =
                     [ "body"
                     , "`- outputs"
                     , "   `- 0"
-                    , "      `- datum: A: cbor:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... (40 bytes) | B: cbor:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... (40 bytes)"
+                    , "      `- datum"
+                    , "         +- A: cbor:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... (40 bytes)"
+                    , "         `- B: cbor:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... (40 bytes)"
                     ]
 
         it "reports any equal generated value as same at the root" $
@@ -465,6 +743,98 @@ spec =
 rootPath :: DiffPath
 rootPath =
     DiffPath []
+
+collapsedLeft :: OpenValue
+collapsedLeft =
+    OpenObject
+        [
+            ( "outputs"
+            , OpenArray
+                [ outputValue 10 100 300
+                , outputValue 10 100 300
+                , outputValue 11 101 300
+                ]
+            )
+        ]
+
+collapsedRight :: OpenValue
+collapsedRight =
+    OpenObject
+        [
+            ( "outputs"
+            , OpenArray
+                [ outputValue 20 200 400
+                , outputValue 20 200 400
+                , outputValue 21 201 400
+                ]
+            )
+        ]
+
+remainderLeft :: OpenValue
+remainderLeft =
+    OpenObject
+        [
+            ( "outputs"
+            , OpenArray
+                [ outputValue 10 100 300
+                , outputValue 10 100 300
+                , outputValue 11 101 300
+                , OpenObject [("coin", OpenInteger 12)]
+                ]
+            )
+        ]
+
+remainderRight :: OpenValue
+remainderRight =
+    OpenObject
+        [
+            ( "outputs"
+            , OpenArray
+                [ outputValue 20 200 400
+                , outputValue 20 200 400
+                , outputValue 21 201 400
+                , OpenObject [("coin", OpenInteger 22)]
+                ]
+            )
+        ]
+
+outputValue :: Integer -> Integer -> Integer -> OpenValue
+outputValue coin datumIn datumOut =
+    OpenObject
+        [ ("coin", OpenInteger coin)
+        ,
+            ( "datum"
+            , OpenObject
+                [
+                    ( "fields"
+                    , OpenObject
+                        [
+                            ( "4"
+                            , OpenObject
+                                [
+                                    ( "fields"
+                                    , OpenObject
+                                        [
+                                            ( "0"
+                                            , OpenObject
+                                                [ ("2", OpenInteger datumIn)
+                                                ]
+                                            )
+                                        ,
+                                            ( "1"
+                                            , OpenObject
+                                                [ ("2", OpenInteger datumOut)
+                                                ]
+                                            )
+                                        ]
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            )
+        ]
 
 openBytesJson :: Aeson.Value -> Aeson.Value
 openBytesJson bytes =

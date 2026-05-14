@@ -23,6 +23,7 @@ import Cardano.Node.Client.TxDiff (
 
 data TxDiffCliOptions = TxDiffCliOptions
     { txDiffCliBlueprintPaths :: [FilePath]
+    , txDiffCliCollapseRulesPath :: Maybe FilePath
     , txDiffCliHumanRenderOptions :: HumanRenderOptions
     , txDiffCliLeftPath :: FilePath
     , txDiffCliRightPath :: FilePath
@@ -34,43 +35,50 @@ newtype TxDiffCliError = TxDiffCliUsageError String
 
 parseTxDiffCliArgs :: [String] -> Either TxDiffCliError TxDiffCliOptions
 parseTxDiffCliArgs =
-    go [] defaultHumanRenderOptions
+    go [] Nothing defaultHumanRenderOptions
   where
-    go blueprintPaths renderOptions ("--blueprint" : blueprintPath : rest) =
-        go (blueprintPath : blueprintPaths) renderOptions rest
-    go _ _ ["--blueprint"] =
+    go blueprintPaths collapseRulesPath renderOptions ("--blueprint" : blueprintPath : rest) =
+        go (blueprintPath : blueprintPaths) collapseRulesPath renderOptions rest
+    go _ _ _ ["--blueprint"] =
         Left (TxDiffCliUsageError "missing value for --blueprint")
-    go blueprintPaths renderOptions ("--render" : value : rest) =
+    go blueprintPaths _ renderOptions ("--collapse-rules" : collapseRulesPath : rest) =
+        go blueprintPaths (Just collapseRulesPath) renderOptions rest
+    go _ _ _ ["--collapse-rules"] =
+        Left (TxDiffCliUsageError "missing value for --collapse-rules")
+    go blueprintPaths collapseRulesPath renderOptions ("--render" : value : rest) =
         case parseRenderShape value of
             Left err ->
                 Left err
             Right renderShape ->
                 go
                     blueprintPaths
+                    collapseRulesPath
                     renderOptions{humanRenderShape = renderShape}
                     rest
-    go _ _ ["--render"] =
+    go _ _ _ ["--render"] =
         Left (TxDiffCliUsageError "missing value for --render")
-    go blueprintPaths renderOptions ("--tree-art" : value : rest) =
+    go blueprintPaths collapseRulesPath renderOptions ("--tree-art" : value : rest) =
         case parseTreeArt value of
             Left err ->
                 Left err
             Right treeArt ->
                 go
                     blueprintPaths
+                    collapseRulesPath
                     renderOptions{humanTreeArt = treeArt}
                     rest
-    go _ _ ["--tree-art"] =
+    go _ _ _ ["--tree-art"] =
         Left (TxDiffCliUsageError "missing value for --tree-art")
-    go blueprintPaths renderOptions [leftPath, rightPath] =
+    go blueprintPaths collapseRulesPath renderOptions [leftPath, rightPath] =
         Right
             TxDiffCliOptions
                 { txDiffCliBlueprintPaths = reverse blueprintPaths
+                , txDiffCliCollapseRulesPath = collapseRulesPath
                 , txDiffCliHumanRenderOptions = renderOptions
                 , txDiffCliLeftPath = leftPath
                 , txDiffCliRightPath = rightPath
                 }
-    go _ _ _ =
+    go _ _ _ _ =
         Left (TxDiffCliUsageError "expected TX_A TX_B")
 
 parseRenderShape :: String -> Either TxDiffCliError RenderShape
@@ -94,4 +102,5 @@ txDiffCliUsage prog =
     "Usage: "
         <> prog
         <> " [--render tree|paths] [--tree-art ascii|unicode]"
+        <> " [--collapse-rules FILE]"
         <> " [--blueprint FILE ...] TX_A TX_B"

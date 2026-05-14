@@ -11,6 +11,7 @@ Cardano node:
 - **Submitter** -- submit signed transactions
 - **Balance** -- exact-fee balancing and fee-dependent output convergence
 - **TxBuild** -- Conway-era transaction builder DSL with `Peek` fixpoints and pluggable `Ctx` queries
+- **TxDiff** -- structural transaction diffing with blueprint-aware datum/redeemer decoding ([architecture](modules/tx-diff.md))
 - **Validity** -- pick an `invalid-hereafter` slot inside the chain's plutus-translation horizon ([details](modules/validity.md))
 
 `Balance` and `TxBuild` are implemented by the public
@@ -26,6 +27,14 @@ protocol supplies its own constructor:
 |----------|----------|-----------|
 | N2C (Unix socket) | `mkN2CProvider` | `mkN2CSubmitter` |
 | N2N (TCP) | planned | planned |
+
+## Executables
+
+- **tx-diff** -- compare two Conway transactions, optionally decode Plutus
+  datum/redeemer data with blueprints, and group repeated list diffs with YAML
+  collapse rules ([manual](executables/tx-diff.md)). Install released builds
+  from the GitHub Release assets on Linux or with
+  `brew tap lambdasistemi/tap && brew install tx-diff` on macOS.
 
 ## Current TxBuild status
 

@@ -22,6 +22,7 @@ spec =
                 `shouldBe` Right
                     TxDiffCliOptions
                         { txDiffCliBlueprintPaths = []
+                        , txDiffCliCollapseRulesPath = Nothing
                         , txDiffCliHumanRenderOptions = defaultHumanRenderOptions
                         , txDiffCliLeftPath = "tx-a.cbor"
                         , txDiffCliRightPath = "tx-b.cbor"
@@ -32,6 +33,7 @@ spec =
                 `shouldBe` Right
                     TxDiffCliOptions
                         { txDiffCliBlueprintPaths = []
+                        , txDiffCliCollapseRulesPath = Nothing
                         , txDiffCliHumanRenderOptions =
                             defaultHumanRenderOptions
                                 { humanRenderShape = RenderPaths
@@ -45,6 +47,7 @@ spec =
                 `shouldBe` Right
                     TxDiffCliOptions
                         { txDiffCliBlueprintPaths = []
+                        , txDiffCliCollapseRulesPath = Nothing
                         , txDiffCliHumanRenderOptions =
                             defaultHumanRenderOptions
                                 { humanTreeArt = TreeArtUnicode
@@ -65,6 +68,23 @@ spec =
                 `shouldBe` Right
                     TxDiffCliOptions
                         { txDiffCliBlueprintPaths = ["one.json", "two.json"]
+                        , txDiffCliCollapseRulesPath = Nothing
+                        , txDiffCliHumanRenderOptions = defaultHumanRenderOptions
+                        , txDiffCliLeftPath = "tx-a.cbor"
+                        , txDiffCliRightPath = "tx-b.cbor"
+                        }
+
+        it "accepts a collapse rules path" $
+            parseTxDiffCliArgs
+                [ "--collapse-rules"
+                , "collapse.yaml"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Right
+                    TxDiffCliOptions
+                        { txDiffCliBlueprintPaths = []
+                        , txDiffCliCollapseRulesPath = Just "collapse.yaml"
                         , txDiffCliHumanRenderOptions = defaultHumanRenderOptions
                         , txDiffCliLeftPath = "tx-a.cbor"
                         , txDiffCliRightPath = "tx-b.cbor"
@@ -79,3 +99,8 @@ spec =
             parseTxDiffCliArgs ["--tree-art", "emoji", "missing-a", "missing-b"]
                 `shouldBe` Left
                     (TxDiffCliUsageError "unsupported --tree-art value: emoji")
+
+        it "rejects a missing collapse rules path before inputs are read" $
+            parseTxDiffCliArgs ["--collapse-rules"]
+                `shouldBe` Left
+                    (TxDiffCliUsageError "missing value for --collapse-rules")
