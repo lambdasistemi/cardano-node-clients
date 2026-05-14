@@ -10,50 +10,49 @@ import Cardano.Node.Client.TxDiff (
  )
 import Cardano.Node.Client.TxDiff.Cli (
     TxDiffCliError (..),
+    TxDiffCliN2cConfig (..),
     TxDiffCliOptions (..),
+    TxDiffCliWeb2Config (..),
     parseTxDiffCliArgs,
  )
+
+defaultOptions :: TxDiffCliOptions
+defaultOptions =
+    TxDiffCliOptions
+        { txDiffCliBlueprintPaths = []
+        , txDiffCliCollapseRulesPath = Nothing
+        , txDiffCliHumanRenderOptions = defaultHumanRenderOptions
+        , txDiffCliN2cResolver = Nothing
+        , txDiffCliWeb2Resolver = Nothing
+        , txDiffCliLeftPath = "tx-a.cbor"
+        , txDiffCliRightPath = "tx-b.cbor"
+        }
 
 spec :: Spec
 spec =
     describe "tx-diff CLI parsing" $ do
         it "defaults to tree rendering with ASCII art" $
             parseTxDiffCliArgs ["tx-a.cbor", "tx-b.cbor"]
-                `shouldBe` Right
-                    TxDiffCliOptions
-                        { txDiffCliBlueprintPaths = []
-                        , txDiffCliCollapseRulesPath = Nothing
-                        , txDiffCliHumanRenderOptions = defaultHumanRenderOptions
-                        , txDiffCliLeftPath = "tx-a.cbor"
-                        , txDiffCliRightPath = "tx-b.cbor"
-                        }
+                `shouldBe` Right defaultOptions
 
         it "accepts explicit path rendering" $
             parseTxDiffCliArgs ["--render", "paths", "tx-a.cbor", "tx-b.cbor"]
                 `shouldBe` Right
-                    TxDiffCliOptions
-                        { txDiffCliBlueprintPaths = []
-                        , txDiffCliCollapseRulesPath = Nothing
-                        , txDiffCliHumanRenderOptions =
+                    defaultOptions
+                        { txDiffCliHumanRenderOptions =
                             defaultHumanRenderOptions
                                 { humanRenderShape = RenderPaths
                                 }
-                        , txDiffCliLeftPath = "tx-a.cbor"
-                        , txDiffCliRightPath = "tx-b.cbor"
                         }
 
         it "accepts explicit Unicode tree art" $
             parseTxDiffCliArgs ["--tree-art", "unicode", "tx-a.cbor", "tx-b.cbor"]
                 `shouldBe` Right
-                    TxDiffCliOptions
-                        { txDiffCliBlueprintPaths = []
-                        , txDiffCliCollapseRulesPath = Nothing
-                        , txDiffCliHumanRenderOptions =
+                    defaultOptions
+                        { txDiffCliHumanRenderOptions =
                             defaultHumanRenderOptions
                                 { humanTreeArt = TreeArtUnicode
                                 }
-                        , txDiffCliLeftPath = "tx-a.cbor"
-                        , txDiffCliRightPath = "tx-b.cbor"
                         }
 
         it "preserves repeated blueprint paths in input order" $
@@ -66,12 +65,8 @@ spec =
                 , "tx-b.cbor"
                 ]
                 `shouldBe` Right
-                    TxDiffCliOptions
+                    defaultOptions
                         { txDiffCliBlueprintPaths = ["one.json", "two.json"]
-                        , txDiffCliCollapseRulesPath = Nothing
-                        , txDiffCliHumanRenderOptions = defaultHumanRenderOptions
-                        , txDiffCliLeftPath = "tx-a.cbor"
-                        , txDiffCliRightPath = "tx-b.cbor"
                         }
 
         it "accepts a collapse rules path" $
@@ -82,12 +77,8 @@ spec =
                 , "tx-b.cbor"
                 ]
                 `shouldBe` Right
-                    TxDiffCliOptions
-                        { txDiffCliBlueprintPaths = []
-                        , txDiffCliCollapseRulesPath = Just "collapse.yaml"
-                        , txDiffCliHumanRenderOptions = defaultHumanRenderOptions
-                        , txDiffCliLeftPath = "tx-a.cbor"
-                        , txDiffCliRightPath = "tx-b.cbor"
+                    defaultOptions
+                        { txDiffCliCollapseRulesPath = Just "collapse.yaml"
                         }
 
         it "rejects invalid render mode before inputs are read" $
@@ -104,3 +95,120 @@ spec =
             parseTxDiffCliArgs ["--collapse-rules"]
                 `shouldBe` Left
                     (TxDiffCliUsageError "missing value for --collapse-rules")
+
+        it "parses --resolve-n2c with --network-magic" $
+            parseTxDiffCliArgs
+                [ "--resolve-n2c"
+                , "/run/cardano/node.socket"
+                , "--network-magic"
+                , "764824073"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Right
+                    defaultOptions
+                        { txDiffCliN2cResolver =
+                            Just
+                                TxDiffCliN2cConfig
+                                    { txDiffCliN2cSocket = "/run/cardano/node.socket"
+                                    , txDiffCliN2cNetworkMagic = 764824073
+                                    }
+                        }
+
+        it "rejects --resolve-n2c without --network-magic" $
+            parseTxDiffCliArgs
+                [ "--resolve-n2c"
+                , "/run/cardano/node.socket"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Left
+                    ( TxDiffCliUsageError
+                        "--resolve-n2c also requires --network-magic"
+                    )
+
+        it "rejects --network-magic without --resolve-n2c" $
+            parseTxDiffCliArgs
+                [ "--network-magic"
+                , "1"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Left
+                    ( TxDiffCliUsageError
+                        "--network-magic also requires --resolve-n2c"
+                    )
+
+        it "rejects a non-numeric --network-magic" $
+            parseTxDiffCliArgs
+                [ "--network-magic"
+                , "preprod"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Left
+                    ( TxDiffCliUsageError
+                        "expected a non-negative integer for --network-magic, got: preprod"
+                    )
+
+        it "parses --resolve-web2 without an API key file" $
+            parseTxDiffCliArgs
+                [ "--resolve-web2"
+                , "https://example.invalid/api/v0"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Right
+                    defaultOptions
+                        { txDiffCliWeb2Resolver =
+                            Just
+                                TxDiffCliWeb2Config
+                                    { txDiffCliWeb2Url =
+                                        "https://example.invalid/api/v0"
+                                    , txDiffCliWeb2ApiKeyFile = Nothing
+                                    }
+                        }
+
+        it "parses --resolve-web2 with --web2-api-key-file" $
+            parseTxDiffCliArgs
+                [ "--resolve-web2"
+                , "https://cardano-mainnet.blockfrost.io/api/v0"
+                , "--web2-api-key-file"
+                , "/run/secrets/blockfrost-mainnet"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Right
+                    defaultOptions
+                        { txDiffCliWeb2Resolver =
+                            Just
+                                TxDiffCliWeb2Config
+                                    { txDiffCliWeb2Url =
+                                        "https://cardano-mainnet.blockfrost.io/api/v0"
+                                    , txDiffCliWeb2ApiKeyFile =
+                                        Just "/run/secrets/blockfrost-mainnet"
+                                    }
+                        }
+
+        it "rejects --web2-api-key-file without --resolve-web2" $
+            parseTxDiffCliArgs
+                [ "--web2-api-key-file"
+                , "/run/secrets/blockfrost-mainnet"
+                , "tx-a.cbor"
+                , "tx-b.cbor"
+                ]
+                `shouldBe` Left
+                    ( TxDiffCliUsageError
+                        "--web2-api-key-file requires --resolve-web2"
+                    )
+
+        it "rejects --web2-api-key-file without its value" $
+            parseTxDiffCliArgs
+                [ "--resolve-web2"
+                , "https://example.invalid/api/v0"
+                , "--web2-api-key-file"
+                ]
+                `shouldBe` Left
+                    ( TxDiffCliUsageError
+                        "missing value for --web2-api-key-file"
+                    )

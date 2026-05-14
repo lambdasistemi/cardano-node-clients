@@ -292,10 +292,20 @@ executable tx-diff
   main-is:          Main.hs
   default-language: GHC2021
   build-depends:
+    , async
     , base
+    , base16-bytestring
     , bytestring
+    , cardano-crypto-class
+    , cardano-ledger-api
+    , cardano-ledger-core
     , cardano-node-clients
     , cardano-node-clients:plutus-blueprint
+    , containers
+    , http-client
+    , http-client-tls
+    , microlens
+    , ouroboros-network:api
     , text
 
 test-suite unit-tests
