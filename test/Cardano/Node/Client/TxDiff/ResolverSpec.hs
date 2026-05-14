@@ -4,6 +4,7 @@ Description : Resolver chain semantics
 -}
 module Cardano.Node.Client.TxDiff.ResolverSpec (spec) where
 
+import Control.Exception (ErrorCall (..), throwIO)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -25,7 +26,9 @@ import Cardano.Ledger.Keys (KeyHash (..), KeyRole (Payment))
 import Cardano.Ledger.Mary.Value (MaryValue (..), MultiAsset (..))
 import Cardano.Ledger.TxIn (TxId (..), TxIn (..))
 
+import Cardano.Node.Client.Provider (Provider (..))
 import Cardano.Node.Client.TxDiff.Resolver (Resolver (..), resolveChain)
+import Cardano.Node.Client.TxDiff.Resolver.N2C (n2cResolver)
 
 spec :: Spec
 spec =
@@ -77,6 +80,39 @@ spec =
             unresolved
                 `shouldBe` Map.singleton (mkTxIn 3) ["alpha", "beta"]
 
+        it "delegates the N2C resolver to the provider's queryUTxOByTxIn" $ do
+            let fixed =
+                    Map.fromList
+                        [ (mkTxIn 1, mkTestTxOut 11)
+                        , (mkTxIn 2, mkTestTxOut 12)
+                        ]
+                provider =
+                    stubProvider
+                        { queryUTxOByTxIn = pure . Map.restrictKeys fixed
+                        }
+                resolver = n2cResolver provider
+            results <-
+                resolveInputs resolver $
+                    Set.fromList [mkTxIn 1, mkTxIn 2, mkTxIn 3]
+            Map.keysSet results
+                `shouldBe` Set.fromList [mkTxIn 1, mkTxIn 2]
+            resolverName resolver `shouldBe` "n2c"
+
+        it "treats UTxOs the node cannot resolve as misses in the resolver chain" $ do
+            let provider =
+                    stubProvider
+                        { queryUTxOByTxIn = \_ -> pure Map.empty
+                        }
+                resolver = n2cResolver provider
+                inputs = Set.fromList [mkTxIn 5, mkTxIn 6]
+            (resolved, unresolved) <- resolveChain [resolver] inputs
+            Map.keysSet resolved `shouldBe` Set.empty
+            unresolved
+                `shouldBe` Map.fromList
+                    [ (mkTxIn 5, ["n2c"])
+                    , (mkTxIn 6, ["n2c"])
+                    ]
+
         it "skips later resolvers once nothing remains to resolve" $ do
             secondCalled <- newIORef False
             let inputs = Set.singleton (mkTxIn 1)
@@ -94,6 +130,34 @@ spec =
             unresolved `shouldBe` Map.empty
             readIORef secondCalled
                 `shouldReturn` False
+
+{- | A 'Provider IO' whose every field panics on call. Tests override only
+the fields they exercise so an accidental call to a non-overridden field
+is loud rather than silent. Each field is built from a lambda so the
+strict record construction does not force the underlying 'error'.
+-}
+stubProvider :: Provider IO
+stubProvider =
+    Provider
+        { withAcquired = \_ -> panicIO "withAcquired"
+        , queryUTxOs = \_ -> panicIO "queryUTxOs"
+        , queryUTxOByTxIn = \_ -> panicIO "queryUTxOByTxIn"
+        , queryProtocolParams = panicIO "queryProtocolParams"
+        , queryLedgerSnapshot = panicIO "queryLedgerSnapshot"
+        , queryStakeRewards = \_ -> panicIO "queryStakeRewards"
+        , queryRewardAccounts = \_ -> panicIO "queryRewardAccounts"
+        , queryVoteDelegatees = \_ -> panicIO "queryVoteDelegatees"
+        , queryTreasury = panicIO "queryTreasury"
+        , queryGovernanceState = panicIO "queryGovernanceState"
+        , evaluateTx = \_ -> panicIO "evaluateTx"
+        , posixMsToSlot = \_ -> panicIO "posixMsToSlot"
+        , posixMsCeilSlot = \_ -> panicIO "posixMsCeilSlot"
+        , queryUpperBoundSlot = \_ -> panicIO "queryUpperBoundSlot"
+        }
+  where
+    panicIO :: String -> IO a
+    panicIO field =
+        throwIO (ErrorCall ("stubProvider." <> field <> " called by an unprepared test"))
 
 fakeResolver :: Text -> Map TxIn (TxOut ConwayEra) -> Resolver
 fakeResolver name results =
