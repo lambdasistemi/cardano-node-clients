@@ -36,14 +36,16 @@ require richer Unicode connectors.
 
 Source: https://hackage-content.haskell.org/package/containers-0.8/docs/Data-Tree.html
 
-## Decision: `tree-render-text` is the strongest dependency candidate
+## Decision: `tree-render-text` is not usable with this GHC
 
 `tree-render-text` exposes `renderTree` / `renderForest` and render options,
 including traced Unicode and traced ASCII options.
 
-**Rationale**: It directly matches the requirement for selectable tree art.
-It is more targeted than `tree-view` because it documents both Unicode and
-ASCII traced render options.
+**Rationale**: It directly matches the requirement for selectable tree art,
+but the latest available package declares `base ^>=4.12.0.0`. This repository
+builds with GHC 9.12.3 and `base-4.21`, so using it would require an
+`allow-newer` workaround or a vendored patch. That is not acceptable for this
+small rendering feature.
 
 **Alternatives considered**:
 
@@ -56,6 +58,30 @@ Sources:
 
 - https://hackage.haskell.org/package/tree-render-text/docs/Data-Tree-Render-Text.html
 - https://hackage.haskell.org/package/tree-view
+
+## Decision: Use `containers` for ASCII and `tree-view` for Unicode
+
+Use `Data.Tree.drawForest` from the existing `containers` dependency for the
+default ASCII tree. Add `tree-view` only for Unicode tree art. Keep the
+transaction diff traversal and displayed leaf formatting inside
+`Cardano.Node.Client.TxDiff`; only delegate connector layout to these tree
+renderers.
+
+**Rationale**: `containers` is already present and gives a portable
+non-Unicode tree. `tree-view` is BSD3, declares `base < 5`, and renders
+Unicode tree art. This satisfies both accepted art modes without adding a
+stale package or a second diff engine.
+
+**Verification**:
+
+- `nix develop --quiet -c cabal list tree-render-text --simple-output`
+  lists `tree-render-text 0.4.0.0`.
+- `nix develop --quiet -c cabal get tree-render-text-0.4.0.0`
+  downloads the source package and shows the incompatible `base ^>=4.12.0.0`
+  bound.
+- `nix develop --quiet -c cabal get tree-view`
+  downloads `tree-view-0.5.1`, whose cabal file declares `BSD3` and
+  `base < 5`.
 
 ## Decision: Render shape and tree art are separate concepts
 
@@ -73,9 +99,8 @@ prevents invalid combinations from leaking into renderer internals.
   This is compact for CLI parsing but mixes two user choices and makes future
   additions less clear.
 
-## Open Implementation Check
+## Closed Implementation Check
 
-Before coding, verify whether `tree-render-text` is available in the pinned
-Nix/Haskell package set used by this repository. If not, either use
-`Data.Tree.drawTree` for the first implementation or add the dependency with
-explicit Nix/Cabal proof.
+`tree-render-text` is visible at the pinned index state but is incompatible
+with this GHC. Implementation will add `tree-view` as the narrow Unicode
+rendering dependency and keep ASCII rendering on `containers`.

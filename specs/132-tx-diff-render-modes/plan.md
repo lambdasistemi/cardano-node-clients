@@ -5,6 +5,16 @@
 **Input**: Feature specification from
 `specs/132-tx-diff-render-modes/spec.md`; GitHub issue #139.
 
+## Status
+
+**Completed**: Setup/dependency decision, RED renderer and CLI tests, tree
+and path render implementation, CLI flag parsing, Conway expectation updates,
+focused unit verification, and full local CI.
+
+**Current**: Ready for PR review.
+
+**Blockers**: None.
+
 ## Summary
 
 Add an explicit rendering contract for `tx-diff`: tree-shaped human output
@@ -17,8 +27,8 @@ parsing.
 ## Technical Context
 
 **Language/Version**: Haskell, GHC 9.12.3  
-**Primary Dependencies**: Existing `containers`; candidate renderer packages
-recorded in [research.md](./research.md)  
+**Primary Dependencies**: Existing `containers`; add `tree-view` for Unicode
+tree connector rendering, as recorded in [research.md](./research.md)
 **Storage**: N/A  
 **Testing**: Hspec via `just unit`; lint/format through `just ci`  
 **Target Platform**: `tx-diff` CLI and library renderer API  
@@ -79,14 +89,13 @@ module. CLI parsing stays in `app/tx-diff/Main.hs`.
 
 Research output is captured in [research.md](./research.md).
 
-Key decision to revisit during implementation:
+Key decision:
 
-- Prefer no new dependency if ASCII/plain tree output satisfies the accepted
-  default contract.
-- Prefer `tree-render-text` if Unicode and ASCII connector styles are both
-  required through a maintained library.
-- Do not use `tree-diff` as the primary renderer unless its license and data
-  model fit are explicitly accepted.
+- Use `containers` / `Data.Tree.drawForest` for ASCII connector style.
+- Use `tree-view` for Unicode connector style.
+- Keep comparison logic in the existing `DiffNode` traversal.
+- Do not use `tree-diff` as the primary renderer because it is a diff engine
+  and has a license mismatch concern for this project.
 
 ## Phase 1: Design
 
@@ -107,6 +116,6 @@ Design output:
 
 ## Post-Design Constitution Check
 
-PASS if implementation either avoids new dependencies or records a narrow,
-licensed, Nix/Cabal-compatible dependency choice. Any dependency addition must
-be part of the same vertical commit as its tests and CLI behavior.
+PASS: implementation records a narrow, BSD-3-Clause,
+Nix/Cabal-compatible dependency choice. The dependency addition must be part
+of the same vertical commit as its tests and CLI behavior.
