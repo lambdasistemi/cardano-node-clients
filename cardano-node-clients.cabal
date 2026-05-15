@@ -6,7 +6,10 @@ description:
   Channel-driven Haskell clients for Cardano node Ouroboros
   mini-protocols. Provides N2C (Node-to-Client) LocalStateQuery
   and LocalTxSubmission clients, with high-level Provider and
-  Submitter interfaces and transaction balancing utilities.
+  Submitter interfaces, plus a UTxO indexer. Transaction
+  building, balancing, blueprint-aware diffs, and the tx-diff /
+  cardano-tx-generator executables live in
+  https://github.com/lambdasistemi/cardano-tx-tools.
 
 license:         Apache-2.0
 license-file:    LICENSE
@@ -36,49 +39,13 @@ common warnings
     TypeOperators
     ViewPatterns
 
-library tx-build
+library
   import:           warnings
-  visibility:       public
-  hs-source-dirs:   lib-tx-build
+  hs-source-dirs:   lib
   default-language: GHC2021
   exposed-modules:
-    Cardano.Node.Client.Balance
-    Cardano.Node.Client.Ledger
-    Cardano.Node.Client.TxBuild
-
-  other-modules:
-    Cardano.Node.Client.Credentials
-    Cardano.Node.Client.Deposits
-    Cardano.Node.Client.Inputs
-    Cardano.Node.Client.Scripts
-    Cardano.Node.Client.Witnesses
-
-  build-depends:
-    , base
-    , bytestring
-    , cardano-binary
-    , cardano-data
-    , cardano-ledger-allegra
-    , cardano-ledger-alonzo
-    , cardano-ledger-api
-    , cardano-ledger-conway
-    , cardano-ledger-core
-    , cardano-ledger-mary
-    , cardano-slotting
-    , cardano-strict-containers
-    , containers
-    , microlens
-    , operational
-    , plutus-core
-    , plutus-tx
-
-library
-  import:             warnings
-  hs-source-dirs:     lib
-  default-language:   GHC2021
-  exposed-modules:
     Cardano.Node.Client.Address
-    Cardano.Node.Client.Evaluate
+    Cardano.Node.Client.Ledger
     Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
     Cardano.Node.Client.N2C.Connection
@@ -93,30 +60,11 @@ library
     Cardano.Node.Client.Provider
     Cardano.Node.Client.SampleList
     Cardano.Node.Client.Submitter
-    Cardano.Node.Client.TxDiff
-    Cardano.Node.Client.TxDiff.Cli
-    Cardano.Node.Client.TxDiff.Resolver
-    Cardano.Node.Client.TxDiff.Resolver.N2C
-    Cardano.Node.Client.TxDiff.Resolver.Web2
-    Cardano.Node.Client.TxGenerator.Build
-    Cardano.Node.Client.TxGenerator.Daemon
-    Cardano.Node.Client.TxGenerator.Fanout
-    Cardano.Node.Client.TxGenerator.Persist
-    Cardano.Node.Client.TxGenerator.Population
-    Cardano.Node.Client.TxGenerator.Selection
-    Cardano.Node.Client.TxGenerator.Server
-    Cardano.Node.Client.TxGenerator.Snapshot
-    Cardano.Node.Client.TxGenerator.Types
     Cardano.Node.Client.Types
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
     Cardano.Node.Client.UTxOIndexer.Server
     Cardano.Node.Client.Validity
-
-  reexported-modules:
-    Cardano.Node.Client.Balance
-    , Cardano.Node.Client.Ledger
-    , Cardano.Node.Client.TxBuild
 
   build-depends:
     , aeson
@@ -137,7 +85,6 @@ library
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-ledger-read
-    , cardano-node-clients:tx-build
     , cardano-node-clients:utxo-indexer-lib
     , cardano-prelude
     , cardano-slotting
@@ -149,9 +96,6 @@ library
     , dns
     , exceptions
     , filepath
-    , http-client
-    , http-client-tls
-    , http-types
     , io-classes
     , io-classes:strict-stm
     , iproute
@@ -164,11 +108,9 @@ library
     , ouroboros-consensus:protocol
     , ouroboros-network
     , ouroboros-network:api
-    , ouroboros-network:api-tests-lib
     , ouroboros-network:framework
     , ouroboros-network:protocols
     , plutus-core
-    , plutus-tx
     , process
     , random
     , retry
@@ -177,30 +119,8 @@ library
     , text
     , time
     , transformers
-    , tree-view
     , typed-protocols
     , unix
-    , yaml
-
-library plutus-blueprint
-  import:           warnings
-  visibility:       public
-  hs-source-dirs:   lib-plutus-blueprint
-  default-language: GHC2021
-  exposed-modules:  Cardano.Node.Client.TxDiff.Blueprint
-  build-depends:
-    , aeson
-    , base
-    , base16-bytestring
-    , bytestring
-    , cardano-ledger-api
-    , cardano-ledger-binary
-    , cardano-ledger-conway
-    , cardano-ledger-core
-    , cardano-node-clients
-    , containers
-    , plutus-core
-    , text
 
 library devnet
   import:           warnings
@@ -276,38 +196,6 @@ executable utxo-indexer
     , cardano-node-clients
     , cardano-node-clients:utxo-indexer-lib
 
-executable cardano-tx-generator
-  import:           warnings
-  hs-source-dirs:   app/cardano-tx-generator
-  main-is:          Main.hs
-  default-language: GHC2021
-  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
-  build-depends:
-    , base
-    , cardano-node-clients
-
-executable tx-diff
-  import:           warnings
-  hs-source-dirs:   app/tx-diff
-  main-is:          Main.hs
-  default-language: GHC2021
-  build-depends:
-    , async
-    , base
-    , base16-bytestring
-    , bytestring
-    , cardano-crypto-class
-    , cardano-ledger-api
-    , cardano-ledger-core
-    , cardano-node-clients
-    , cardano-node-clients:plutus-blueprint
-    , containers
-    , http-client
-    , http-client-tls
-    , microlens
-    , ouroboros-network:api
-    , text
-
 test-suite unit-tests
   import:           warnings
   type:             exitcode-stdio-1.0
@@ -316,25 +204,9 @@ test-suite unit-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.AddressSpec
-    Cardano.Node.Client.BalanceSpec
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
-    Cardano.Node.Client.TxBuildGoldenSpec
-    Cardano.Node.Client.TxBuildSpec
-    Cardano.Node.Client.TxDiff.BlueprintSpec
-    Cardano.Node.Client.TxDiff.CliSpec
-    Cardano.Node.Client.TxDiff.ConwaySpec
-    Cardano.Node.Client.TxDiff.CoreSpec
-    Cardano.Node.Client.TxDiff.ResolverSpec
-    Cardano.Node.Client.TxDiff.Web2Spec
-    Cardano.Node.Client.TxDiffSpec
-    Cardano.Node.Client.TxGenerator.FanoutSpec
-    Cardano.Node.Client.TxGenerator.PersistSpec
-    Cardano.Node.Client.TxGenerator.PopulationSpec
-    Cardano.Node.Client.TxGenerator.SelectionSpec
-    Cardano.Node.Client.TxGenerator.ServerSpec
-    Cardano.Node.Client.TxGenerator.SnapshotSpec
     Cardano.Node.Client.UTxOIndexer.DaemonSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
@@ -359,8 +231,6 @@ test-suite unit-tests
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-node-clients
-    , cardano-node-clients:plutus-blueprint
-    , cardano-node-clients:tx-build
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting
     , cardano-strict-containers
@@ -372,50 +242,12 @@ test-suite unit-tests
     , network
     , ouroboros-consensus
     , plutus-core
-    , plutus-tx
     , QuickCheck
     , random
     , sop-extras
     , temporary
     , text
     , time
-
-test-suite tx-build-tests
-  import:           warnings
-  type:             exitcode-stdio-1.0
-  hs-source-dirs:   test
-  main-is:          tx-build-main.hs
-  default-language: GHC2021
-  other-modules:
-    Cardano.Node.Client.BalanceSpec
-    Cardano.Node.Client.ConwayFixtures
-    Cardano.Node.Client.TxBuildGoldenSpec
-    Cardano.Node.Client.TxBuildPublicApiSpec
-
-  build-depends:
-    , base
-    , base16-bytestring
-    , bytestring
-    , cardano-binary
-    , cardano-crypto-class
-    , cardano-data
-    , cardano-ledger-allegra
-    , cardano-ledger-alonzo
-    , cardano-ledger-api
-    , cardano-ledger-binary
-    , cardano-ledger-conway
-    , cardano-ledger-core
-    , cardano-ledger-mary
-    , cardano-node-clients:tx-build
-    , cardano-slotting
-    , cardano-strict-containers
-    , containers
-    , hspec
-    , microlens
-    , plutus-core
-    , plutus-tx
-    , QuickCheck
-    , text
 
 test-suite e2e-tests
   import:           warnings
@@ -425,47 +257,26 @@ test-suite e2e-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.ConwayFixtures
-    Cardano.Node.Client.E2E.BalanceSpec
-    Cardano.Node.Client.E2E.ChainPopulatorSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
-    Cardano.Node.Client.E2E.GovernanceSmokeSpec
     Cardano.Node.Client.E2E.HorizonSpec
     Cardano.Node.Client.E2E.Issue97ReproSpec
-    Cardano.Node.Client.E2E.MultiAssetChangeSpec
     Cardano.Node.Client.E2E.N2CFullSpec
     Cardano.Node.Client.E2E.ProviderSpec
-    Cardano.Node.Client.E2E.TxBuildSpec
-    Cardano.Node.Client.E2E.TxGeneratorEnduranceSpec
-    Cardano.Node.Client.E2E.TxGeneratorIndexFreshSpec
-    Cardano.Node.Client.E2E.TxGeneratorReadySpec
-    Cardano.Node.Client.E2E.TxGeneratorRefillSpec
-    Cardano.Node.Client.E2E.TxGeneratorRestartSpec
-    Cardano.Node.Client.E2E.TxGeneratorSnapshotSpec
-    Cardano.Node.Client.E2E.TxGeneratorStarvationSpec
-    Cardano.Node.Client.E2E.TxGeneratorSubmitIdempotenceSpec
-    Cardano.Node.Client.E2E.TxGeneratorTransactSpec
     Cardano.Node.Client.E2E.UTxOIndexerReconnectSpec
-    Cardano.Node.Client.E2E.UTxOIndexerSpec
 
   build-depends:
     , aeson
     , async
     , base
-    , base16-bytestring
     , bytestring
     , cardano-crypto-class
-    , cardano-ledger-allegra
-    , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
-    , cardano-ledger-mary
-    , cardano-ledger-read
     , cardano-node-clients
     , cardano-node-clients:devnet
     , cardano-slotting
-    , cardano-strict-containers
     , chain-follower
     , containers
     , contra-tracer
@@ -476,9 +287,7 @@ test-suite e2e-tests
     , microlens
     , network
     , ouroboros-network:api
-    , random
     , rocksdb-kv-transactions:kv-transactions
-    , scientific
     , stm
     , temporary
     , text

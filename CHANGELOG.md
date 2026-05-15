@@ -9,6 +9,19 @@
 
 ## Unreleased
 
+### Breaking changes
+
+* Transaction tooling moved to
+  [lambdasistemi/cardano-tx-tools](https://github.com/lambdasistemi/cardano-tx-tools).
+  The `tx-diff` executable, the `cardano-tx-generator` daemon, and the
+  `Cardano.Node.Client.{Balance,TxBuild,TxDiff,Evaluate}` modules (and
+  their `lib-tx-build` / `lib-plutus-blueprint` sublibraries) no longer
+  ship from this repository. Downstream consumers should depend on
+  `cardano-tx-tools` directly via `source-repository-package`. The
+  cardano-node-clients e2e-tests already consume `cardano-tx-tools` for
+  the balancing and tx-build helpers used by `TxBuildSpec`,
+  `BalanceSpec`, `MultiAssetChangeSpec`, and `ChainPopulatorSpec`.
+
 ## [0.1.3.0](https://github.com/lambdasistemi/cardano-node-clients/compare/v0.1.2.0...v0.1.3.0) (2026-05-15)
 
 ### Features

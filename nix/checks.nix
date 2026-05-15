@@ -44,11 +44,8 @@ let
       name = "build";
       text = ''
         test -e ${components.library}
-        test -e ${components.sublibs."tx-build"}
         test -e ${components.sublibs."utxo-indexer-lib"}
-        test -e ${components.exes.cardano-tx-generator}
         test -e ${components.exes.utxo-indexer}
-        test -e ${components.exes.tx-diff}
         echo "build outputs realized"
       '';
     };
@@ -68,11 +65,9 @@ let
       name = "unit";
       runtimeInputs = [
         components.tests.unit-tests
-        components.tests."tx-build-tests"
       ];
       text = ''
         unit-tests
-        tx-build-tests
       '';
     };
 
@@ -81,7 +76,6 @@ let
       runtimeInputs = lintInputs;
       text = ''
         cd ${src}
-        bash scripts/check-tx-build-boundary.sh
         cabal-fmt -c cardano-node-clients.cabal
         find . -type f -name '*.hs' -not -path '*/dist-newstyle/*' -exec fourmolu -m check {} +
         find . -type f -name '*.hs' -not -path '*/dist-newstyle/*' -exec hlint {} +

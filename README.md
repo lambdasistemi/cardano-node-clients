@@ -8,53 +8,38 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 
 - **Provider** -- query UTxOs and protocol parameters
 - **Submitter** -- submit signed transactions
-- **Balance** -- exact-fee transaction balancing plus fee-dependent output convergence
-- **TxBuild** -- Conway-era transaction builder DSL with `Peek`, `Ctx`, and `Valid`
-- **TxDiff** -- structural Conway transaction diffing with blueprint-aware datum/redeemer decoding
 - **N2C** -- LocalStateQuery + LocalTxSubmission over Unix socket
+- **UTxOIndexer** -- address-keyed UTxO indexer fed by a chain-follower,
+  exposing NDJSON snapshot/await over a Unix socket
 
-`Balance`, `TxBuild`, and the shared Conway transaction alias are also
-available from the public `cardano-node-clients:tx-build` sublibrary.
-That component is intentionally free of N2C, chain-follower, indexer,
-daemon, socket, and RocksDB dependencies. The main
-`cardano-node-clients` library re-exports the same module names for
-existing users.
+Transaction building, balancing, blueprint-aware diffing, and the
+`tx-diff` / `cardano-tx-generator` executables live in
+[lambdasistemi/cardano-tx-tools](https://github.com/lambdasistemi/cardano-tx-tools).
 
 ## Executables
 
-- [`tx-diff`](app/tx-diff/) -- compare two Conway
-  transactions, decode application-level datum/redeemer fields with Plutus
-  blueprints, and group repeated list diffs with YAML collapse rules. See the
-  [manual](docs/executables/tx-diff.md). Released builds are distributed as
-  Linux AppImage/DEB/RPM assets and as a macOS Homebrew formula:
-  `brew tap lambdasistemi/tap && brew install tx-diff`.
 - [`utxo-indexer`](app/utxo-indexer/) -- address->UTxO indexer daemon
   (in-memory or RocksDB-backed) exposing NDJSON snapshot/await over a
   Unix socket. In-process auto-reconnect on upstream-relay disconnect
   with full-jitter exponential backoff via `Control.Retry`, gated by
   an LSQ tip probe (issue
   [#97](https://github.com/lambdasistemi/cardano-node-clients/issues/97)).
-- [`cardano-tx-generator`](app/cardano-tx-generator/) -- Antithesis-driven
-  fan-out daemon that creates monotonic UTxO and address pressure on a
-  node by driving deterministic transactions through a growing
-  population of derived addresses.
 
 ## Testing
 
-- Unit tests cover `balanceTx`, `balanceFeeLoop`, and the `TxBuild`
-  convergence logic, including eval retry, fee oscillation, and
-  `bumpFee`.
+- Unit tests cover the N2C probe and trace surface, the UTxO indexer
+  (daemon, indexer, persistence, server, types), address parsing, and
+  validity helpers.
 - E2E tests run against a real devnet for provider, chainsync,
-  chain-population, `balanceFeeLoop`, and a submitted `TxBuild`
-  transaction using `spend`, `payTo`, `payTo'`, `ctx`, `peek`,
-  `valid`, `requireSignature`, and `validFrom`/`validTo`.
+  chain-population, governance smoke, `balanceFeeLoop`, multi-asset
+  change, a submitted `TxBuild` transaction, and the UTxO indexer
+  (including a relay-restart reconnect scenario).
 
 ## Build
 
 ```bash
 nix develop -c just build
 nix develop -c just ci       # format + lint + build
-nix develop -c cabal build lib:tx-build -O0
 ```
 
 ## License

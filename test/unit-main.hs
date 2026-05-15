@@ -3,18 +3,8 @@ module Main (main) where
 import Test.Hspec (hspec)
 
 import Cardano.Node.Client.AddressSpec qualified as AddressSpec
-import Cardano.Node.Client.BalanceSpec qualified as BalanceSpec
 import Cardano.Node.Client.N2C.ProbeSpec qualified as N2CProbeSpec
 import Cardano.Node.Client.N2C.TraceSpec qualified as N2CTraceSpec
-import Cardano.Node.Client.TxBuildGoldenSpec qualified as TxBuildGoldenSpec
-import Cardano.Node.Client.TxBuildSpec qualified as TxBuildSpec
-import Cardano.Node.Client.TxDiffSpec qualified as TxDiffSpec
-import Cardano.Node.Client.TxGenerator.FanoutSpec qualified as TxGeneratorFanoutSpec
-import Cardano.Node.Client.TxGenerator.PersistSpec qualified as TxGeneratorPersistSpec
-import Cardano.Node.Client.TxGenerator.PopulationSpec qualified as TxGeneratorPopulationSpec
-import Cardano.Node.Client.TxGenerator.SelectionSpec qualified as TxGeneratorSelectionSpec
-import Cardano.Node.Client.TxGenerator.ServerSpec qualified as TxGeneratorServerSpec
-import Cardano.Node.Client.TxGenerator.SnapshotSpec qualified as TxGeneratorSnapshotSpec
 import Cardano.Node.Client.UTxOIndexer.DaemonSpec qualified as UTxOIndexerDaemonSpec
 import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.PersistenceSpec qualified as UTxOIndexerPersistenceSpec
@@ -27,10 +17,6 @@ main :: IO ()
 main = hspec $ do
     AddressSpec.spec
     SampleFibonacciSpec.spec
-    BalanceSpec.spec
-    TxBuildSpec.spec
-    TxBuildGoldenSpec.spec
-    TxDiffSpec.spec
     UTxOIndexerTypesSpec.spec
     UTxOIndexerSpec.spec
     UTxOIndexerServerSpec.spec
@@ -38,10 +24,4 @@ main = hspec $ do
     UTxOIndexerDaemonSpec.spec
     N2CProbeSpec.spec
     N2CTraceSpec.spec
-    TxGeneratorFanoutSpec.spec
-    TxGeneratorPersistSpec.spec
-    TxGeneratorPopulationSpec.spec
-    TxGeneratorSelectionSpec.spec
-    TxGeneratorServerSpec.spec
-    TxGeneratorSnapshotSpec.spec
     ValiditySpec.spec

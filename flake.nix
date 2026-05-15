@@ -20,11 +20,6 @@
     lintNixpkgs.url =
       "github:NixOS/nixpkgs/647e5c14cbd5067f44ac86b74f014962df460840";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    bundlers = {
-      url = "github:NixOS/bundlers";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    dev-assets.url = "github:paolino/dev-assets";
     iohkNix = {
       url =
         "github:input-output-hk/iohk-nix/f444d972c301ddd9f23eac4325ffcc8b5766eee9";
@@ -43,15 +38,8 @@
 
   outputs = inputs@{ self, nixpkgs, lintNixpkgs, flake-parts, haskellNix
     , hackageNix, iohkNix, CHaP, mkdocs, cardano-node, ... }:
-    let
-      imageTag =
-        self.dirtyShortRev or self.shortRev or "unknown";
-    in
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-darwin" ];
-      flake = {
-        inherit imageTag;
-      };
       perSystem = { system, ... }:
         let
           pkgs = import nixpkgs {
@@ -72,7 +60,7 @@
               lib.mkForce [ [ pkgs.libsodium-vrf ] ];
             packages.cardano-crypto-class.components.library.pkgconfig =
               lib.mkForce
-              [ [ pkgs.libsodium-vrf pkgs.secp256k1 pkgs.libblst ] ];
+                [ [ pkgs.libsodium-vrf pkgs.secp256k1 pkgs.libblst ] ];
             packages.cardano-lmdb.components.library.pkgconfig =
               lib.mkForce [ [ pkgs.lmdb ] ];
             packages.cardano-ledger-binary.components.library.doHaddock =
@@ -119,105 +107,6 @@
             };
           };
           components = project.hsPkgs.cardano-node-clients.components;
-          # tx-diff's web2 resolver uses http-client-tls and needs a CA
-          # bundle at runtime. Wrap the raw executable so it points at the
-          # cacert store baked into the nix closure. AppImage/DEB/RPM
-          # bundlers include the wrapper and its closure, so HTTPS works
-          # without the user setting SSL_CERT_FILE themselves.
-          txDiff = pkgs.symlinkJoin {
-            name = "tx-diff";
-            paths = [ components.exes.tx-diff ];
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            postBuild = ''
-              wrapProgram $out/bin/tx-diff \
-                --set-default SSL_CERT_FILE \
-                  ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
-            '';
-          };
-          packageVersion =
-            let
-              versionLines =
-                builtins.filter
-                  (lib.hasPrefix "version:")
-                  (lib.splitString
-                    "\n"
-                    (builtins.readFile ./cardano-node-clients.cabal));
-            in
-            builtins.elemAt
-              (builtins.match
-                "version:[[:space:]]*([^[:space:]]+)"
-                (builtins.head versionLines))
-              0;
-          sourceRevision =
-            self.shortRev or (self.dirtyShortRev or "dirty");
-          devArtifactVersion = "${packageVersion}-${sourceRevision}";
-          mkDarwinHomebrewBundle =
-            inputs.dev-assets.lib.mkDarwinHomebrewBundle { inherit pkgs; };
-          txDiffDarwinFormulaTest = ''
-            output = shell_output("#{bin}/tx-diff 2>&1", 1)
-            assert_match "Usage:", output
-          '';
-          mkTxDiffDarwinHomebrewBundle = args:
-            mkDarwinHomebrewBundle ({
-              pname = "tx-diff";
-              version = packageVersion;
-              owner = "lambdasistemi";
-              repo = "cardano-node-clients";
-              desc =
-                "Compare Conway transactions with blueprint-aware data diffs";
-              formulaClass = "TxDiff";
-              executables = {
-                tx-diff = txDiff;
-              };
-              executableNames = [ "tx-diff" ];
-              formulaTest = txDiffDarwinFormulaTest;
-              smokeCommands = [
-                ''
-                  set +e
-                  tx-diff >/tmp/tx-diff.out 2>&1
-                  status="$?"
-                  set -e
-                  test "$status" -ne 0
-                  grep -F "Usage:" /tmp/tx-diff.out >/dev/null
-                  grep -F "[--blueprint FILE ...]" /tmp/tx-diff.out >/dev/null
-                ''
-              ];
-            } // args);
-          darwinReleasePackages = lib.optionalAttrs
-            pkgs.stdenv.isDarwin
-            {
-              darwin-release-artifacts =
-                mkTxDiffDarwinHomebrewBundle { };
-              darwin-dev-homebrew-artifacts =
-                mkTxDiffDarwinHomebrewBundle {
-                  artifactVersion = devArtifactVersion;
-                  releaseTag = "dev-homebrew";
-                  formulaName = "tx-diff-dev";
-                  formulaClass = "TxDiffDev";
-                  formulaVersion = devArtifactVersion;
-                };
-            };
-          linuxReleasePackages = lib.optionalAttrs
-            pkgs.stdenv.isLinux
-            {
-              linux-release-artifacts =
-                import ./nix/linux-release.nix {
-                  inherit pkgs system packageVersion;
-                  package = txDiff;
-                  bundlers = inputs.bundlers;
-                };
-              linux-dev-release-artifacts =
-                import ./nix/linux-release.nix {
-                  inherit pkgs system packageVersion;
-                  artifactVersion = devArtifactVersion;
-                  package = txDiff;
-                  bundlers = inputs.bundlers;
-                };
-              linux-artifact-smoke =
-                import ./nix/linux-artifact-smoke.nix {
-                  inherit pkgs system;
-                };
-            };
           checkSuite = import ./nix/checks.nix {
             inherit pkgs components lintPkgs;
             cardanoNode = cardano-node.packages.${system}.cardano-node;
@@ -229,44 +118,21 @@
           };
         in {
           packages = {
-            default = txDiff;
-            tx-diff = txDiff;
+            default = components.exes.utxo-indexer;
             devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
               cp -r ${./e2e-test/genesis} $out
             '';
-            cardano-tx-generator =
-              components.exes.cardano-tx-generator;
             utxo-indexer = components.exes.utxo-indexer;
-            cardano-tx-generator-image =
-              import ./nix/docker-image.nix {
-                inherit pkgs components imageTag;
-              };
-          } // darwinReleasePackages // linuxReleasePackages;
+          };
           checks = checkSuite.checks;
           apps = checkApps // {
             default = {
               type = "app";
-              program = "${txDiff}/bin/tx-diff";
-            };
-            cardano-tx-generator = {
-              type = "app";
-              program = "${
-                  components.exes.cardano-tx-generator
-                }/bin/cardano-tx-generator";
-            };
-            tx-diff = {
-              type = "app";
-              program = "${txDiff}/bin/tx-diff";
+              program = "${components.exes.utxo-indexer}/bin/utxo-indexer";
             };
             utxo-indexer = {
               type = "app";
               program = "${components.exes.utxo-indexer}/bin/utxo-indexer";
-            };
-          } // lib.optionalAttrs pkgs.stdenv.isLinux {
-            linux-artifact-smoke = {
-              type = "app";
-              program =
-                "${linuxReleasePackages.linux-artifact-smoke}/bin/linux-artifact-smoke";
             };
           };
           devShells.default = project.shell;

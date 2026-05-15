@@ -14,8 +14,8 @@ socket. Two helpers:
   session — a single physical connection that carries all
   three protocols. Use this for any process that needs
   more than one of {ChainSync, LSQ, LTxS} (for example,
-  the cardano-tx-generator daemon at
-  @app/cardano-tx-generator/@).
+  the @cardano-tx-generator@ daemon shipped from
+  <https://github.com/lambdasistemi/cardano-tx-tools>).
 
 Both helpers block until the connection is closed — run
 in a background thread.
@@ -254,11 +254,10 @@ on a single mux session.
 Equivalent to 'runNodeClient' plus a third mini-protocol
 for ChainSync (num 5). Use this for any consumer that
 needs more than one of the three protocols at once — for
-example, the cardano-tx-generator daemon, which feeds an
-in-process address-to-UTxO indexer from chain-sync,
-queries protocol parameters via LSQ at startup, and
-submits transactions via LTxS, all on one physical
-connection.
+example, a fan-out daemon that feeds an in-process
+address-to-UTxO indexer from chain-sync, queries protocol
+parameters via LSQ at startup, and submits transactions
+via LTxS, all on one physical connection.
 
 The chain-sync application is built by the caller via
 'Cardano.Node.Client.N2C.ChainSync.mkChainSyncN2C' (or
