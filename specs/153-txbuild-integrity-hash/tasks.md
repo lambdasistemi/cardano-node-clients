@@ -91,8 +91,15 @@ Blocks Phase 3.
   `84b2bb78f7f5dd2beb2830e8e6e88fd853a8f70ea73b161f0a0327de8c70146f`.
   Source the data from `amaru-treasury-tx` reproduction
   artifacts; do not redraft.
-- [ ] T009 Place the chosen mainnet `pparams.json` snapshot
-  at `test/fixtures/pparams.json` per T005 outcome.
+- [ ] T009 Capture a mainnet `pparams.json` snapshot for the
+  epoch active when tx `84b2bb…0146f` was rejected, and
+  write it to `test/fixtures/pparams.json` of this worktree.
+  Source: this project's LSQ client (`GetCurrentPParams`)
+  against a mainnet node socket, or
+  `cardano-cli query protocol-parameters --mainnet
+  --socket-path …` (same Ouroboros query underneath).
+  **Do not use Blockfrost or any other external service**
+  per memory `feedback_fix_own_tools` and R-005.
 - [ ] T010 [P] Add helpers `loadPParams`, `loadUtxo`,
   `loadPlan` to `test/Cardano/Node/Client/TxBuildSpec.hs`
   (or a new sibling test module) per

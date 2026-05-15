@@ -13,73 +13,87 @@ before the corresponding GREEN task in `tasks.md`.
 
 ## R-001: Which ledger function exposes Phase-1 validation?
 
-**Status**: OPEN
+**Status**: RESOLVED (2026-05-15)
 
-**Question**: What is the right
-`cardano-ledger-api`/`cardano-ledger-conway` entry point
-for "Phase-1 validation only" — i.e. it must (a) include
-the `script_integrity_hash` check, (b) include
-fee/min-utxo/collateral checks, (c) not execute Plutus
-scripts (Phase-2)?
+**Decision**: `Cardano.Ledger.Api.Tx.applyTx` from
+`cardano-ledger-api` (pinned to `1.13.0.0` in
+`cabal.project` line 68). It performs the full UTXOW
+transition, which includes the
+`script_integrity_hash` check, fee / min-utxo /
+collateral checks, and witness completeness; under
+Phase-1 it does **not** execute Plutus scripts —
+script evaluation happens in a separate Phase-2
+function. This is the entry point the plan calls
+out and the one already used by the wider ecosystem
+for offline tx validation.
 
-**Candidates**:
-- `Cardano.Ledger.Api.Tx.applyTx`
-  — likely the full transition; pricey when scripts run.
-- `Cardano.Ledger.Api.Tx.reapplyTx`
-  — re-applies an already-validated tx; may skip
-  Phase-1 in some shapes. Probably wrong.
-- `Cardano.Ledger.Shelley.Rules.UTXOW`
-  applied directly via `applyRuleByName` /
-  `runRule` — gives the precise Phase-1 step but
-  is lower-level.
+**Rationale**: it is the smallest API surface that
+fully matches FR-003 ("ledger Phase-1 on its own
+output"), already in the closure, and behaves the
+same way as the node at submission time.
 
-**Acceptance**: chosen function, called from a test
-fixture, returns `Left _` for the pre-fix
-swap-cancel body and `Right _` for the post-fix
-body. We measure roundtrip cost on a typical Conway
-tx (target < 5 ms; if > 20 ms we re-evaluate).
+**Alternatives considered**:
+- `reapplyTx` — re-applies an already-validated tx;
+  may skip checks we care about. Rejected.
+- `Cardano.Ledger.Shelley.Rules.UTXOW` via
+  `applyRuleByName` / `runRule` — lower-level,
+  same semantics but more boilerplate. Rejected.
+- A bespoke Phase-1 reimplementation in
+  `lib-tx-build` — rejected on FR-002 / constitution
+  III grounds (no parallel ledger).
 
-**Alternatives considered**: writing a bespoke
-Phase-1 reimplementation in `lib-tx-build`. Rejected
-on FR-002 / constitution III grounds — we must not
-ship a parallel ledger.
+**Caveat**: the exact type signature of
+`applyTx 1.13.0.0` is verified empirically at T011
+when we first call it from a test. If the signature
+forces a wrapper, the wrapper lives in
+`lib-tx-build` and exposes the simpler shape
+`applyTxBody :: PParamsBound era -> UTxO era ->
+SlotNo -> Tx era -> Either (ApplyTxError era) ()`.
 
 ---
 
 ## R-002: Does `hashScriptIntegrity` already use Conway redeemer encoding?
 
-**Status**: OPEN
+**Status**: DEFERRED (decision rule recorded; empirical
+verification happens at T011).
 
-**Question**: Conway witness-set redeemers are encoded
-as a CBOR map (witness-set key `5`). The current
-`lib-tx-build/.../Scripts.hs:84` uses
-`Cardano.Ledger.Alonzo.Tx.hashScriptIntegrity`. Does
-this function serialize redeemers consistently with
-the Conway body's witness set, or does it still use
-the pre-Conway array form?
-
-**How we'll answer**: run `computeScriptIntegrity`
-over the swap-cancel fixture's redeemers + cost-model
-view at the pre-fix code, and compare the hash to
-both (a) the body's value
-(`03e9d7edc4e9b65b14a6076b19c7f13810292687b0c51b14c038ee4849f81941`)
-and (b) the ledger's expected value
-(`41a7cd5798b8b6f081bfaee0f5f88dc02eea894b7ed888b2a8658b3784dcdcf9`).
-- If the current code reproduces the *body*'s wrong
-  hash, the bug is in `hashScriptIntegrity`'s redeemer
-  encoding for Conway → switch to Conway-era hash.
-- If the current code reproduces neither, the bug is
-  somewhere else (likely cost-model scope, R-003).
-
-**Acceptance**: a passing assertion that the hash for
-the issue-#153 fixture equals
+**Decision rule**: we keep
+`Cardano.Ledger.Alonzo.Tx.hashScriptIntegrity` for now —
+the `Redeemers ConwayEra` value's `EncCBOR` instance is
+era-parameterized and is expected to produce the
+Conway map form (witness-set key `5`). The first RED
+test (T011) computes the hash for the issue-#153
+fixture and compares it to the ledger's expected value
 `41a7cd57…dcf9`.
+
+- If the result matches → the existing
+  `hashScriptIntegrity` is correct for Conway; the bug
+  is purely in the cost-models / language-set scope
+  (R-003). No change to `hashScriptIntegrity` itself.
+- If the result differs → the encoding bug is real;
+  switch to the Conway-era equivalent
+  (`Cardano.Ledger.Conway.Tx.hashScriptIntegrity` if
+  it exists, or a re-export from
+  `Cardano.Ledger.Api`).
+
+**Rationale for deferring**: the source for
+`cardano-ledger-alonzo 1.15.0.0` is not in the
+worktree closure; an empirical golden-vector check
+is cheaper and more reliable than reading the ledger
+source through cabal. The check is required anyway
+(SC-002), so this is a no-cost deferral.
+
+**Acceptance**: T011 (the RED test for the mainnet
+reproduction) computes the hash and compares it to
+`41a7cd57…dcf9`. The R-002 outcome is encoded in
+whether T016 needs to change `hashScriptIntegrity`'s
+import or not.
 
 ---
 
 ## R-003: Cost-models scope — single language or set?
 
-**Status**: PARTIALLY OPEN
+**Status**: RESOLVED (2026-05-15)
 
 **Question**: The current
 `computeScriptIntegrity :: Language -> PParams -> Redeemers -> …`
@@ -90,104 +104,153 @@ PlutusV3 the existing API may or may not be correct in
 practice — but it is fragile: the caller's chosen
 `Language` is the source of truth, not the body.
 
-**Decision (provisional)**: switch the API to derive
-the language set from the body (specifically, the set
-of script hashes resolved at each redeemer site and
-each reference-script input). Caller can no longer
-pass the wrong value.
+**Decision**: switch the API to derive the language
+set from the body (specifically, the set of script
+hashes resolved at each redeemer site and each
+reference-script input). Caller can no longer pass
+the wrong value.
+
+**Confirmed by source reading**: all three call
+sites in `lib-tx-build/Cardano/Node/Client/TxBuild.hs`
+(lines 1043, 1289, 1775) currently hardcode the
+literal `PlutusV3`. Caller convention is the only
+guarantee today — exactly the footgun this
+re-scopes away.
+
+**Helper signature**: per
+[data-model.md](./data-model.md) E-3,
+
+```haskell
+languagesUsedInBody
+  :: TxBody ConwayEra
+  -> UTxO ConwayEra
+  -> Set Language
+```
+
+Walks (a) the body's spending redeemers and their
+resolved scripts, (b) reference-script inputs that
+supply a Plutus script. Native (timelock) scripts
+do not contribute. All inputs available at every
+existing call site (`inputUtxos` + `refUtxos`).
 
 **Rationale**: aligns with FR-001 "derived from the
 body, not from caller convention" and removes a
-recurring footgun.
+recurring footgun. Implementable from data already
+in scope; no new query.
 
 **Alternatives considered**:
 - Keep single `Language`, audit all three call sites.
   Rejected: same bug class will recur on the next
   mixed-language transaction.
-- Derive from the resolved UTxO. Equivalent; either
-  source yields the same answer for a well-formed
-  body.
+- Derive from the resolved UTxO instead of the body.
+  Equivalent; either source yields the same answer
+  for a well-formed body. Body-derived chosen
+  because it keeps the helper independent of any
+  enclosing UTxO map's completeness.
 
 ---
 
 ## R-004: `PParams` threading — does it need a newtype?
 
-**Status**: OPEN
+**Status**: RESOLVED (2026-05-15, user decision)
 
-**Question**: Today, is `PParams ConwayEra` passed as
-a regular argument through `draft` / `build` /
-`finalize`? Or is it ever (a) re-fetched from a query
-mid-build, (b) implicitly carried in a context that
-could be replaced, (c) provided separately to the
-balancer and to `computeScriptIntegrity`?
+**Decision**: introduce `PParamsBound era` per
+[data-model.md](./data-model.md) E-1. Smart
+constructor at the build entrypoint; every internal
+helper that depends on protocol parameters takes
+`PParamsBound era` instead of `PParams era`.
 
-**How we'll answer**: read `TxBuild.hs` lines 1042,
-1066, 1288, 1296, 1774, 1782 (the three integrity-hash
-sites) plus `Balance.hs` 444, 569 (fee estimation),
-and trace the `PParams` value back to the build entry
-point. Note any divergence.
+**Rationale**: a structural guarantee is preferred
+over a behavioral one even if today's flow happens
+to be single-instance. The newtype is ~10 lines, the
+API surface change is internal-only (callers still
+pass `PParams era` to the build entry point and the
+wrapper is constructed inside), and it eliminates
+the entire "PParams source drift" failure mode at
+the type level, which is the FR-002 contract.
 
-**Decision shape**:
-- If `PParams` is already a single argument threaded
-  through, no newtype is strictly required — a
-  comment + an audit-style test suffices.
-- If `PParams` is re-fetched or split, introduce a
-  `PParamsBound era` newtype with smart constructor at
-  the build entrypoint; pass `PParamsBound` to all
-  four consumers (fee, exunits, integrity hash, self-
-  validation). The wrapper is the "structurally
-  impossible to mis-source" enforcement from FR-002.
-
-**Acceptance**: every consumer of `PParams` in
-`lib-tx-build` either takes `PParamsBound` or is
-visibly downstream of a single `PParamsBound`
-unwrap.
+**Acceptance**: every reference to `PParams` inside
+`lib-tx-build`'s build path either takes
+`PParamsBound era` or is visibly the single
+`unPParamsBound` unwrap at a leaf consumer
+(`estimateMinFeeTx`, the ledger Phase-1 call) where
+the underlying ledger API still demands raw
+`PParams`.
 
 ---
 
 ## R-005: Test PParams snapshot — reuse the staged file or take a fresh one?
 
-**Status**: OPEN — needs user input.
+**Status**: RESOLVED (2026-05-15, user decision)
 
-**Question**: A 707-line `test/fixtures/pparams.json`
-is already staged in `/code/cardano-node-clients`
-(main repo, not committed) from a prior session.
-Should we (a) pick it up and use it as the
-swap-cancel reproduction's `PParams`, (b) capture a
-fresh one specifically scoped to the issue-#153 slot,
-or (c) both — keep the staged one as a general
-fixture, capture a smaller scoped one for this test?
+**Decision**: recapture a fresh `pparams.json`
+scoped to the issue-#153 slot. Ignore the 707-line
+file staged in `/code/cardano-node-clients` from a
+prior session — it stays untouched, and that worktree
+remains the user's to dispose of.
 
-**Why we won't decide silently**: per repo memory
-(`feedback_semantic_changes`, `feedback_investigate_bugs`)
-absorbing an unknown staged file into this PR is
-exactly the kind of cross-context drift we avoid.
+**Acceptance**: T009 captures mainnet PParams at the
+epoch active when tx
+`84b2bb78f7f5dd2beb2830e8e6e88fd853a8f70ea73b161f0a0327de8c70146f`
+was rejected, writes them to
+`test/fixtures/pparams.json` of this worktree, and
+commits the file alongside the swap-cancel fixture.
 
-**Action**: surface to user before tasks RED-1 runs.
+**Mechanism**: this project's own LSQ client
+against a mainnet node socket — the same code path
+`cardano-node-clients` ships for protocol-parameter
+queries. Concretely either (a) a small one-off
+program in the worktree that opens
+`LSQChannel`, issues `GetCurrentPParams`, and dumps
+the result as JSON, or (b)
+`cardano-cli query protocol-parameters --mainnet
+--socket-path …`, which is the same Ouroboros LSQ
+query underneath. Either source is the ledger's own
+form — no Blockfrost, no third-party service, no
+external API dependency in the test fixture.
+
+Memory `feedback_fix_own_tools`: the project is the
+N2C client toolkit; using anything else to capture
+PParams *for this project's tests* would be the
+wrong direction.
 
 ---
 
 ## R-006: UTxO source for self-validation
 
-**Status**: PARTIALLY OPEN
+**Status**: RESOLVED (2026-05-15)
 
-**Question**: `applyTx` needs the UTxO containing
-every input the tx spends or references. What is the
-UTxO value in scope at TxBuild's finalize point?
+**Decision**: build the `UTxO ConwayEra` argument to
+`applyTx` as the union of three lists already in
+scope at the return point of `buildWith` in
+`lib-tx-build/Cardano/Node/Client/TxBuild.hs`:
+`inputUtxos`, `boCollateralUtxos opts`, and
+`refUtxos`. No new query is required.
 
-**Provisional answer**: the same `UTxO ConwayEra` the
-balancer already used to resolve inputs and collateral
-(seen near `Balance.hs:444` / `:569`). We do not
-re-query; we pass that exact value.
+**Confirmed by source reading**:
+`lib-tx-build/Cardano/Node/Client/TxBuild.hs` lines
+1245–1246, 1250 (the three UTxO lists arrive at
+`buildWith` as parameters); lines 1309–1316
+(`balanceTxWith` is called with all three); lines
+1515 and 1569 (the final balanced tx is returned
+while all three lists remain in lexical scope).
+`lib-tx-build/Cardano/Node/Client/Balance.hs` lines
+206–224 (signature of `balanceTxWith` taking all
+three UTxO sources separately).
 
-**Open sub-question**: do reference inputs reside in
-the same UTxO map, or are they passed separately? If
-the latter, we need a step that constructs the
-combined UTxO for `applyTx`.
+**Combined-UTxO helper**: introduce a small
+`combinedUtxo :: [(TxIn, TxOut era)] -> [(TxIn, TxOut era)]
+-> [(TxIn, TxOut era)] -> UTxO era` (or inline at the
+call site) that folds the three lists into a single
+`Map TxIn (TxOut era)` and wraps it in `UTxO`. It is
+the caller of `applyTx`, not part of the public API.
 
-**Acceptance**: a build path where `applyTx` is called
-with exactly the inputs + reference inputs + collateral
-that the body declares.
+**Acceptance**: the `applyTx` call site at finalize
+time consumes exactly the inputs + reference inputs +
+collateral that the body declares. T018 verifies this
+by passing a body whose collateral references a
+UTxO outside the union and observing the resulting
+`UtxoFailure` is surfaced.
 
 ---
 
@@ -200,3 +263,18 @@ chosen Conway hash function name, the chosen
 language-derivation strategy, and the `PParamsBound`
 decision. That summary is the input to
 `/speckit.tasks`.
+
+---
+
+## Summary of decisions (2026-05-15)
+
+| ID | Decision |
+|----|----------|
+| R-001 | Phase-1 entry point = `Cardano.Ledger.Api.Tx.applyTx` from `cardano-ledger-api 1.13.0.0`. Signature verified empirically at T011; wrapper added in `lib-tx-build` if needed. |
+| R-002 | Keep `Cardano.Ledger.Alonzo.Tx.hashScriptIntegrity`; rely on `Redeemers ConwayEra`'s era-parameterized encoding to produce the Conway map. T011 golden-vector check decides whether a Conway-specific replacement is needed. |
+| R-003 | Body-derived `Set Language` via `languagesUsedInBody :: TxBody ConwayEra -> UTxO ConwayEra -> Set Language`. Replaces the literal `PlutusV3` hardcoded at TxBuild.hs:1043,1289,1775. |
+| R-004 | Add `PParamsBound era` newtype per [data-model.md](./data-model.md) E-1. Smart constructor at the build entrypoint; all internal helpers consume `PParamsBound era`. |
+| R-005 | Recapture a fresh mainnet `pparams.json` scoped to issue #153's epoch via this project's own LSQ client (`GetCurrentPParams`) or `cardano-cli query protocol-parameters --mainnet`. **No Blockfrost / external service.** Staged file in `/code/cardano-node-clients` (main repo) is ignored. |
+| R-006 | `UTxO ConwayEra` for `applyTx` = union of `inputUtxos ∪ boCollateralUtxos opts ∪ refUtxos` already in scope at `buildWith` (lines 1245–1316). No new query. |
+
+These are the inputs to `/speckit.tasks`.
