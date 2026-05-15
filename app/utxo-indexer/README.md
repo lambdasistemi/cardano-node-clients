@@ -78,9 +78,12 @@ lines reveal that the upstream relay is alive but its ChainDB hasn't
 finished loading — operators can use the `attempt` counter and
 `elapsedMs` to tell "stuck replaying" from "actually broken".
 
-## Embedded use (cardano-tx-generator)
+## Embedded use
 
 Embedders that want to route `N2CEvent`s into their own tracer
 can pass a custom `Tracer IO N2CEvent` to
 `Cardano.Node.Client.UTxOIndexer.Daemon.runDaemon`'s first argument
-instead of `defaultStderrTracer`.
+instead of `defaultStderrTracer`. The `cardano-tx-generator` daemon
+hosted in
+[lambdasistemi/cardano-tx-tools](https://github.com/lambdasistemi/cardano-tx-tools)
+embeds the indexer this way.

@@ -15,16 +15,26 @@ pkgs.writeShellApplication {
 
     usage() {
       cat <<'USAGE'
-    Usage: linux-artifact-smoke --artifacts-dir DIR --artifact-version VERSION
+    Usage: linux-artifact-smoke
+        --artifacts-dir DIR
+        --artifact-version VERSION
+        --executable-name NAME
+        [--usage-grep STRING]
 
-    Extracts and smoke-tests the tx-diff AppImage, DEB, and RPM artifacts.
+    Extracts and smoke-tests the AppImage, DEB, and RPM artifacts
+    for the executable named NAME.
+
+    --usage-grep is an additional substring the binary's diagnostic
+    output (when invoked with no args) MUST contain. Defaults to the
+    empty string (only "Usage:" is required).
     USAGE
     }
 
     artifacts_dir=""
     artifact_version=""
     system_suffix="${system}"
-    executable_name="tx-diff"
+    executable_name=""
+    usage_grep=""
 
     while [ "$#" -gt 0 ]; do
       case "$1" in
@@ -40,6 +50,14 @@ pkgs.writeShellApplication {
           system_suffix="$2"
           shift 2
           ;;
+        --executable-name)
+          executable_name="$2"
+          shift 2
+          ;;
+        --usage-grep)
+          usage_grep="$2"
+          shift 2
+          ;;
         -h|--help)
           usage
           exit 0
@@ -52,7 +70,9 @@ pkgs.writeShellApplication {
       esac
     done
 
-    if [ -z "$artifacts_dir" ] || [ -z "$artifact_version" ]; then
+    if [ -z "$artifacts_dir" ] \
+        || [ -z "$artifact_version" ] \
+        || [ -z "$executable_name" ]; then
       usage >&2
       exit 2
     fi
@@ -66,8 +86,10 @@ pkgs.writeShellApplication {
       test -x "$bin"
       output="$("$bin" 2>&1 >/dev/null || true)"
       printf '%s\n' "$output"
-      grep -F "Usage:" <<<"$output" >/dev/null
-      grep -F "[--blueprint FILE ...]" <<<"$output" >/dev/null
+      grep -F -- "Usage:" <<<"$output" >/dev/null
+      if [ -n "$usage_grep" ]; then
+        grep -F -- "$usage_grep" <<<"$output" >/dev/null
+      fi
     }
 
     smoke_appimage() {

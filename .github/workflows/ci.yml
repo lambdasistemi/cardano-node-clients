@@ -25,6 +25,7 @@ jobs:
           nix build --quiet
           .#checks.x86_64-linux.build
           .#checks.x86_64-linux.unit
+          .#checks.x86_64-linux.e2e
           .#checks.x86_64-linux.lint
       - name: Release version contract
         run: scripts/release/check-version-consistency

@@ -315,21 +315,6 @@
         "type": "github"
       }
     },
-    "dev-assets": {
-      "locked": {
-        "lastModified": 1778485418,
-        "narHash": "sha256-PZs9q3MvvWcI/yOcELlPQ2YQEVu0onBsO7/QLeS/9VM=",
-        "owner": "paolino",
-        "repo": "dev-assets",
-        "rev": "6864b20eb75c3578796e7f667562b5aea8780643",
-        "type": "github"
-      },
-      "original": {
-        "owner": "paolino",
-        "repo": "dev-assets",
-        "type": "github"
-      }
-    },
     "empty-flake": {
       "locked": {
         "lastModified": 1630400035,
@@ -1737,7 +1722,6 @@
         "CHaP": "CHaP",
         "bundlers": "bundlers",
         "cardano-node": "cardano-node",
-        "dev-assets": "dev-assets",
         "flake-parts": "flake-parts",
         "hackageNix": "hackageNix_3",
         "haskellNix": "haskellNix_2",

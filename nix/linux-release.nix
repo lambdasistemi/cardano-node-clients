@@ -2,12 +2,12 @@
 , system
 , packageVersion
 , artifactVersion ? packageVersion
+, executableName
 , package
 , bundlers
 }:
 
 let
-  executableName = "tx-diff";
   appImage = bundlers.bundlers.${system}.toAppImage package;
   deb = bundlers.bundlers.${system}.toDEB package;
   rpm = bundlers.bundlers.${system}.toRPM package;

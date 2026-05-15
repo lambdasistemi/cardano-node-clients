@@ -19,7 +19,8 @@ the handshake at @NodeToClientV_20@ admits the
 mini-protocol either with the others or not at all, so
 the LTxS channel becoming usable falls out of the
 combined-mux working at all. End-to-end LTxS coverage
-arrives with the tx-generator's own E2E suite.
+lives in @e2e-tests@'s @TxBuildSpec@ and in the
+cardano-tx-tools repo's own E2E suites.
 -}
 module Cardano.Node.Client.E2E.N2CFullSpec (spec) where
 
