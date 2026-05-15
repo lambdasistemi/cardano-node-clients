@@ -34,6 +34,10 @@
     cardano-node = {
       url = "github:IntersectMBO/cardano-node/10.7.0";
     };
+    bundlers = {
+      url = "github:NixOS/bundlers";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs@{ self, nixpkgs, lintNixpkgs, flake-parts, haskellNix
@@ -107,6 +111,44 @@
             };
           };
           components = project.hsPkgs.cardano-node-clients.components;
+          packageVersion =
+            let
+              versionLines =
+                builtins.filter (lib.hasPrefix "version:")
+                  (lib.splitString "\n"
+                    (builtins.readFile ./cardano-node-clients.cabal));
+            in
+            builtins.elemAt
+              (builtins.match
+                "version:[[:space:]]*([^[:space:]]+)"
+                (builtins.head versionLines))
+              0;
+          sourceRevision =
+            self.shortRev or (self.dirtyShortRev or "dirty");
+          devArtifactVersion = "${packageVersion}-${sourceRevision}";
+          linuxReleasePackages = lib.optionalAttrs
+            pkgs.stdenv.isLinux
+            {
+              linux-release-artifacts =
+                import ./nix/linux-release.nix {
+                  inherit pkgs system packageVersion;
+                  executableName = "utxo-indexer";
+                  package = components.exes.utxo-indexer;
+                  bundlers = inputs.bundlers;
+                };
+              linux-dev-release-artifacts =
+                import ./nix/linux-release.nix {
+                  inherit pkgs system packageVersion;
+                  artifactVersion = devArtifactVersion;
+                  executableName = "utxo-indexer";
+                  package = components.exes.utxo-indexer;
+                  bundlers = inputs.bundlers;
+                };
+              linux-artifact-smoke =
+                import ./nix/linux-artifact-smoke.nix {
+                  inherit pkgs system;
+                };
+            };
           checkSuite = import ./nix/checks.nix {
             inherit pkgs components lintPkgs;
             cardanoNode = cardano-node.packages.${system}.cardano-node;
@@ -123,7 +165,7 @@
               cp -r ${./e2e-test/genesis} $out
             '';
             utxo-indexer = components.exes.utxo-indexer;
-          };
+          } // linuxReleasePackages;
           checks = checkSuite.checks;
           apps = checkApps // {
             default = {
@@ -133,6 +175,12 @@
             utxo-indexer = {
               type = "app";
               program = "${components.exes.utxo-indexer}/bin/utxo-indexer";
+            };
+          } // lib.optionalAttrs pkgs.stdenv.isLinux {
+            linux-artifact-smoke = {
+              type = "app";
+              program =
+                "${linuxReleasePackages.linux-artifact-smoke}/bin/linux-artifact-smoke";
             };
           };
           devShells.default = project.shell;
