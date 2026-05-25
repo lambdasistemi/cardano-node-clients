@@ -53,6 +53,10 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
     -- * Configuration
     ChainSyncConfig (..),
 
+    -- * Interest-set filter
+    InterestSet (..),
+    filterBlockOps,
+
     -- * Readiness state
     Readiness (..),
     initialReadiness,
@@ -84,7 +88,11 @@ import Cardano.Node.Client.UTxOIndexer.BlockExtract (
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
  )
+import Cardano.Node.Client.UTxOIndexer.IndexerOp (
+    UtxoOp (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Types (
+    Address,
     BlockHash (..),
     SlotNo (..),
  )
@@ -107,6 +115,8 @@ import Control.Concurrent.STM (
 import Control.Monad (void)
 import Control.Tracer (Tracer, nullTracer)
 import Data.ByteString.Short qualified as SBS
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
@@ -148,8 +158,73 @@ data ChainSyncConfig = ChainSyncConfig
     -- ^ LSQ tip-probe configuration that gates each
     -- reconnect attempt — chain-replay-tolerant
     -- (unbounded total timeout) by default.
+    , csInterestSet :: !InterestSet
+    -- ^ Apply-time address filter (issue #158). Default
+    -- 'IndexAll' preserves the prior full-chain behavior
+    -- so existing daemon and reconnect tests stay green.
+    -- 'IndexAddressSet' bounds the on-disk store to
+    -- @O(|set|)@ entries by dropping every
+    -- 'UtxoCreate' whose output address is outside the
+    -- set; 'UtxoSpend' is always processed (a spend on a
+    -- previously-filtered create is a clean no-op
+    -- because the 'TxInCol' entry never existed).
     }
     deriving stock (Show)
+
+{- | Address filter applied to each @[UtxoOp]@ batch
+between 'extractBlock' and 'applyAtSlot'.
+
+= Semantics
+
+* 'IndexAll' — pass every op through unchanged. Matches
+  the pre-#158 follower; the bundled daemon binary
+  always passes this, so its tests stay green.
+* @'IndexAddressSet' s@ — keep 'UtxoCreate' ops whose
+  output address belongs to @s@; drop the rest. ALL
+  'UtxoSpend' ops are kept (the underlying indexer is
+  rollback-aware: a spend on a previously-filtered
+  create finds no @TxInCol@ entry and is a silent
+  no-op).
+
+= State invariant
+
+For every query restricted to addresses in @s@ (i.e.
+'snapshotAt' / 'awaitTxIn' on addresses the caller knows
+are in @s@), the resulting state is byte-identical to
+running the follower with 'IndexAll'. Disk grows as
+@O(|s| × avg UTxOs per address × time)@ instead of
+@O(entire chain UTxO set)@.
+
+Out of scope: dynamic mutation of the set after
+'withChainSyncFollower' returns the 'FollowerHandle'
+(the value is captured by reference at apply time but
+not exposed for STM updates). A future ticket can lift
+the field into an STM-mutable value if multi-tenant
+onboarding requires it.
+-}
+data InterestSet
+    = -- | Pass-through; preserves the pre-#158 daemon
+      -- semantics.
+      IndexAll
+    | -- | Keep only 'UtxoCreate' ops whose address
+      -- belongs to the set. Spends always pass.
+      IndexAddressSet !(Set Address)
+    deriving stock (Eq, Show)
+
+{- | Pure: filter a batch of 'UtxoOp's against an
+'InterestSet'. Called by the follower's @rollForward@
+between 'extractBlock' and 'applyAtSlot'; exported so
+unit tests can exercise the filter without spinning up
+a chain-sync session.
+-}
+filterBlockOps :: InterestSet -> [UtxoOp] -> [UtxoOp]
+filterBlockOps IndexAll = id
+filterBlockOps (IndexAddressSet s) = filter (inInterestSet s)
+  where
+    inInterestSet :: Set Address -> UtxoOp -> Bool
+    inInterestSet set op = case op of
+        UtxoCreate _ addr _ -> addr `Set.member` set
+        UtxoSpend _ -> True
 
 {- | Live readiness snapshot updated by the follower
 thread after every roll-forward and on every reconnect
@@ -401,8 +476,12 @@ mkFollower cfg readinessVar idx = self
     self =
         Follower
             { rollForward = \fetched tip -> do
-                let (slot, ops) =
+                let (slot, rawOps) =
                         extractBlock (fetchedBlock fetched)
+                    ops =
+                        filterBlockOps
+                            (csInterestSet cfg)
+                            rawOps
                     bh =
                         pointToBlockHash
                             (fetchedPoint fetched)
