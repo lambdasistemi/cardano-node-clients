@@ -6,6 +6,7 @@ import Cardano.Node.Client.AddressSpec qualified as AddressSpec
 import Cardano.Node.Client.N2C.ProbeSpec qualified as N2CProbeSpec
 import Cardano.Node.Client.N2C.TraceSpec qualified as N2CTraceSpec
 import Cardano.Node.Client.UTxOIndexer.DaemonSpec qualified as UTxOIndexerDaemonSpec
+import Cardano.Node.Client.UTxOIndexer.FollowerSpec qualified as UTxOIndexerFollowerSpec
 import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.PersistenceSpec qualified as UTxOIndexerPersistenceSpec
 import Cardano.Node.Client.UTxOIndexer.ServerSpec qualified as UTxOIndexerServerSpec
@@ -22,6 +23,7 @@ main = hspec $ do
     UTxOIndexerServerSpec.spec
     UTxOIndexerPersistenceSpec.spec
     UTxOIndexerDaemonSpec.spec
+    UTxOIndexerFollowerSpec.spec
     N2CProbeSpec.spec
     N2CTraceSpec.spec
     ValiditySpec.spec

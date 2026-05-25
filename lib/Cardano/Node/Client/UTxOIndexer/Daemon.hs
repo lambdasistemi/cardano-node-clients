@@ -1,23 +1,23 @@
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.Daemon
-Description : Daemon entrypoint — wires ChainSync, Indexer, Server
+Description : Daemon entrypoint — wires Follower + NDJSON server
 License     : Apache-2.0
 
-Composes the four pieces the daemon needs:
+Composes the bundled @utxo-indexer@ binary by gluing together:
 
-* 'IndexerHandle' from @utxo-indexer-lib@ — the in-memory
-  address->UTxO index plus its rollback log and await
-  waiters.
-* 'Cardano.Node.Client.UTxOIndexer.BlockExtract.extractBlock'
-  — block→@(slot, [UtxoOp])@ era-polymorphic decoder.
-* 'Cardano.Node.Client.UTxOIndexer.Server.runServer' —
-  NDJSON Unix-socket server.
-* 'Cardano.Node.Client.N2C.ChainSync.runChainSyncN2C' —
-  the chain-sync follower itself.
+* an 'IndexerHandle' it opens locally (RocksDB or in-memory),
+* the chain-sync follower from
+  "Cardano.Node.Client.UTxOIndexer.Follower" (extracted in
+  cardano-node-clients#156 so downstream consumers like
+  @amaru-treasury-tx-api@ can run the follower against a
+  caller-owned handle without the NDJSON server),
+* the NDJSON Unix-socket server from
+  "Cardano.Node.Client.UTxOIndexer.Server".
 
-A 'TVar' 'ReadyStatus' is updated as blocks land so the
-@ready@ NDJSON request reflects the daemon's current
-catch-up state.
+A 'TVar' 'ReadyStatus' is derived from the follower's
+'Readiness' on each NDJSON @ready@ request so the wire
+format (including @upstream.reason@ on disconnect) is
+preserved across the refactor.
 -}
 module Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
@@ -25,26 +25,22 @@ module Cardano.Node.Client.UTxOIndexer.Daemon (
     applyUpstreamStatus,
 ) where
 
-import Cardano.Chain.Slotting (EpochSlots (..))
-import Cardano.Node.Client.N2C.ChainSync (
-    Fetched (..),
-    HeaderPoint,
-    mkChainSyncN2C,
-    runChainSyncN2C,
- )
 import Cardano.Node.Client.N2C.Probe (ProbeConfig)
 import Cardano.Node.Client.N2C.Reconnect (
     ReconnectPolicy,
     UpstreamStatus (..),
-    runReconnectLoop,
  )
 import Cardano.Node.Client.N2C.Trace (
     N2CEvent (..),
     StopReason (..),
  )
-import Cardano.Node.Client.UTxOIndexer.BlockExtract (extractBlock)
+import Cardano.Node.Client.UTxOIndexer.Follower (
+    ChainSyncConfig (..),
+    FollowerHandle (..),
+    Readiness (..),
+    withChainSyncFollower,
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
-    IndexerHandle (..),
     withInMemoryIndexer,
     withRocksDBIndexer,
  )
@@ -53,34 +49,13 @@ import Cardano.Node.Client.UTxOIndexer.Server (
     runServer,
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
-    BlockHash (..),
     SlotNo (..),
  )
-import ChainFollower (
-    Follower (..),
-    Intersector (..),
-    ProgressOrRewind (..),
- )
-import Control.Concurrent.Async (concurrently_)
-import Control.Concurrent.STM (
-    TVar,
-    atomically,
-    modifyTVar',
-    newTVarIO,
-    readTVarIO,
-    writeTVar,
- )
+import Control.Concurrent.STM (atomically)
 import Control.Exception (onException)
-import Control.Monad (void)
-import Control.Tracer (Tracer, nullTracer, traceWith)
-import Data.ByteString.Short qualified as SBS
+import Control.Tracer (Tracer, traceWith)
 import Data.Word (Word32, Word64)
-import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
-    OneEraHash (..),
- )
-import Ouroboros.Network.Block qualified as Network
 import Ouroboros.Network.Magic (NetworkMagic (..))
-import Ouroboros.Network.Point qualified as Network.Point
 
 {- | Daemon runtime configuration. Plain Haskell record;
 the CLI-parsing in @Main@ produces this.
@@ -115,13 +90,14 @@ data DaemonConfig = DaemonConfig
 in-memory otherwise), start the NDJSON server and the
 chain-sync follower, and block.
 
-The chain-sync follower is wrapped in 'runReconnectLoop'
-(a probe-then-connect supervisor on top of
-'Control.Retry'); when the upstream relay disconnects,
-the supervisor catches the exception, probes the relay
-via LSQ until ready, and re-attempts chain-sync. The
-listen socket and indexer state persist across the
-reconnect window.
+The follower runs under
+'Cardano.Node.Client.UTxOIndexer.Follower.withChainSyncFollower',
+which wraps the chain-sync session in a reconnect
+supervisor. When the upstream relay disconnects, the
+supervisor catches the exception, probes the relay via
+LSQ until ready, and re-attempts chain-sync; the listen
+socket and indexer state persist across the reconnect
+window.
 
 The caller-provided 'Tracer' receives an 'IndexerStarted'
 on entry and an 'IndexerStopped' on exit (both clean
@@ -131,211 +107,72 @@ reconnect-supervisor and probe events between.
 runDaemon :: Tracer IO N2CEvent -> DaemonConfig -> IO ()
 runDaemon tracer cfg = do
     onStart
-    -- 'onException' propagates the async exception after
-    -- emitting IndexerStopped, without masking the body
-    -- (which would interfere with the supervisor's STM
-    -- callbacks and threadDelay).
     runBody `onException` onStop StoppedAsync
     onStop StoppedNormally
   where
-    runBody = do
-        readyVar <- newTVarIO initialReady
-        withIndexer (dcDbPath cfg) $ \idx -> do
-            let getReady = readTVarIO readyVar
-                -- Recompute resume points on each retry so the
-                -- supervisor always feeds the latest persisted
-                -- state into chain-sync.
-                chainSession = do
-                    bootMode <- detectBootMode idx
-                    let resumePoints = case bootMode of
-                            ColdBoot ->
-                                [Network.Point Network.Point.Origin]
-                            WarmBoot ps -> fmap toHeaderPoint ps
-                    runChainSyncN2C
-                        (EpochSlots (dcByronEpochSlots cfg))
-                        (NetworkMagic (dcNetworkMagic cfg))
-                        (dcRelaySocket cfg)
-                        ( mkChainSyncN2C
-                            nullTracer
-                            nullTracer
-                            (mkIntersector bootMode cfg readyVar idx)
-                            resumePoints
-                        )
-                -- Wire the supervisor's status sink into the same
-                -- TVar that the server reads from. The state
-                -- transition is captured by 'applyUpstreamStatus'
-                -- (a pure function for testability — see
-                -- 'DaemonSpec.applyUpstreamStatus'). The wire
-                -- encoder enforces the same invariant as defense
-                -- in depth.
-                setUpstreamStatus newStatus =
-                    atomically $
-                        modifyTVar' readyVar (applyUpstreamStatus cfg newStatus)
-                getProcessedSlot =
-                    rsProcessedSlot <$> readTVarIO readyVar
-                chainAction =
-                    runReconnectLoop
-                        tracer
-                        (dcReconnectPolicy cfg)
-                        (dcProbeConfig cfg)
-                        (NetworkMagic (dcNetworkMagic cfg))
-                        (dcRelaySocket cfg)
-                        setUpstreamStatus
-                        getProcessedSlot
-                        chainSession
-                serverAction =
+    runBody =
+        withIndexer (dcDbPath cfg) $ \idx ->
+            withChainSyncFollower
+                tracer
+                (toChainSyncCfg cfg)
+                idx
+                $ \fh -> do
+                    let getReady =
+                            readyStatusFrom cfg
+                                <$> atomically (fhReadiness fh)
                     runServer (dcListenSocket cfg) idx getReady
-            concurrently_ (void chainAction) serverAction
     onStart =
         traceWith
             tracer
             (IndexerStarted (dcListenSocket cfg) (dcDbPath cfg))
     onStop r = traceWith tracer (IndexerStopped r)
-    initialReady =
-        ReadyStatus
-            { rsReady = False
-            , rsTipSlot = Nothing
-            , rsProcessedSlot = Nothing
-            , rsSlotsBehind = Nothing
-            , rsUpstream = UpstreamConnected
-            }
     withIndexer Nothing = withInMemoryIndexer
     withIndexer (Just path) = withRocksDBIndexer path
 
-{- | Boot classification: cold (no retained rollback
-points — fresh DB or in-memory) vs. warm (one or more
-retained points from a prior run).
-
-The two are treated differently on @intersectNotFound@:
-cold boots retry with @[Origin]@ (transient races during
-node startup are normal), warm boots fail closed (their
-saved chain has diverged from the node beyond the
-security parameter k, and origin-replay over the
-populated DB would mix histories).
+{- | Lift the daemon's flat 'DaemonConfig' into the
+follower-shaped 'ChainSyncConfig'. Field names track the
+'DaemonConfig' / 'ChainSyncConfig' split — see the
+@Follower@ module Haddock for the per-field semantics.
 -}
-data BootMode
-    = ColdBoot
-    | WarmBoot ![(SlotNo, BlockHash)]
+toChainSyncCfg :: DaemonConfig -> ChainSyncConfig
+toChainSyncCfg cfg =
+    ChainSyncConfig
+        { csRelaySocket = dcRelaySocket cfg
+        , csNetworkMagic = NetworkMagic (dcNetworkMagic cfg)
+        , csByronEpochSlots = dcByronEpochSlots cfg
+        , csReadyThresholdSlots = dcReadyThresholdSlots cfg
+        , csSecurityParamK = dcSecurityParamK cfg
+        , csReconnectPolicy = dcReconnectPolicy cfg
+        , csProbeConfig = dcProbeConfig cfg
+        }
 
-detectBootMode :: IndexerHandle -> IO BootMode
-detectBootMode idx = do
-    pairs <- getResumePoints idx
-    pure $ case pairs of
-        [] -> ColdBoot
-        ps -> WarmBoot ps
+{- | Derive the bundled daemon's wire-format 'ReadyStatus'
+from the follower's leaner 'Readiness'.
 
-{- | Convert a stored @(slot, blockhash)@ pair into a
-'HeaderPoint' chain-sync can negotiate against.
+@rsReady@ is recomputed at read time from
+@rsSlotsBehind@ against 'dcReadyThresholdSlots' and the
+upstream status — keeping the threshold rule in one
+place (matching 'applyUpstreamStatus''s semantics
+post-reconnect, which is the issue #119 regression
+locked in by "DaemonSpec").
 -}
-toHeaderPoint :: (SlotNo, BlockHash) -> HeaderPoint
-toHeaderPoint (SlotNo s, BlockHash bh) =
-    Network.Point
-        ( Network.Point.At
-            ( Network.Point.Block
-                (Network.SlotNo s)
-                (OneEraHash (SBS.toShort bh))
-            )
-        )
-
-mkIntersector ::
-    BootMode ->
-    DaemonConfig ->
-    TVar ReadyStatus ->
-    IndexerHandle ->
-    Intersector HeaderPoint Network.SlotNo Fetched
-mkIntersector bootMode cfg readyVar idx = self
+readyStatusFrom :: DaemonConfig -> Readiness -> ReadyStatus
+readyStatusFrom cfg r =
+    ReadyStatus
+        { rsReady = case (rUpstream r, behind) of
+            (UpstreamConnected, Just b) ->
+                b <= dcReadyThresholdSlots cfg
+            _ -> False
+        , rsTipSlot = rTipSlot r
+        , rsProcessedSlot = rProcessedSlot r
+        , rsSlotsBehind = behind
+        , rsUpstream = rUpstream r
+        }
   where
-    self =
-        Intersector
-            { intersectFound = \point -> do
-                -- Roll persistent state back to the
-                -- intersected slot before following. No-op
-                -- when the newest saved point intersects
-                -- (rollbackTo's RollbackCol walk finds nothing
-                -- strictly past the target); required when an
-                -- older retained point intersected because of
-                -- an offline rollback.
-                rollbackTo idx (slotOfPoint point)
-                pure (mkFollower cfg readyVar idx)
-            , intersectNotFound = case bootMode of
-                ColdBoot ->
-                    -- Cold-boot races during node startup are
-                    -- normal; retry with [Origin]. Origin
-                    -- always intersects once the node's chain
-                    -- is loaded.
-                    pure (self, [Network.Point Network.Point.Origin])
-                WarmBoot _ ->
-                    -- Amended #86: never origin-replay over a
-                    -- populated DB — that mixes chain histories.
-                    -- Fail closed; manual recovery is wiping
-                    -- --db-path. A future flag could opt into
-                    -- automatic 'Rollbacks.armageddonCleanup'-
-                    -- driven rebuild.
-                    error
-                        "utxo-indexer: chain-sync found no \
-                        \intersection against any retained \
-                        \rollback-log point. The saved chain \
-                        \has diverged from the node beyond \
-                        \the security parameter k. Wipe \
-                        \--db-path to rebuild from Origin, \
-                        \or restart against a node whose \
-                        \chain still includes one of the \
-                        \saved points."
-            }
-
-{- | Convert a chain-sync 'HeaderPoint' to the indexer's
-'SlotNo'. Origin maps to @SlotNo 0@; that's only used in
-the unusual case where chain-sync intersects at Origin
-itself, in which case 'rollbackTo' on @SlotNo 0@ is a
-no-op against an already-cold DB.
--}
-slotOfPoint :: HeaderPoint -> SlotNo
-slotOfPoint p =
-    case Network.pointSlot p of
-        Network.Point.Origin -> SlotNo 0
-        Network.Point.At s -> SlotNo (Network.unSlotNo s)
-
-mkFollower ::
-    DaemonConfig ->
-    TVar ReadyStatus ->
-    IndexerHandle ->
-    Follower HeaderPoint Network.SlotNo Fetched
-mkFollower cfg readyVar idx = self
-  where
-    self =
-        Follower
-            { rollForward = \fetched tip -> do
-                let (slot, ops) = extractBlock (fetchedBlock fetched)
-                    bh = pointToBlockHash (fetchedPoint fetched)
-                -- 'applyAtSlot' is replay-aware: same slot
-                -- + same blockhash is a silent no-op; same
-                -- slot + different blockhash throws
-                -- 'ApplyConflict'. Phase A surfaces that
-                -- crash to the caller; phase B (#86) replaces
-                -- it with a rollback to an older retained
-                -- point.
-                applyAtSlot idx slot bh ops
-                _ <- pruneRollbacks idx (dcSecurityParamK cfg)
-                updateReady cfg readyVar slot tip
-                pure self
-            , rollBackward = \point -> do
-                let slot = case Network.pointSlot point of
-                        Network.Point.Origin -> SlotNo 0
-                        Network.Point.At s -> SlotNo (Network.unSlotNo s)
-                rollbackTo idx slot
-                pure (Progress self)
-            }
-
-{- | Pull the block hash bytes out of an
-'OneEraHash'-shaped 'HeaderPoint'. Origin (no block)
-maps to an empty 'BlockHash'.
--}
-pointToBlockHash :: HeaderPoint -> BlockHash
-pointToBlockHash p =
-    case p of
-        Network.Point Network.Point.Origin -> BlockHash mempty
-        Network.Point (Network.Point.At (Network.Point.Block _ h)) ->
-            BlockHash (SBS.fromShort (getOneEraHash h))
+    behind = case (rProcessedSlot r, rTipSlot r) of
+        (Just (SlotNo p), Just (SlotNo t)) ->
+            Just (if t > p then t - p else 0)
+        _ -> Nothing
 
 {- | Apply a supervisor status transition to a 'ReadyStatus'.
 
@@ -347,8 +184,14 @@ pointToBlockHash p =
     flip back to @ready=true@ on reconnect to a chain that is
     already at the last seen tip — without this re-derive,
     @rsReady@ stays @False@ until the next 'rollForward'
-    fires 'updateReady' (which never happens if the chain
-    has stopped producing blocks). See issue #119.
+    fires the follower's readiness update. See issue #119.
+
+Post-refactor (#156) this pure function is no longer
+called from 'runDaemon''s body — the same semantics are
+performed at read time by 'readyStatusFrom'. The function
+remains exported and behavior-stable so the @DaemonSpec@
+regression tests continue to lock in the issue #119
+guarantee.
 -}
 applyUpstreamStatus ::
     DaemonConfig ->
@@ -369,28 +212,3 @@ applyUpstreamStatus cfg newStatus rs =
                 { rsUpstream = newStatus
                 , rsReady = False
                 }
-
-updateReady ::
-    DaemonConfig ->
-    TVar ReadyStatus ->
-    SlotNo ->
-    Network.SlotNo ->
-    IO ()
-updateReady cfg readyVar (SlotNo processed) tipNet =
-    let tip = Network.unSlotNo tipNet
-        behind = if tip > processed then tip - processed else 0
-        ready = behind <= dcReadyThresholdSlots cfg
-        rs =
-            ReadyStatus
-                { rsReady = ready
-                , rsTipSlot = Just (SlotNo tip)
-                , rsProcessedSlot = Just (SlotNo processed)
-                , rsSlotsBehind = Just behind
-                , -- A roll-forward implies the supervisor's
-                  -- chain-sync session is alive. T009 wires the
-                  -- supervisor's status sink into the same
-                  -- TVar so transient flips are corrected on
-                  -- the next event.
-                  rsUpstream = UpstreamConnected
-                }
-     in atomically (writeTVar readyVar rs)

@@ -63,6 +63,7 @@ library
     Cardano.Node.Client.Types
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
+    Cardano.Node.Client.UTxOIndexer.Follower
     Cardano.Node.Client.UTxOIndexer.Server
     Cardano.Node.Client.Validity
 
@@ -208,6 +209,7 @@ test-suite unit-tests
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
     Cardano.Node.Client.UTxOIndexer.DaemonSpec
+    Cardano.Node.Client.UTxOIndexer.FollowerSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
@@ -241,10 +243,12 @@ test-suite unit-tests
     , microlens
     , network
     , ouroboros-consensus
+    , ouroboros-network:api
     , plutus-core
     , QuickCheck
     , random
     , sop-extras
+    , stm
     , temporary
     , text
     , time
