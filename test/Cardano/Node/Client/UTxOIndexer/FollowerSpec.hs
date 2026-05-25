@@ -30,7 +30,9 @@ import Cardano.Node.Client.N2C.Trace (nullN2CTracer)
 import Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
     FollowerHandle (..),
+    InterestSet (..),
     Readiness (..),
+    filterBlockOps,
     withChainSyncFollower,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
@@ -50,6 +52,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically)
 import Data.ByteString qualified as BS
+import Data.Set qualified as Set
 import Ouroboros.Network.Magic (NetworkMagic (..))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe)
@@ -130,8 +133,128 @@ spec =
                                         _follower = fhAsync fh
                                     pure ()
 
+        describe "filterBlockOps (interest-set semantics)" $ do
+            it
+                "keeps UtxoCreate ops at addresses in the\
+                \ interest set and drops the rest"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    let set = Set.fromList [addrA]
+                        ops =
+                            [ UtxoCreate txInA addrA outA
+                            , UtxoCreate txInB addrB outB
+                            , UtxoCreate txInC addrC outC
+                            ]
+                    applyAtSlot
+                        idx
+                        (SlotNo 10)
+                        blk1
+                        (filterBlockOps (IndexAddressSet set) ops)
+                    snapA <- snapshotAt idx addrA
+                    snapA `shouldBe` [(txInA, outA)]
+
+            it
+                "leaves UtxoCreate ops at addresses outside\
+                \ the interest set unstored — snapshotAt\
+                \ returns []"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    let set = Set.fromList [addrA]
+                        ops =
+                            [ UtxoCreate txInA addrA outA
+                            , UtxoCreate txInB addrB outB
+                            , UtxoCreate txInC addrC outC
+                            ]
+                    applyAtSlot
+                        idx
+                        (SlotNo 10)
+                        blk1
+                        (filterBlockOps (IndexAddressSet set) ops)
+                    snapB <- snapshotAt idx addrB
+                    snapB `shouldBe` []
+                    snapC <- snapshotAt idx addrC
+                    snapC `shouldBe` []
+
+            it
+                "always processes UtxoSpend on a stored\
+                \ entry — the entry disappears from the\
+                \ snapshot"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    let set = Set.fromList [addrA]
+                    applyAtSlot
+                        idx
+                        (SlotNo 10)
+                        blk1
+                        ( filterBlockOps
+                            (IndexAddressSet set)
+                            [UtxoCreate txInA addrA outA]
+                        )
+                    applyAtSlot
+                        idx
+                        (SlotNo 11)
+                        blk2
+                        ( filterBlockOps
+                            (IndexAddressSet set)
+                            [UtxoSpend txInA]
+                        )
+                    snapA <- snapshotAt idx addrA
+                    snapA `shouldBe` []
+
+            it
+                "always processes UtxoSpend on a previously-\
+                \filtered (never stored) entry — no error,\
+                \ other addresses unaffected"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    let set = Set.fromList [addrA]
+                    applyAtSlot
+                        idx
+                        (SlotNo 10)
+                        blk1
+                        ( filterBlockOps
+                            (IndexAddressSet set)
+                            [ UtxoCreate txInA addrA outA
+                            , UtxoCreate txInB addrB outB
+                            ]
+                        )
+                    -- spend the filtered-out addrB entry —
+                    -- must be a clean no-op.
+                    applyAtSlot
+                        idx
+                        (SlotNo 11)
+                        blk2
+                        ( filterBlockOps
+                            (IndexAddressSet set)
+                            [UtxoSpend txInB]
+                        )
+                    snapA <- snapshotAt idx addrA
+                    snapA `shouldBe` [(txInA, outA)]
+                    snapB <- snapshotAt idx addrB
+                    snapB `shouldBe` []
+
+            it
+                "IndexAll preserves every UtxoCreate\
+                \ regardless of address (current daemon\
+                \ behavior)"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    let ops =
+                            [ UtxoCreate txInA addrA outA
+                            , UtxoCreate txInB addrB outB
+                            ]
+                    applyAtSlot
+                        idx
+                        (SlotNo 10)
+                        blk1
+                        (filterBlockOps IndexAll ops)
+                    snapA <- snapshotAt idx addrA
+                    snapA `shouldBe` [(txInA, outA)]
+                    snapB <- snapshotAt idx addrB
+                    snapB `shouldBe` [(txInB, outB)]
+
 -- ---------------------------------------------------------------------------
--- Helpers
+-- Helpers + interest-set test fixtures
 
 {- | Test 'ChainSyncConfig' parameterised on the relay
 socket path. Defaults match the existing 'DaemonSpec.testCfg'
@@ -148,4 +271,31 @@ mkCfg sock =
         , csSecurityParamK = 432
         , csReconnectPolicy = defaultReconnectPolicy
         , csProbeConfig = defaultProbeConfig
+        , csInterestSet = IndexAll
         }
+
+-- Three distinct test addresses (1-byte tag plus padding
+-- so they're distinguishable on the wire).
+addrA, addrB, addrC :: Address
+addrA = Address (BS.replicate 29 0xAA)
+addrB = Address (BS.replicate 29 0xBB)
+addrC = Address (BS.replicate 29 0xCC)
+
+-- Three distinct test TxIns at indices 0..2 of three fake
+-- producing transactions.
+txInA, txInB, txInC :: TxIn
+txInA = TxIn (BS.replicate 32 0x01) 0
+txInB = TxIn (BS.replicate 32 0x02) 0
+txInC = TxIn (BS.replicate 32 0x03) 0
+
+-- Three distinct test TxOuts (raw byte tags).
+outA, outB, outC :: TxOut
+outA = TxOut "tag-A"
+outB = TxOut "tag-B"
+outC = TxOut "tag-C"
+
+-- Two distinct block hashes for the two apply-block slots
+-- used across the filter scenarios.
+blk1, blk2 :: BlockHash
+blk1 = BlockHash (BS.replicate 32 0xF1)
+blk2 = BlockHash (BS.replicate 32 0xF2)

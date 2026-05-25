@@ -37,6 +37,7 @@ import Cardano.Node.Client.N2C.Trace (
 import Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
     FollowerHandle (..),
+    InterestSet (..),
     Readiness (..),
     withChainSyncFollower,
  )
@@ -144,6 +145,12 @@ toChainSyncCfg cfg =
         , csSecurityParamK = dcSecurityParamK cfg
         , csReconnectPolicy = dcReconnectPolicy cfg
         , csProbeConfig = dcProbeConfig cfg
+        , -- The bundled @utxo-indexer@ daemon indexes
+          -- the full chain by default (issue #158).
+          -- Downstream in-process consumers can construct
+          -- a 'ChainSyncConfig' directly with
+          -- 'IndexAddressSet' to bound the on-disk store.
+          csInterestSet = IndexAll
         }
 
 {- | Derive the bundled daemon's wire-format 'ReadyStatus'
