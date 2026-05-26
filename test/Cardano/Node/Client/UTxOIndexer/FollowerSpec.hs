@@ -33,11 +33,13 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     FollowerHandle (..),
     InterestSet (..),
     Readiness (..),
+    applyBlockOps,
     coldBootResumePoints,
     filterBlockOps,
     withChainSyncFollower,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    ApplyConflict,
     IndexerHandle (..),
     withInMemoryIndexer,
  )
@@ -53,9 +55,13 @@ import Cardano.Node.Client.UTxOIndexer.Types (
  )
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically)
+import Control.Exception (try)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
 import Data.Set qualified as Set
+import Ouroboros.Consensus.Block.EBB (
+    IsEBB (..),
+ )
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
     OneEraHash (..),
  )
@@ -157,6 +163,31 @@ spec =
                                     pure ()
 
         describe "filterBlockOps (interest-set semantics)" $ do
+            it
+                "skips an EBB before a regular block at the\
+                \ same slot"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    result <- try @ApplyConflict $ do
+                        ebbApplied <-
+                            applyBlockOps
+                                idx
+                                IsEBB
+                                (SlotNo 0)
+                                blk1
+                                []
+                        blockApplied <-
+                            applyBlockOps
+                                idx
+                                IsNotEBB
+                                (SlotNo 0)
+                                blk2
+                                [UtxoCreate txInA addrA outA]
+                        pure (ebbApplied, blockApplied)
+                    result `shouldBe` Right (False, True)
+                    snapA <- snapshotAt idx addrA
+                    snapA `shouldBe` [(txInA, outA)]
+
             it
                 "keeps UtxoCreate ops at addresses in the\
                 \ interest set and drops the rest"

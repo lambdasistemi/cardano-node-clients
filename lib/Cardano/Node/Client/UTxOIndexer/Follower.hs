@@ -56,6 +56,7 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
 
     -- * Interest-set filter
     InterestSet (..),
+    applyBlockOps,
     filterBlockOps,
 
     -- * Readiness state
@@ -113,13 +114,19 @@ import Control.Concurrent.STM (
     readTVarIO,
     writeTVar,
  )
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Control.Tracer (Tracer, nullTracer)
 import Data.ByteString.Short qualified as SBS
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Word (Word64)
+import Ouroboros.Consensus.Block.Abstract (
+    blockToIsEBB,
+ )
+import Ouroboros.Consensus.Block.EBB (
+    IsEBB (..),
+ )
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
     OneEraHash (..),
  )
@@ -231,6 +238,30 @@ filterBlockOps (IndexAddressSet s) = filter (inInterestSet s)
     inInterestSet set op = case op of
         UtxoCreate _ addr _ -> addr `Set.member` set
         UtxoSpend _ -> True
+
+{- | Apply a fetched block's extracted UTxO operations,
+unless the consensus layer identifies it as an Epoch
+Boundary Block. EBBs carry no UTxO operations and may
+share their slot with the following regular Byron block,
+so recording them in the rollback log would create a
+same-slot, different-hash conflict on mainnet cold boot.
+
+Returns 'True' only when the block was persisted via
+'applyAtSlot'.
+-}
+applyBlockOps ::
+    IndexerHandle ->
+    IsEBB ->
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    IO Bool
+applyBlockOps idx isEBB slot bh ops =
+    case isEBB of
+        IsEBB -> pure False
+        IsNotEBB -> do
+            applyAtSlot idx slot bh ops
+            pure True
 
 {- | Live readiness snapshot updated by the follower
 thread after every roll-forward and on every reconnect
@@ -499,11 +530,14 @@ mkFollower cfg readinessVar idx = self
                     bh =
                         pointToBlockHash
                             (fetchedPoint fetched)
-                applyAtSlot idx slot bh ops
-                _ <-
-                    pruneRollbacks
-                        idx
-                        (csSecurityParamK cfg)
+                    isEBB =
+                        blockToIsEBB (fetchedBlock fetched)
+                applied <- applyBlockOps idx isEBB slot bh ops
+                when applied $
+                    void $
+                        pruneRollbacks
+                            idx
+                            (csSecurityParamK cfg)
                 updateReadiness readinessVar slot tip
                 pure self
             , rollBackward = \point -> do
