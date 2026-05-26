@@ -22,6 +22,7 @@ against a devnet node.
 -}
 module Cardano.Node.Client.UTxOIndexer.FollowerSpec (spec) where
 
+import Cardano.Node.Client.N2C.ChainSync (HeaderPoint)
 import Cardano.Node.Client.N2C.Probe (defaultProbeConfig)
 import Cardano.Node.Client.N2C.Reconnect (
     defaultReconnectPolicy,
@@ -32,6 +33,7 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     FollowerHandle (..),
     InterestSet (..),
     Readiness (..),
+    coldBootResumePoints,
     filterBlockOps,
     withChainSyncFollower,
  )
@@ -52,8 +54,14 @@ import Cardano.Node.Client.UTxOIndexer.Types (
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically)
 import Data.ByteString qualified as BS
+import Data.ByteString.Short qualified as SBS
 import Data.Set qualified as Set
+import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
+    OneEraHash (..),
+ )
+import Ouroboros.Network.Block qualified as Network
 import Ouroboros.Network.Magic (NetworkMagic (..))
+import Ouroboros.Network.Point qualified as Network.Point
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
@@ -61,6 +69,21 @@ spec :: Spec
 spec =
     describe "Cardano.Node.Client.UTxOIndexer.Follower" $ do
         describe "withChainSyncFollower" $ do
+            it
+                "uses a configured start point for cold-boot\
+                \ intersection"
+                $ do
+                    let startSlot = SlotNo 5_000_000
+                        startHash =
+                            BlockHash (BS.replicate 32 0x42)
+                        cfg =
+                            (mkCfg "unused.sock")
+                                { csStartPoint =
+                                    Just (startSlot, startHash)
+                                }
+                    coldBootResumePoints cfg
+                        `shouldBe` [toHeaderPoint startSlot startHash]
+
             it
                 "brings up against a caller-owned\
                 \ in-memory IndexerHandle and exposes a\
@@ -267,12 +290,23 @@ mkCfg sock =
         { csRelaySocket = sock
         , csNetworkMagic = NetworkMagic 42
         , csByronEpochSlots = 86_400
+        , csStartPoint = Nothing
         , csReadyThresholdSlots = 5
         , csSecurityParamK = 432
         , csReconnectPolicy = defaultReconnectPolicy
         , csProbeConfig = defaultProbeConfig
         , csInterestSet = IndexAll
         }
+
+toHeaderPoint :: SlotNo -> BlockHash -> HeaderPoint
+toHeaderPoint (SlotNo slot) (BlockHash hashBytes) =
+    Network.Point
+        ( Network.Point.At
+            ( Network.Point.Block
+                (Network.SlotNo slot)
+                (OneEraHash (SBS.toShort hashBytes))
+            )
+        )
 
 -- Three distinct test addresses (1-byte tag plus padding
 -- so they're distinguishable on the wire).

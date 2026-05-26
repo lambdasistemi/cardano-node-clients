@@ -141,6 +141,7 @@ toChainSyncCfg cfg =
         { csRelaySocket = dcRelaySocket cfg
         , csNetworkMagic = NetworkMagic (dcNetworkMagic cfg)
         , csByronEpochSlots = dcByronEpochSlots cfg
+        , csStartPoint = Nothing
         , csReadyThresholdSlots = dcReadyThresholdSlots cfg
         , csSecurityParamK = dcSecurityParamK cfg
         , csReconnectPolicy = dcReconnectPolicy cfg

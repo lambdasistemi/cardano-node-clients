@@ -52,6 +52,7 @@ slice brief's "actual codebase wins" guidance.
 module Cardano.Node.Client.UTxOIndexer.Follower (
     -- * Configuration
     ChainSyncConfig (..),
+    coldBootResumePoints,
 
     -- * Interest-set filter
     InterestSet (..),
@@ -142,6 +143,11 @@ data ChainSyncConfig = ChainSyncConfig
     , csByronEpochSlots :: !Word64
     -- ^ Byron @EpochSlots@, used by the chain-sync codec
     -- to decode pre-Shelley blocks.
+    , csStartPoint :: !(Maybe (SlotNo, BlockHash))
+    -- ^ Optional explicit cold-boot intersection point.
+    -- 'Nothing' preserves the historical Origin boot; a
+    -- concrete @(slot, hash)@ lets callers start from a
+    -- known point instead of replaying from genesis.
     , csReadyThresholdSlots :: !Word64
     -- ^ Slot-lag threshold beyond which @ready@ flips to
     -- @False@. Plumbed through to consumers (the follower
@@ -307,10 +313,7 @@ withChainSyncFollower tracer cfg idx action = do
     let chainSession = do
             bootMode <- detectBootMode idx
             let resumePoints = case bootMode of
-                    ColdBoot ->
-                        [ Network.Point
-                            Network.Point.Origin
-                        ]
+                    ColdBoot -> coldBootResumePoints cfg
                     WarmBoot ps -> fmap toHeaderPoint ps
             runChainSyncN2C
                 (EpochSlots (csByronEpochSlots cfg))
@@ -406,6 +409,17 @@ toHeaderPoint (SlotNo s, BlockHash bh) =
             )
         )
 
+{- | Chain-sync resume points for an empty indexer. With
+no configured start point the follower preserves the
+historical Origin cold boot; with a configured point the
+first intersection request names that concrete block.
+-}
+coldBootResumePoints :: ChainSyncConfig -> [HeaderPoint]
+coldBootResumePoints cfg =
+    case csStartPoint cfg of
+        Nothing -> [Network.Point Network.Point.Origin]
+        Just startPoint -> [toHeaderPoint startPoint]
+
 -- ---------------------------------------------------------------------------
 -- Intersector + per-roll Follower
 
@@ -434,7 +448,7 @@ mkIntersector bootMode cfg readinessVar idx = self
                 ColdBoot ->
                     pure
                         ( self
-                        , [Network.Point Network.Point.Origin]
+                        , coldBootResumePoints cfg
                         )
                 WarmBoot _ ->
                     -- Never origin-replay over a populated
