@@ -5,6 +5,7 @@ import Test.Hspec (hspec)
 import Cardano.Node.Client.AddressSpec qualified as AddressSpec
 import Cardano.Node.Client.N2C.ProbeSpec qualified as N2CProbeSpec
 import Cardano.Node.Client.N2C.TraceSpec qualified as N2CTraceSpec
+import Cardano.Node.Client.UTxOIndexer.BlockExtractSpec qualified as UTxOIndexerBlockExtractSpec
 import Cardano.Node.Client.UTxOIndexer.DaemonSpec qualified as UTxOIndexerDaemonSpec
 import Cardano.Node.Client.UTxOIndexer.FollowerSpec qualified as UTxOIndexerFollowerSpec
 import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
@@ -20,6 +21,7 @@ main = hspec $ do
     AddressSpec.spec
     SampleFibonacciSpec.spec
     UTxOIndexerTypesSpec.spec
+    UTxOIndexerBlockExtractSpec.spec
     UTxOIndexerSpec.spec
     UTxOIndexerServerSpec.spec
     UTxOIndexerPersistenceSpec.spec

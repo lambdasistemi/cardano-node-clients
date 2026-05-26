@@ -16,20 +16,25 @@ goes through (e.g. @SafeHash@ → @Hashes@,
 @Cardano.Ledger.Shelley.BlockBody@, @txid@ → @txIdTx@,
 @Tx era@ → @Tx l era@, @TxId c@ → @TxId@) — they all
 live below 'cardano-ledger-read''s API surface.
-
-Byron support is stubbed (returns @[]@). Devnet
-workloads post-date the Byron→Shelley hard fork; if a
-consumer ever needs Byron data, the stub is the obvious
-place to wire it in.
 -}
 module Cardano.Node.Client.UTxOIndexer.BlockExtract (
     extractBlock,
 ) where
 
-import Cardano.Crypto.Hash.Class (hashToBytes)
-import Cardano.Ledger.Address (serialiseAddr)
+import Cardano.Chain.Common (unsafeGetLovelace)
+import Cardano.Chain.UTxO qualified as ByronUTxO
+import Cardano.Crypto.Hash.Class (Hash (..), hashToBytes)
+import Cardano.Crypto.Hashing (abstractHashToShort)
+import Cardano.Ledger.Address (
+    Addr (..),
+    BootstrapAddress (..),
+    serialiseAddr,
+ )
+import Cardano.Ledger.Api.Tx.Out (mkBasicTxOut)
 import Cardano.Ledger.BaseTypes (TxIx (..))
 import Cardano.Ledger.Binary (serialize')
+import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (
     EraTx,
     EraTxBody,
@@ -43,8 +48,9 @@ import Cardano.Ledger.Core (
     txIdTxBody,
  )
 import Cardano.Ledger.Core qualified as Ledger
-import Cardano.Ledger.Hashes (extractHash)
+import Cardano.Ledger.Hashes (extractHash, unsafeMakeSafeHash)
 import Cardano.Ledger.TxIn qualified as SH
+import Cardano.Ledger.Val (inject)
 import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (UtxoOp (..))
 import Cardano.Node.Client.UTxOIndexer.Types (
@@ -57,6 +63,7 @@ import Cardano.Read.Ledger.Block.Block (fromConsensusBlock)
 import Cardano.Read.Ledger.Block.Txs (getEraTransactions)
 import Cardano.Read.Ledger.Eras.EraValue (applyEraFun)
 import Cardano.Read.Ledger.Eras.KnownEras (
+    Byron,
     Era (..),
     IsEra,
     theEra,
@@ -65,7 +72,10 @@ import Cardano.Read.Ledger.Eras.KnownEras (
 -- Era pattern aliases are exported via 'Era (..)' above; the
 -- 'Dijkstra' case in 'changes' below requires this re-export
 -- pattern match to be exhaustive.
+import Cardano.Read.Ledger.Tx.Inputs (Inputs (..), getEraInputs)
+import Cardano.Read.Ledger.Tx.Outputs (Outputs (..), getEraOutputs)
 import Cardano.Read.Ledger.Tx.Tx (Tx (..))
+import Cardano.Read.Ledger.Tx.TxId (TxId (..), getEraTxId)
 import Data.ByteString (ByteString)
 import Data.Foldable (toList)
 import Data.Word (Word16)
@@ -99,16 +109,15 @@ blockSlot blk =
         Network.Point.Origin -> SlotNo 0
         Network.Point.At s -> SlotNo (Network.unSlotNo s)
 
-{- | UTxO ops produced by a single era's tx list. Byron
-returns @[]@ — pre-Shelley blocks are not exercised by
-current workloads. Each Shelley-family branch narrows
+{- | UTxO ops produced by a single era's tx list. Each
+Shelley-family branch narrows
 @TxT era ~ Core.Tx Core.TopTx era@ so the
 @bodyTxL@/@inputsTxBodyL@/@outputsTxBodyL@ lenses
 become applicable.
 -}
 changes :: forall era. (IsEra era) => [Tx era] -> [UtxoOp]
 changes txs = case theEra @era of
-    Byron -> []
+    Byron -> concatMap byronTxChanges txs
     Shelley -> concatMap (shelleyTxChanges . unTx) txs
     Allegra -> concatMap (shelleyTxChanges . unTx) txs
     Mary -> concatMap (shelleyTxChanges . unTx) txs
@@ -116,6 +125,26 @@ changes txs = case theEra @era of
     Babbage -> concatMap (shelleyTxChanges . unTx) txs
     Conway -> concatMap (shelleyTxChanges . unTx) txs
     Dijkstra -> concatMap (shelleyTxChanges . unTx) txs
+
+{- | Convert a Byron transaction into @UtxoOp@s.
+
+Byron tx ids are raw Blake2b_256 hashes wrapped by
+@cardano-chain@. We re-wrap them as Shelley 'SH.TxId'
+only to reuse the same 32-byte storage representation as
+Shelley-family inputs and created outputs.
+-}
+byronTxChanges :: Tx Byron -> [UtxoOp]
+byronTxChanges tx =
+    let tid = byronTxIdBytes (unTxId (getEraTxId tx))
+        Inputs ins = getEraInputs tx
+        Outputs outs = getEraOutputs tx
+        spends = UtxoSpend . byronTxInToIndexer <$> toList ins
+        creates =
+            zipWith
+                (mkByronCreate tid)
+                [0 ..]
+                (toList outs)
+     in spends <> creates
 
 {- | Convert a Shelley-family @'Core.Tx' TopTx era@ into a
 list of @UtxoOp@s.
@@ -144,14 +173,27 @@ shelleyTxChanges tx =
 txBodyIdBytes ::
     forall era. (EraTxBody era) => Ledger.TxBody TopTx era -> ByteString
 txBodyIdBytes body =
-    case txIdTxBody body of
-        SH.TxId safeHash -> hashToBytes (extractHash safeHash)
+    shelleyTxIdBytes (txIdTxBody body)
+
+byronTxIdBytes :: ByronUTxO.TxId -> ByteString
+byronTxIdBytes = shelleyTxIdBytes . byronTxIdToShelley
+
+shelleyTxIdBytes :: SH.TxId -> ByteString
+shelleyTxIdBytes (SH.TxId safeHash) =
+    hashToBytes (extractHash safeHash)
 
 shelleyTxInToIndexer :: SH.TxIn -> TxIn
-shelleyTxInToIndexer (SH.TxIn (SH.TxId safeHash) (TxIx ix)) =
+shelleyTxInToIndexer (SH.TxIn txId (TxIx ix)) =
     TxIn
-        { txInId = hashToBytes (extractHash safeHash)
+        { txInId = shelleyTxIdBytes txId
         , txInIx = fromIntegral ix
+        }
+
+byronTxInToIndexer :: ByronUTxO.TxIn -> TxIn
+byronTxInToIndexer (ByronUTxO.TxInUtxo txId ix) =
+    TxIn
+        { txInId = byronTxIdBytes txId
+        , txInIx = ix
         }
 
 mkCreate ::
@@ -168,3 +210,44 @@ mkCreate tid ix out =
         TxIn{txInId = tid, txInIx = ix}
         (Address (serialiseAddr (out ^. addrTxOutL)))
         (TxOut (serialize' (eraProtVerLow @era) out))
+
+mkByronCreate ::
+    -- | producing tx id (32 raw bytes)
+    ByteString ->
+    -- | output index
+    Word16 ->
+    ByronUTxO.TxOut ->
+    UtxoOp
+mkByronCreate tid ix out =
+    UtxoCreate
+        TxIn{txInId = tid, txInIx = ix}
+        (byronTxOutAddress out)
+        ( TxOut
+            ( serialize'
+                (eraProtVerLow @ConwayEra)
+                (fromByronOutput out)
+            )
+        )
+
+byronTxOutAddress :: ByronUTxO.TxOut -> Address
+byronTxOutAddress (ByronUTxO.TxOut addr _lovelace) =
+    Address (serialiseAddr (AddrBootstrap (BootstrapAddress addr)))
+
+{- | Convert a Byron 'ByronUTxO.TxOut' to the Conway-era
+@TxOut@ shape consumed by downstream indexer readers.
+-}
+fromByronOutput :: ByronUTxO.TxOut -> Ledger.TxOut ConwayEra
+fromByronOutput (ByronUTxO.TxOut addr lovelace) =
+    mkBasicTxOut @ConwayEra
+        (AddrBootstrap (BootstrapAddress addr))
+        (inject $ Coin $ toInteger $ unsafeGetLovelace lovelace)
+
+{- | Convert a Byron TxId to a Shelley TxId.
+
+This mirrors cardano-utxo-csmt: extract the underlying
+32-byte Blake2b_256 hash and re-wrap it as a Shelley safe
+hash so both eras feed the indexer the same tx-id bytes.
+-}
+byronTxIdToShelley :: ByronUTxO.TxId -> SH.TxId
+byronTxIdToShelley =
+    SH.TxId . unsafeMakeSafeHash . UnsafeHash . abstractHashToShort
