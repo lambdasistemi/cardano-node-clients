@@ -43,7 +43,7 @@ import Control.Concurrent.STM (
     newTVarIO,
     readTVarIO,
  )
-import Control.Tracer (Tracer (..))
+import Control.Tracer (Tracer (..), nullTracer)
 import Data.ByteString.Short qualified as SBS
 import Data.Text qualified as Text
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
@@ -96,6 +96,8 @@ runMainnetSmoke socketPath = do
                         , csReconnectPolicy = defaultReconnectPolicy
                         , csProbeConfig = defaultProbeConfig
                         , csInterestSet = IndexAll
+                        , csBlockTracer = nullTracer
+                        , csTipTracer = nullTracer
                         }
             withChainSyncFollower tracer cfg idx $ \fh ->
                 waitForMainnetProgress

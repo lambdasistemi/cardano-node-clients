@@ -37,6 +37,7 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     coldBootResumePoints,
     filterBlockOps,
     withChainSyncFollower,
+    withChainSyncFollowerUsing,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     ApplyConflict,
@@ -54,8 +55,16 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     TxOut (..),
  )
 import Control.Concurrent.Async qualified as Async
-import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM (
+    atomically,
+    check,
+    modifyTVar',
+    newTVarIO,
+    readTVar,
+    writeTVar,
+ )
 import Control.Exception (try)
+import Control.Tracer (Tracer (..), nullTracer, traceWith)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
 import Data.Set qualified as Set
@@ -161,6 +170,70 @@ spec =
                                             Async.Async ()
                                         _follower = fhAsync fh
                                     pure ()
+
+            it
+                "surfaces configured block and tip tracers\
+                \ to the chain-sync runner"
+                $ withInMemoryIndexer
+                $ \idx ->
+                    withSystemTempDirectory
+                        "follower-spec"
+                        $ \dir -> do
+                            blockSeen <- newTVarIO False
+                            tipSlots <- newTVarIO []
+                            let cfg =
+                                    (mkCfg (dir <> "/unused.sock"))
+                                        { csBlockTracer =
+                                            Tracer $
+                                                \_ ->
+                                                    atomically $
+                                                        writeTVar
+                                                            blockSeen
+                                                            True
+                                        , csTipTracer =
+                                            Tracer $
+                                                \slot ->
+                                                    atomically $
+                                                        modifyTVar'
+                                                            tipSlots
+                                                            (slot :)
+                                        }
+                                runner
+                                    _epochSlots
+                                    _magic
+                                    _sock
+                                    blockTracer
+                                    tipTracer
+                                    _intersector
+                                    _points = do
+                                        traceWith
+                                            blockTracer
+                                            ( error
+                                                "block tracer test\
+                                                \ payload is not\
+                                                \ evaluated"
+                                            )
+                                        traceWith
+                                            tipTracer
+                                            (Network.SlotNo 123)
+                                        pure (Right ())
+                            withChainSyncFollowerUsing
+                                runner
+                                nullN2CTracer
+                                cfg
+                                idx
+                                $ \_fh -> do
+                                    observedTips <-
+                                        atomically $ do
+                                            seen <- readTVar blockSeen
+                                            tips <- readTVar tipSlots
+                                            check
+                                                ( seen
+                                                    && not (null tips)
+                                                )
+                                            pure tips
+                                    observedTips
+                                        `shouldBe` [Network.SlotNo 123]
 
         describe "filterBlockOps (interest-set semantics)" $ do
             it
@@ -327,6 +400,8 @@ mkCfg sock =
         , csReconnectPolicy = defaultReconnectPolicy
         , csProbeConfig = defaultProbeConfig
         , csInterestSet = IndexAll
+        , csBlockTracer = nullTracer
+        , csTipTracer = nullTracer
         }
 
 toHeaderPoint :: SlotNo -> BlockHash -> HeaderPoint

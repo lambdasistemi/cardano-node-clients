@@ -67,7 +67,9 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
     FollowerHandle (..),
 
     -- * Bring-up
+    ChainSyncRunner,
     withChainSyncFollower,
+    withChainSyncFollowerUsing,
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots (..))
@@ -84,6 +86,7 @@ import Cardano.Node.Client.N2C.Reconnect (
     runReconnectLoop,
  )
 import Cardano.Node.Client.N2C.Trace (N2CEvent)
+import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.UTxOIndexer.BlockExtract (
     extractBlock,
  )
@@ -114,8 +117,9 @@ import Control.Concurrent.STM (
     readTVarIO,
     writeTVar,
  )
+import Control.Exception (SomeException)
 import Control.Monad (void, when)
-import Control.Tracer (Tracer, nullTracer)
+import Control.Tracer (Tracer)
 import Data.ByteString.Short qualified as SBS
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -181,8 +185,40 @@ data ChainSyncConfig = ChainSyncConfig
     -- set; 'UtxoSpend' is always processed (a spend on a
     -- previously-filtered create is a clean no-op
     -- because the 'TxInCol' entry never existed).
+    , csBlockTracer :: !(Tracer IO Block)
+    -- ^ Per-roll-forward block tracer supplied to
+    -- 'mkChainSyncN2C'. Use 'nullTracer' to preserve the
+    -- historical quiet behavior.
+    , csTipTracer :: !(Tracer IO Network.SlotNo)
+    -- ^ Per-roll-forward chain-tip slot tracer supplied
+    -- to 'mkChainSyncN2C'. Use 'nullTracer' to preserve
+    -- the historical quiet behavior.
     }
-    deriving stock (Show)
+
+instance Show ChainSyncConfig where
+    show cfg =
+        "ChainSyncConfig"
+            <> " { csRelaySocket = "
+            <> show (csRelaySocket cfg)
+            <> ", csNetworkMagic = "
+            <> show (csNetworkMagic cfg)
+            <> ", csByronEpochSlots = "
+            <> show (csByronEpochSlots cfg)
+            <> ", csStartPoint = "
+            <> show (csStartPoint cfg)
+            <> ", csReadyThresholdSlots = "
+            <> show (csReadyThresholdSlots cfg)
+            <> ", csSecurityParamK = "
+            <> show (csSecurityParamK cfg)
+            <> ", csReconnectPolicy = "
+            <> show (csReconnectPolicy cfg)
+            <> ", csProbeConfig = "
+            <> show (csProbeConfig cfg)
+            <> ", csInterestSet = "
+            <> show (csInterestSet cfg)
+            <> ", csBlockTracer = <tracer>"
+            <> ", csTipTracer = <tracer>"
+            <> " }"
 
 {- | Address filter applied to each @[UtxoOp]@ batch
 between 'extractBlock' and 'applyAtSlot'.
@@ -320,6 +356,21 @@ data FollowerHandle = FollowerHandle
 -- ---------------------------------------------------------------------------
 -- Bring-up
 
+{- | Transport seam used by 'withChainSyncFollowerUsing'.
+Production code uses 'defaultChainSyncRunner'; tests can
+inject a runner that observes the caller-provided tracers
+without opening a real node socket.
+-}
+type ChainSyncRunner =
+    EpochSlots ->
+    NetworkMagic ->
+    FilePath ->
+    Tracer IO Block ->
+    Tracer IO Network.SlotNo ->
+    Intersector HeaderPoint Network.SlotNo Fetched ->
+    [HeaderPoint] ->
+    IO (Either SomeException ())
+
 {- | Run the chain-sync follower against a caller-owned
 'IndexerHandle' under a reconnect supervisor, and hand
 the resulting 'FollowerHandle' to the action. The follower
@@ -338,7 +389,39 @@ withChainSyncFollower ::
     IndexerHandle ->
     (FollowerHandle -> IO a) ->
     IO a
-withChainSyncFollower tracer cfg idx action = do
+withChainSyncFollower =
+    withChainSyncFollowerCore True defaultChainSyncRunner
+
+{- | Variant of 'withChainSyncFollower' with an injectable
+chain-sync runner. The supplied runner is executed
+directly, without the reconnect supervisor's node-ready
+probe, so unit tests can deterministically verify that
+'csBlockTracer' and 'csTipTracer' are surfaced to the N2C
+chain-sync layer without opening a real node socket.
+-}
+withChainSyncFollowerUsing ::
+    ChainSyncRunner ->
+    -- | Tracer for reconnect-supervisor lifecycle events.
+    Tracer IO N2CEvent ->
+    ChainSyncConfig ->
+    -- | Caller-owned handle the follower writes into.
+    IndexerHandle ->
+    (FollowerHandle -> IO a) ->
+    IO a
+withChainSyncFollowerUsing =
+    withChainSyncFollowerCore False
+
+withChainSyncFollowerCore ::
+    Bool ->
+    ChainSyncRunner ->
+    -- | Tracer for reconnect-supervisor lifecycle events.
+    Tracer IO N2CEvent ->
+    ChainSyncConfig ->
+    -- | Caller-owned handle the follower writes into.
+    IndexerHandle ->
+    (FollowerHandle -> IO a) ->
+    IO a
+withChainSyncFollowerCore supervise chainSyncRunner tracer cfg idx action = do
     now <- getCurrentTime
     readinessVar <- newTVarIO (initialReadiness now)
     let chainSession = do
@@ -346,21 +429,19 @@ withChainSyncFollower tracer cfg idx action = do
             let resumePoints = case bootMode of
                     ColdBoot -> coldBootResumePoints cfg
                     WarmBoot ps -> fmap toHeaderPoint ps
-            runChainSyncN2C
+            chainSyncRunner
                 (EpochSlots (csByronEpochSlots cfg))
                 (csNetworkMagic cfg)
                 (csRelaySocket cfg)
-                ( mkChainSyncN2C
-                    nullTracer
-                    nullTracer
-                    ( mkIntersector
-                        bootMode
-                        cfg
-                        readinessVar
-                        idx
-                    )
-                    resumePoints
+                (csBlockTracer cfg)
+                (csTipTracer cfg)
+                ( mkIntersector
+                    bootMode
+                    cfg
+                    readinessVar
+                    idx
                 )
+                resumePoints
         setUpstreamStatus newStatus = do
             tNow <- getCurrentTime
             atomically $
@@ -379,12 +460,33 @@ withChainSyncFollower tracer cfg idx action = do
                 setUpstreamStatus
                 getProcessedSlot
                 chainSession
-    withAsync (void chainAction) $ \a ->
+        directChainAction =
+            void chainSession
+        followerAction =
+            if supervise
+                then void chainAction
+                else directChainAction
+    withAsync followerAction $ \a ->
         action
             FollowerHandle
                 { fhReadiness = readTVar readinessVar
                 , fhAsync = a
                 }
+
+defaultChainSyncRunner :: ChainSyncRunner
+defaultChainSyncRunner
+    epochSlots
+    magic
+    sock
+    blockTracer
+    tipTracer
+    intersector
+    points =
+        runChainSyncN2C
+            epochSlots
+            magic
+            sock
+            (mkChainSyncN2C blockTracer tipTracer intersector points)
 
 {- | Initial 'Readiness' value at bring-up: no slots
 applied yet, supervisor-reported state is
