@@ -211,6 +211,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.DaemonSpec
     Cardano.Node.Client.UTxOIndexer.FollowerSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
+    Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
@@ -237,6 +238,7 @@ test-suite unit-tests
     , cardano-slotting
     , cardano-strict-containers
     , containers
+    , contra-tracer
     , directory
     , filepath
     , hspec
