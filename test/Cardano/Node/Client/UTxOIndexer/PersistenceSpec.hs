@@ -24,6 +24,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     TxIn (..),
     TxOut (..),
  )
+import ChainFollower.Rollbacks.Types (RollbackPoint (..))
 import Control.Exception (try)
 import Data.ByteString qualified as BS
 import Data.Word (Word64)
@@ -45,6 +46,27 @@ spec =
                 withRocksDBIndexer dbPath $ \h -> do
                     pts <- getResumePoints h
                     pts `shouldBe` []
+
+        it "restoration sentinels survive close + reopen" $
+            withTempDB $ \dbPath -> do
+                withRocksDBIndexer dbPath $ \h -> do
+                    state <- newFollowerState h True
+                    (_state', processed) <-
+                        processFollowerBlock
+                            h
+                            state
+                            2
+                            False
+                            (SlotNo 1)
+                            (BlockHash (BS.replicate 32 0x11))
+                            []
+                    processed `shouldBe` True
+                withRocksDBIndexer dbPath $ \h -> do
+                    history <- getRollbackHistory h
+                    fmap (rpInverses . snd) history
+                        `shouldBe` [[]]
+                    fmap (rpMeta . snd) history
+                        `shouldBe` [Nothing]
 
         it "getResumePoints returns retained slots newest-first" $
             -- Three entries fit entirely under the Fibonacci

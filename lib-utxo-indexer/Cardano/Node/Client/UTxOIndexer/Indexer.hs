@@ -1,3 +1,7 @@
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
+
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.Indexer
 Description : Address->UTxO indexer state and read API
@@ -12,6 +16,10 @@ exposes the operations the rest of the daemon needs:
   in one transaction, atomically records the inverse list
   in the rollback column, and wakes up any registered
   waiters whose 'TxIn' was just created.
+* 'newFollowerState' and 'processFollowerBlock' expose an
+  opaque chain-follower 'Runner.processBlock' wrapper for
+  restoration/cold-sync phases without leaking the
+  database runner type.
 * 'rollbackTo' replays the inverse-op log for every slot
   strictly greater than the target. Awaiters whose
   observed 'TxIn' gets rolled back stay closed (the
@@ -44,6 +52,7 @@ swap.
 module Cardano.Node.Client.UTxOIndexer.Indexer (
     -- * Indexer handle
     IndexerHandle (..),
+    IndexerFollowerState,
     withInMemoryIndexer,
     withRocksDBIndexer,
 
@@ -69,14 +78,19 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     AddrKey (..),
     Address (..),
     BlockHash (..),
-    SlotNo,
+    SlotNo (..),
     TxIn (..),
     TxOut,
+ )
+import ChainFollower.Backend (
+    Following (..),
+    Restoring (..),
  )
 import ChainFollower.Rollbacks.Store qualified as Rollbacks
 import ChainFollower.Rollbacks.Types (
     RollbackPoint (..),
  )
+import ChainFollower.Runner qualified as Runner
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (
@@ -94,6 +108,8 @@ import Control.Concurrent.STM (
     writeTVar,
  )
 import Control.Exception (Exception, throwIO)
+import Control.Monad (when)
+import Control.Tracer (nullTracer)
 import Data.ByteString qualified as BS
 import Data.Default.Class (def)
 import Data.Dependent.Map (DMap)
@@ -107,6 +123,7 @@ import Data.IORef (
 import Data.List.SampleFibonacci (sampleAtFibonacciIntervals)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Database.KV.Cursor (
     Cursor,
     Entry (..),
@@ -169,6 +186,41 @@ data AwaitObservation = AwaitObservation
     }
     deriving stock (Eq, Show)
 
+type IndexerTx cf op =
+    Transaction IO cf Cols op
+
+data IndexerBlock = IndexerBlock !SlotNo !BlockHash ![UtxoOp]
+
+type IndexerRunnerPhase cf op =
+    Runner.Phase
+        IO
+        cf
+        Cols
+        op
+        IndexerBlock
+        [UtxoOp]
+        BlockHash
+
+{- | Opaque chain-follower phase state for the UTxO
+indexer. It packages the concrete @kv-transactions@
+runner type with the current 'Runner.Phase' so
+'withChainSyncFollower' can thread phase state through
+roll-forward continuations without exposing backend
+internals to downstream consumers.
+-}
+data IndexerFollowerState where
+    IndexerFollowerState ::
+        { ifsRunTransaction ::
+            forall a.
+            IndexerTx cf op a ->
+            IO a
+        , ifsWaiters :: !Waiters
+        , ifsObserved :: !Observed
+        , ifsCount :: !(TVar Int)
+        , ifsPhase :: !(IndexerRunnerPhase cf op)
+        } ->
+        IndexerFollowerState
+
 {- | Operations the rest of the daemon performs against
 the indexer state.
 -}
@@ -195,6 +247,32 @@ data IndexerHandle = IndexerHandle
     -- ^ Roll the index back to the given slot by
     -- replaying inverse-op lists for every slot
     -- @> target@, in descending slot order.
+    , newFollowerState :: Bool -> IO IndexerFollowerState
+    -- ^ Build an opaque chain-follower phase state for
+    -- 'processFollowerBlock'. Pass 'True' to start in
+    -- restoration mode when the rollback log contains no
+    -- following rows; pass 'False' for always-following
+    -- behavior.
+    , processFollowerBlock ::
+        IndexerFollowerState ->
+        Int ->
+        Bool ->
+        SlotNo ->
+        BlockHash ->
+        [UtxoOp] ->
+        IO (IndexerFollowerState, Bool)
+    -- ^ Process one non-EBB block through
+    -- 'ChainFollower.Runner.processBlock'. The 'Bool'
+    -- argument is the Runner's within-stability-window
+    -- signal: 'False' keeps restoration active, 'True'
+    -- transitions to or stays in following. The returned
+    -- 'Bool' is 'True' when the block was processed.
+    , rollbackFollowerState ::
+        IndexerFollowerState ->
+        SlotNo ->
+        IO IndexerFollowerState
+    -- ^ Roll back the persistent indexer and update the
+    -- opaque chain-follower phase count.
     , pruneRollbacks :: Int -> IO Int
     -- ^ Keep at most @maxKeep@ rollback-log entries
     -- (the most-recent ones); drop the oldest. Returns
@@ -230,6 +308,14 @@ data IndexerHandle = IndexerHandle
     -- thinning keeps the candidate list log-sized in
     -- @k@ instead of linear: dense near the tip, sparse
     -- deep in the past.
+    , getRollbackHistory ::
+        IO [(SlotNo, RollbackPoint [UtxoOp] BlockHash)]
+    -- ^ Read the raw rollback-log history oldest-to-newest.
+    -- Restoration-phase sentinel rows have
+    -- @rpInverses = []@ and @rpMeta = Nothing@; following
+    -- rows carry one inverse-operation batch and block hash
+    -- metadata. Primarily intended for diagnostics and
+    -- focused tests.
     }
 
 {- | Open an in-memory indexer, run the action with the
@@ -376,6 +462,16 @@ mkHandle
                 atomically $ do
                     modifyTVar' countVar (subtract deleted)
                     pruneObservedAfter observedVar slot
+            , newFollowerState =
+                newIndexerFollowerState
+                    runTransaction
+                    waitersVar
+                    observedVar
+                    countVar
+            , processFollowerBlock =
+                processIndexerFollowerBlock
+            , rollbackFollowerState =
+                rollbackIndexerFollowerState
             , pruneRollbacks = \maxKeep -> do
                 count <- readTVarIO countVar
                 deleted <-
@@ -403,6 +499,9 @@ mkHandle
                             ]
                 ref <- newIORef pairs
                 sampleAtFibonacciIntervals (popFront ref)
+            , getRollbackHistory =
+                runTransaction
+                    (Rollbacks.queryHistory RollbackCol)
             }
 
 {- | Internal: outcome of the apply transaction. Private
@@ -414,6 +513,192 @@ data ApplyResult
     = Applied
     | AlreadyApplied
     | Conflict !BlockHash !BlockHash
+
+newIndexerFollowerState ::
+    (forall a. IndexerTx cf op a -> IO a) ->
+    Waiters ->
+    Observed ->
+    TVar Int ->
+    Bool ->
+    IO IndexerFollowerState
+newIndexerFollowerState
+    runTransaction
+    waitersVar
+    observedVar
+    countVar
+    startRestoring = do
+        history <- runTransaction (Rollbacks.queryHistory RollbackCol)
+        count <- readTVarIO countVar
+        let hasFollowingRows =
+                any (isJust . rpMeta . snd) history
+            restoring = indexerRestoring
+            phase
+                | startRestoring && not hasFollowingRows =
+                    Runner.InRestoration restoring
+                | otherwise =
+                    Runner.InFollowing count indexerFollowing
+        pure
+            IndexerFollowerState
+                { ifsRunTransaction = runTransaction
+                , ifsWaiters = waitersVar
+                , ifsObserved = observedVar
+                , ifsCount = countVar
+                , ifsPhase = phase
+                }
+
+processIndexerFollowerBlock ::
+    IndexerFollowerState ->
+    Int ->
+    Bool ->
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    IO (IndexerFollowerState, Bool)
+processIndexerFollowerBlock
+    IndexerFollowerState
+        { ifsRunTransaction = runTransaction
+        , ifsWaiters = waitersVar
+        , ifsObserved = observedVar
+        , ifsCount = countVar
+        , ifsPhase = phase
+        }
+    securityParam
+    withinStabilityWindow
+    slot
+    bh
+    ops = do
+        phase' <-
+            Runner.processBlock
+                nullTracer
+                withinStabilityWindow
+                runTransaction
+                RollbackCol
+                securityParam
+                slot
+                (IndexerBlock slot bh ops)
+                phase
+        atomically $
+            syncRunnerCount countVar phase phase'
+        when (blockWasFollowed phase withinStabilityWindow) $
+            atomically $
+                fireWaiters
+                    waitersVar
+                    observedVar
+                    slot
+                    bh
+                    ops
+        pure
+            ( IndexerFollowerState
+                { ifsRunTransaction = runTransaction
+                , ifsWaiters = waitersVar
+                , ifsObserved = observedVar
+                , ifsCount = countVar
+                , ifsPhase = phase'
+                }
+            , True
+            )
+
+rollbackIndexerFollowerState ::
+    IndexerFollowerState ->
+    SlotNo ->
+    IO IndexerFollowerState
+rollbackIndexerFollowerState
+    IndexerFollowerState
+        { ifsRunTransaction = runTransaction
+        , ifsWaiters = waitersVar
+        , ifsObserved = observedVar
+        , ifsCount = countVar
+        , ifsPhase = phase
+        }
+    slot = do
+        deleted <- runTransaction (rollbackToSlot slot)
+        let phase' = reducePhaseCount deleted phase
+        atomically $ do
+            modifyTVar' countVar (subtract deleted)
+            pruneObservedAfter observedVar slot
+        pure
+            IndexerFollowerState
+                { ifsRunTransaction = runTransaction
+                , ifsWaiters = waitersVar
+                , ifsObserved = observedVar
+                , ifsCount = countVar
+                , ifsPhase = phase'
+                }
+
+blockWasFollowed ::
+    IndexerRunnerPhase cf op ->
+    Bool ->
+    Bool
+blockWasFollowed (Runner.InFollowing _ _) _ = True
+blockWasFollowed (Runner.InRestoration _) withinStabilityWindow =
+    withinStabilityWindow
+
+syncRunnerCount ::
+    TVar Int ->
+    IndexerRunnerPhase cf op ->
+    IndexerRunnerPhase cf op ->
+    STM ()
+syncRunnerCount countVar oldPhase newPhase =
+    case newPhase of
+        Runner.InRestoration _ ->
+            case oldPhase of
+                Runner.InRestoration _ ->
+                    modifyTVar' countVar (+ 1)
+                Runner.InFollowing _ _ ->
+                    writeTVar countVar 0
+        Runner.InFollowing n _ ->
+            writeTVar countVar n
+
+reducePhaseCount ::
+    Int ->
+    IndexerRunnerPhase cf op ->
+    IndexerRunnerPhase cf op
+reducePhaseCount deleted = \case
+    Runner.InRestoration restoring ->
+        Runner.InRestoration restoring
+    Runner.InFollowing n following ->
+        Runner.InFollowing (max 0 (n - deleted)) following
+
+indexerRestoring ::
+    Restoring IO (IndexerTx cf op) IndexerBlock [UtxoOp] BlockHash
+indexerRestoring = restoring
+  where
+    restoring =
+        Restoring
+            { restore = \(IndexerBlock slot bh ops) -> do
+                applyOpsOnly slot bh ops
+                pure restoring
+            , toFollowing = pure indexerFollowing
+            }
+
+indexerFollowing ::
+    Following IO (IndexerTx cf op) IndexerBlock [UtxoOp] BlockHash
+indexerFollowing = following
+  where
+    following =
+        Following
+            { follow = followBlock
+            , toRestoring = pure indexerRestoring
+            , applyInverse =
+                traverse_
+                    (applyOne (SlotNo 0) (BlockHash mempty))
+            }
+    followBlock (IndexerBlock slot bh ops) = do
+        inverses <- traverse step ops
+        pure (reverse inverses, Just bh, following)
+      where
+        step op = do
+            inv <- inverseOf op
+            applyOpsOnly slot bh [op]
+            pure inv
+
+applyOpsOnly ::
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    Transaction IO cf Cols op ()
+applyOpsOnly slot bh =
+    traverse_ (applyOne slot bh)
 
 {- | Within one transaction: decide whether @slot@ has
 already been applied.
@@ -481,12 +766,11 @@ applyAndLog slot bh ops = do
                         | otherwise ->
                             pure (Conflict existingBh bh)
                     Just RollbackPoint{rpMeta = Nothing} ->
-                        -- Indexer always records rpMeta = Just bh;
-                        -- a Nothing here is a corruption / schema
-                        -- drift signal, not a normal state.
-                        error
-                            "applyAndLog: RollbackPoint with rpMeta \
-                            \= Nothing — schema drift"
+                        -- Restoration sentinels carry no block
+                        -- hash. The slot is at-or-below the
+                        -- rollback-log tip, so treat it as a
+                        -- skipped/already-processed block.
+                        pure AlreadyApplied
   where
     applyFresh = do
         inverses <- traverse step ops
@@ -494,13 +778,13 @@ applyAndLog slot bh ops = do
             RollbackCol
             slot
             RollbackPoint
-                { rpInverses = reverse inverses
+                { rpInverses = [reverse inverses]
                 , rpMeta = Just bh
                 }
         pure Applied
     step op = do
         inv <- inverseOf op
-        applyOne slot bh op
+        applyOpsOnly slot bh [op]
         pure inv
 
 {- | After @applyAndLog@ commits, walk the ops and:
@@ -657,12 +941,18 @@ rollbackToSlot target = do
     -- after a rollback returns the rollback slot for restored
     -- UTxOs. The TxOut is still correct, which is what
     -- consumers actually care about.
-    undoSlot (slot, bh, invs) = do
-        traverse_ (applyOne slot bh) invs
+    undoSlot (slot, Just bh, invBatches) = do
+        traverse_ (traverse_ (applyOne slot bh)) invBatches
         delete RollbackCol slot
+    undoSlot (slot, Nothing, []) =
+        delete RollbackCol slot
+    undoSlot (_slot, Nothing, _ : _) =
+        error
+            "rollbackToSlot: sentinel RollbackPoint carries \
+            \inverse operations — schema drift"
 
 {- | Cursor program: from 'lastEntry' walk backwards,
-collecting @(slot, blockHash, invs)@ triples while
+collecting @(slot, metadata, invs)@ triples while
 @slot > target@. Returns them in descending-slot order.
 -}
 collectGreaterThan ::
@@ -670,23 +960,16 @@ collectGreaterThan ::
     SlotNo ->
     Cursor
         m
-        (KV SlotNo (RollbackPoint UtxoOp BlockHash))
-        [(SlotNo, BlockHash, [UtxoOp])]
+        (KV SlotNo (RollbackPoint [UtxoOp] BlockHash))
+        [(SlotNo, Maybe BlockHash, [[UtxoOp]])]
 collectGreaterThan target =
     lastEntry >>= go []
   where
     go acc Nothing = pure (reverse acc)
     go acc (Just Entry{entryKey = slot, entryValue = rp})
         | slot > target =
-            let bh = case rpMeta rp of
-                    Just b -> b
-                    Nothing ->
-                        error
-                            "collectGreaterThan: \
-                            \RollbackPoint with rpMeta \
-                            \= Nothing — schema drift"
-                invs = rpInverses rp
-             in prevEntry >>= go ((slot, bh, invs) : acc)
+            let invs = rpInverses rp
+             in prevEntry >>= go ((slot, rpMeta rp, invs) : acc)
         | otherwise = pure (reverse acc)
 
 -- | Inverse of a single op against current state.

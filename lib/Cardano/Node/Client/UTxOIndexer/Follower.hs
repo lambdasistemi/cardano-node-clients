@@ -91,6 +91,7 @@ import Cardano.Node.Client.UTxOIndexer.BlockExtract (
     extractBlock,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    IndexerFollowerState,
     IndexerHandle (..),
  )
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (
@@ -118,7 +119,7 @@ import Control.Concurrent.STM (
     writeTVar,
  )
 import Control.Exception (SomeException)
-import Control.Monad (void, when)
+import Control.Monad (void)
 import Control.Tracer (Tracer)
 import Data.ByteString.Short qualified as SBS
 import Data.Set (Set)
@@ -576,7 +577,11 @@ mkIntersector bootMode cfg readinessVar idx = self
                 -- retained point intersected because of
                 -- an offline rollback.
                 rollbackTo idx (slotOfPoint point)
-                pure (mkFollower cfg readinessVar idx)
+                followerState <-
+                    newFollowerState
+                        idx
+                        True
+                pure (mkFollower cfg readinessVar idx followerState)
             , intersectNotFound = case bootMode of
                 ColdBoot ->
                     pure
@@ -617,10 +622,11 @@ mkFollower ::
     ChainSyncConfig ->
     TVar Readiness ->
     IndexerHandle ->
+    IndexerFollowerState ->
     Follower HeaderPoint Network.SlotNo Fetched
-mkFollower cfg readinessVar idx = self
+mkFollower cfg readinessVar idx = go
   where
-    self =
+    go followerState =
         Follower
             { rollForward = \fetched tip -> do
                 let (slot, rawOps) =
@@ -634,22 +640,75 @@ mkFollower cfg readinessVar idx = self
                             (fetchedPoint fetched)
                     isEBB =
                         blockToIsEBB (fetchedBlock fetched)
-                applied <- applyBlockOps idx isEBB slot bh ops
-                when applied $
-                    void $
-                        pruneRollbacks
-                            idx
+                    withinWindow =
+                        withinStabilityWindow
                             (csSecurityParamK cfg)
+                            slot
+                            tip
+                (nextFollowerState, _processed) <-
+                    applyBlockOpsWithPhase
+                        cfg
+                        idx
+                        followerState
+                        isEBB
+                        withinWindow
+                        slot
+                        bh
+                        ops
                 updateReadiness readinessVar slot tip
-                pure self
+                pure (go nextFollowerState)
             , rollBackward = \point -> do
                 let slot = case Network.pointSlot point of
                         Network.Point.Origin -> SlotNo 0
                         Network.Point.At s ->
                             SlotNo (Network.unSlotNo s)
-                rollbackTo idx slot
-                pure (Progress self)
+                state' <- rollbackFollowerState idx followerState slot
+                pure (Progress (go state'))
             }
+
+withinStabilityWindow :: Int -> SlotNo -> Network.SlotNo -> Bool
+withinStabilityWindow securityParamK (SlotNo blockSlot) tipSlot =
+    tip >= blockSlot
+        && tip - blockSlot <= fromIntegral (max 0 securityParamK)
+  where
+    tip = Network.unSlotNo tipSlot
+
+{- | Apply a block via the indexer's chain-follower
+Runner wrapper according to the block's distance from
+the upstream tip. Far-from-tip blocks stay in restoration;
+blocks inside the stability window transition to following.
+-}
+applyBlockOpsWithPhase ::
+    ChainSyncConfig ->
+    IndexerHandle ->
+    IndexerFollowerState ->
+    IsEBB ->
+    Bool ->
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    IO (IndexerFollowerState, Bool)
+applyBlockOpsWithPhase
+    cfg
+    idx
+    followerState
+    isEBB
+    withinWindow
+    slot
+    bh
+    ops =
+        case isEBB of
+            IsEBB ->
+                pure (followerState, False)
+            IsNotEBB ->
+                processFollowerBlock
+                    idx
+                    followerState
+                    (csSecurityParamK cfg)
+                    withinWindow
+                    slot
+                    bh
+                    ops
 
 {- | Pull the block hash bytes out of an
 'OneEraHash'-shaped 'HeaderPoint'. Origin (no block) maps

@@ -99,11 +99,12 @@ runMainnetSmoke socketPath = do
                         , csBlockTracer = nullTracer
                         , csTipTracer = nullTracer
                         }
+                progressTarget = SlotNo 5_000_000
             withChainSyncFollower tracer cfg idx $ \fh ->
                 waitForMainnetProgress
                     fh
                     eventsVar
-                    (SlotNo 5_000_000)
+                    progressTarget
                     60_000_000
 
 resolveMainnetTipPoint :: FilePath -> IO (SlotNo, BlockHash)

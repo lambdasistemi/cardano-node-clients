@@ -176,6 +176,7 @@ library utxo-indexer-lib
     , bytestring
     , chain-follower
     , containers
+    , contra-tracer
     , data-default-class
     , dependent-map
     , dependent-sum
@@ -237,6 +238,7 @@ test-suite unit-tests
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting
     , cardano-strict-containers
+    , chain-follower
     , containers
     , contra-tracer
     , directory

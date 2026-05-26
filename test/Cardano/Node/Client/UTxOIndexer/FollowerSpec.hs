@@ -54,6 +54,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     TxIn (..),
     TxOut (..),
  )
+import ChainFollower.Rollbacks.Types (RollbackPoint (..))
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (
     atomically,
@@ -78,7 +79,7 @@ import Ouroboros.Network.Block qualified as Network
 import Ouroboros.Network.Magic (NetworkMagic (..))
 import Ouroboros.Network.Point qualified as Network.Point
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 
 spec :: Spec
 spec =
@@ -380,6 +381,91 @@ spec =
                     snapB <- snapshotAt idx addrB
                     snapB `shouldBe` [(txInB, outB)]
 
+        describe "tip-distance phase transition" $ do
+            it
+                "writes sentinel rows while far from tip and\
+                \ full rollback rows once within k"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    let k = 2
+                        tip = Network.SlotNo 10
+                        withinWindow (SlotNo slot) =
+                            Network.unSlotNo tip >= slot
+                                && Network.unSlotNo tip - slot
+                                    <= fromIntegral k
+                        step slot bh ops state = do
+                            (state', _processed) <-
+                                processFollowerBlock
+                                    idx
+                                    state
+                                    k
+                                    (withinWindow slot)
+                                    slot
+                                    bh
+                                    ops
+                            pure state'
+
+                    state0 <- newFollowerState idx True
+                    state1 <-
+                        step
+                            (SlotNo 1)
+                            blk1
+                            [UtxoCreate txInA addrA outA]
+                            state0
+                    state2 <-
+                        step
+                            (SlotNo 2)
+                            blk2
+                            [UtxoCreate txInB addrB outB]
+                            state1
+                    restorationHistory <- getRollbackHistory idx
+                    fmap (rpInverses . snd) restorationHistory
+                        `shouldBe` [[], []]
+                    fmap (rpMeta . snd) restorationHistory
+                        `shouldBe` [Nothing, Nothing]
+                    snapshotAt idx addrA
+                        `shouldReturn` [(txInA, outA)]
+                    snapshotAt idx addrB
+                        `shouldReturn` [(txInB, outB)]
+
+                    state3 <-
+                        step
+                            (SlotNo 8)
+                            blk3
+                            [UtxoCreate txInC addrC outC]
+                            state2
+                    _state4 <-
+                        step
+                            (SlotNo 9)
+                            blk4
+                            [UtxoSpend txInC]
+                            state3
+
+                    history <- getRollbackHistory idx
+                    fmap (rpInverses . snd) history
+                        `shouldBe` [
+                                       [ [UtxoSpend txInC]
+                                       ]
+                                   ,
+                                       [
+                                           [ UtxoCreate
+                                                txInC
+                                                addrC
+                                                outC
+                                           ]
+                                       ]
+                                   ]
+                    fmap (rpMeta . snd) history
+                        `shouldBe` [ Just blk3
+                                   , Just blk4
+                                   ]
+                    snapshotAt idx addrA
+                        `shouldReturn` [(txInA, outA)]
+                    snapshotAt idx addrB
+                        `shouldReturn` [(txInB, outB)]
+                    snapshotAt idx addrC
+                        `shouldReturn` []
+
 -- ---------------------------------------------------------------------------
 -- Helpers + interest-set test fixtures
 
@@ -434,8 +520,10 @@ outA = TxOut "tag-A"
 outB = TxOut "tag-B"
 outC = TxOut "tag-C"
 
--- Two distinct block hashes for the two apply-block slots
--- used across the filter scenarios.
-blk1, blk2 :: BlockHash
+-- Distinct block hashes for the apply-block slots used
+-- across the filter and phase scenarios.
+blk1, blk2, blk3, blk4 :: BlockHash
 blk1 = BlockHash (BS.replicate 32 0xF1)
 blk2 = BlockHash (BS.replicate 32 0xF2)
+blk3 = BlockHash (BS.replicate 32 0xF3)
+blk4 = BlockHash (BS.replicate 32 0xF4)
