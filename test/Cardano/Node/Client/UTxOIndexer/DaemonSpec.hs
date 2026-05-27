@@ -19,6 +19,9 @@ field. This test asserts the symmetric behavior:
 -}
 module Cardano.Node.Client.UTxOIndexer.DaemonSpec (spec) where
 
+import Cardano.Node.Client.BlockIndexer.Readiness (
+    slotLag,
+ )
 import Cardano.Node.Client.N2C.Probe (defaultProbeConfig)
 import Cardano.Node.Client.N2C.Reconnect (
     DisconnectInfo (..),
@@ -35,66 +38,73 @@ import Data.Text qualified as Text
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 spec :: Spec
-spec = describe "applyUpstreamStatus" $ do
-    it "Disconnected clobbers rsReady to False, preserves slot fields" $ do
-        let rs0 = caughtUp
-            rs1 = applyUpstreamStatus testCfg disconnect rs0
-        rsReady rs1 `shouldBe` False
-        rsTipSlot rs1 `shouldBe` rsTipSlot rs0
-        rsProcessedSlot rs1 `shouldBe` rsProcessedSlot rs0
-        rsSlotsBehind rs1 `shouldBe` rsSlotsBehind rs0
-        rsUpstream rs1 `shouldBe` disconnect
+spec = do
+    describe "slotLag"
+        $ it
+            "clamps lag to zero when processed slot is ahead of tip"
+        $ slotLag unSlotNo (Just (SlotNo 70)) (Just (SlotNo 60))
+            `shouldBe` Just 0
 
-    it "Connected re-derives rsReady=True when slotsBehind is at or under threshold" $ do
-        -- Regression for issue #119 — without the
-        -- re-derive, rsReady stayed at False after the
-        -- disconnect/reconnect cycle until the next
-        -- rollForward.
-        let rs0 = caughtUp{rsReady = False, rsUpstream = disconnect}
-            rs1 = applyUpstreamStatus testCfg UpstreamConnected rs0
-        rsReady rs1 `shouldBe` True
-        rsUpstream rs1 `shouldBe` UpstreamConnected
-        rsTipSlot rs1 `shouldBe` rsTipSlot rs0
-        rsProcessedSlot rs1 `shouldBe` rsProcessedSlot rs0
-        rsSlotsBehind rs1 `shouldBe` rsSlotsBehind rs0
+    describe "applyUpstreamStatus" $ do
+        it "Disconnected clobbers rsReady to False, preserves slot fields" $ do
+            let rs0 = caughtUp
+                rs1 = applyUpstreamStatus testCfg disconnect rs0
+            rsReady rs1 `shouldBe` False
+            rsTipSlot rs1 `shouldBe` rsTipSlot rs0
+            rsProcessedSlot rs1 `shouldBe` rsProcessedSlot rs0
+            rsSlotsBehind rs1 `shouldBe` rsSlotsBehind rs0
+            rsUpstream rs1 `shouldBe` disconnect
 
-    it "Connected leaves rsReady=False when slotsBehind exceeds threshold" $ do
-        let rs0 =
-                caughtUp
-                    { rsReady = False
-                    , rsUpstream = disconnect
-                    , rsSlotsBehind = Just 100
-                    , rsProcessedSlot = Just (SlotNo 60)
-                    , rsTipSlot = Just (SlotNo 160)
-                    }
-            rs1 = applyUpstreamStatus testCfg UpstreamConnected rs0
-        rsReady rs1 `shouldBe` False
-        rsUpstream rs1 `shouldBe` UpstreamConnected
-        rsSlotsBehind rs1 `shouldBe` Just 100
+        it "Connected re-derives rsReady=True when slotsBehind is at or under threshold" $ do
+            -- Regression for issue #119 — without the
+            -- re-derive, rsReady stayed at False after the
+            -- disconnect/reconnect cycle until the next
+            -- rollForward.
+            let rs0 = caughtUp{rsReady = False, rsUpstream = disconnect}
+                rs1 = applyUpstreamStatus testCfg UpstreamConnected rs0
+            rsReady rs1 `shouldBe` True
+            rsUpstream rs1 `shouldBe` UpstreamConnected
+            rsTipSlot rs1 `shouldBe` rsTipSlot rs0
+            rsProcessedSlot rs1 `shouldBe` rsProcessedSlot rs0
+            rsSlotsBehind rs1 `shouldBe` rsSlotsBehind rs0
 
-    it "Connected leaves rsReady=False when slot fields are unset (never rolled forward)" $ do
-        let rs0 =
-                ReadyStatus
-                    { rsReady = False
-                    , rsTipSlot = Nothing
-                    , rsProcessedSlot = Nothing
-                    , rsSlotsBehind = Nothing
-                    , rsUpstream = disconnect
-                    }
-            rs1 = applyUpstreamStatus testCfg UpstreamConnected rs0
-        rsReady rs1 `shouldBe` False
-        rsUpstream rs1 `shouldBe` UpstreamConnected
+        it "Connected leaves rsReady=False when slotsBehind exceeds threshold" $ do
+            let rs0 =
+                    caughtUp
+                        { rsReady = False
+                        , rsUpstream = disconnect
+                        , rsSlotsBehind = Just 100
+                        , rsProcessedSlot = Just (SlotNo 60)
+                        , rsTipSlot = Just (SlotNo 160)
+                        }
+                rs1 = applyUpstreamStatus testCfg UpstreamConnected rs0
+            rsReady rs1 `shouldBe` False
+            rsUpstream rs1 `shouldBe` UpstreamConnected
+            rsSlotsBehind rs1 `shouldBe` Just 100
 
-    it "disconnect → reconnect cycle on a caught-up indexer is idempotent" $ do
-        -- The full sequence the supervisor exhibits during
-        -- a fault: connected → disconnect → connected.
-        let rs0 = caughtUp
-            rs1 = applyUpstreamStatus testCfg disconnect rs0
-            rs2 = applyUpstreamStatus testCfg UpstreamConnected rs1
-        rsReady rs0 `shouldBe` True
-        rsReady rs1 `shouldBe` False
-        rsReady rs2 `shouldBe` True
-        rsTipSlot rs2 `shouldBe` rsTipSlot rs0
+        it "Connected leaves rsReady=False when slot fields are unset (never rolled forward)" $ do
+            let rs0 =
+                    ReadyStatus
+                        { rsReady = False
+                        , rsTipSlot = Nothing
+                        , rsProcessedSlot = Nothing
+                        , rsSlotsBehind = Nothing
+                        , rsUpstream = disconnect
+                        }
+                rs1 = applyUpstreamStatus testCfg UpstreamConnected rs0
+            rsReady rs1 `shouldBe` False
+            rsUpstream rs1 `shouldBe` UpstreamConnected
+
+        it "disconnect → reconnect cycle on a caught-up indexer is idempotent" $ do
+            -- The full sequence the supervisor exhibits during
+            -- a fault: connected → disconnect → connected.
+            let rs0 = caughtUp
+                rs1 = applyUpstreamStatus testCfg disconnect rs0
+                rs2 = applyUpstreamStatus testCfg UpstreamConnected rs1
+            rsReady rs0 `shouldBe` True
+            rsReady rs1 `shouldBe` False
+            rsReady rs2 `shouldBe` True
+            rsTipSlot rs2 `shouldBe` rsTipSlot rs0
 
 -- Test fixtures -----------------------------------------------------
 

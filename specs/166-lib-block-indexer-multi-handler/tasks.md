@@ -74,13 +74,13 @@ are required,
 `test/Cardano/Node/Client/UTxOIndexer/DaemonSpec.hs`,
 `cardano-node-clients.cabal`.
 
-- [ ] T008 Move generic `Readiness` fields and upstream-status update helper
+- [X] T008 Move generic `Readiness` fields and upstream-status update helper
   into `BlockIndexer.Readiness`.
-- [ ] T009 Add/keep a generic lag guard helper that derives ready/not-ready
+- [X] T009 Add/keep a generic lag guard helper that derives ready/not-ready
   from processed slot, tip slot, upstream status, and threshold.
-- [ ] T010 Keep `ReadyStatus` wire encoding and disconnect semantics
+- [X] T010 Keep `ReadyStatus` wire encoding and disconnect semantics
   byte-compatible for the bundled UTxO daemon.
-- [ ] T011 Run readiness/reconnect focused tests plus `./gate.sh`.
+- [X] T011 Run readiness/reconnect focused tests plus `./gate.sh`.
 
 **Commit**: `refactor(block-indexer): share readiness and lag guard`  
 **Trailer**: `Tasks: T008, T009, T010, T011`

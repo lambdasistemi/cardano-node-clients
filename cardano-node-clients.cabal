@@ -87,6 +87,7 @@ library
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-ledger-read
+    , cardano-node-clients:block-indexer
     , cardano-node-clients:utxo-indexer-lib
     , cardano-prelude
     , cardano-slotting
@@ -176,6 +177,7 @@ library block-indexer
     , contra-tracer
     , rocksdb-kv-transactions:kv-transactions
     , stm
+    , time
 
 library utxo-indexer-lib
   import:           warnings
@@ -258,6 +260,7 @@ test-suite unit-tests
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-node-clients
+    , cardano-node-clients:block-indexer
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting
     , cardano-strict-containers
