@@ -125,11 +125,11 @@ consumers should depend on the split libraries.
 `README.md` or `app/utxo-indexer/README.md` if public usage notes need a
 small update.
 
-- [ ] T017 Ensure exported modules and Haddock expose `block-indexer` concepts
+- [X] T017 Ensure exported modules and Haddock expose `block-indexer` concepts
   without leaking UTxO internals.
-- [ ] T018 Keep existing UTxO public exports source-compatible or document the
+- [X] T018 Keep existing UTxO public exports source-compatible or document the
   compatibility shim in Haddock.
-- [ ] T019 Run `nix develop --quiet -c cabal build all -O0` and `./gate.sh`.
+- [X] T019 Run `nix develop --quiet -c cabal build all -O0` and `./gate.sh`.
 
 **Commit**: `docs(block-indexer): document handler split`  
 **Trailer**: `Tasks: T017, T018, T019`

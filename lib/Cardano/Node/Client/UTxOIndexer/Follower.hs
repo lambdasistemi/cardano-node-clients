@@ -48,6 +48,15 @@ daemon's NDJSON wire) and 'Maybe' slot fields (to
 distinguish "no rollForward yet" from "rolled forward to
 slot 0"). The proposal was relaxed accordingly per the
 slice brief's "actual codebase wins" guidance.
+
+= Interest-set compatibility
+
+'InterestSet' and 'filterBlockOps' are re-exported from
+"Cardano.Node.Client.UTxOIndexer.Indexer". Existing consumers can
+continue importing them from this follower module. New storage
+filtering is applied by the UTxO 'liveUtxoHandler' at the generic
+block-indexer handler boundary, so the follower passes raw extracted
+operations into 'processFollowerBlock'.
 -}
 module Cardano.Node.Client.UTxOIndexer.Follower (
     -- * Configuration
@@ -55,9 +64,10 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
     coldBootResumePoints,
 
     -- * Interest-set filter
+    -- $interestSet
     InterestSet (..),
-    applyBlockOps,
     filterBlockOps,
+    applyBlockOps,
 
     -- * Readiness state
     Readiness (..),
@@ -222,8 +232,9 @@ instance Show ChainSyncConfig where
             <> ", csTipTracer = <tracer>"
             <> " }"
 
-{- | Address filter applied to each @[UtxoOp]@ batch
-between 'extractBlock' and 'applyAtSlot'.
+{- $interestSet
+Address filter applied to each @[UtxoOp]@ batch by the
+UTxO storage handler.
 
 = Semantics
 
@@ -248,10 +259,9 @@ running the follower with 'IndexAll'. Disk grows as
 
 Out of scope: dynamic mutation of the set after
 'withChainSyncFollower' returns the 'FollowerHandle'
-(the value is captured by reference at apply time but
-not exposed for STM updates). A future ticket can lift
-the field into an STM-mutable value if multi-tenant
-onboarding requires it.
+(the value is captured when the follower state is created).
+A future ticket can lift the field into an STM-mutable value
+if multi-tenant onboarding requires it.
 -}
 
 {- | Apply a fetched block's extracted UTxO operations,

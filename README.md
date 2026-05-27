@@ -9,6 +9,8 @@ Channel-driven Haskell clients for Cardano node Ouroboros mini-protocols (N2C + 
 - **Provider** -- query UTxOs and protocol parameters
 - **Submitter** -- submit signed transactions
 - **N2C** -- LocalStateQuery + LocalTxSubmission over Unix socket
+- **block-indexer** -- generic chain-follower rollback/readiness
+  helpers for building indexers without depending on UTxO internals
 - **UTxOIndexer** -- address-keyed UTxO indexer fed by a chain-follower,
   exposing NDJSON snapshot/await over a Unix socket
 
@@ -24,6 +26,17 @@ Transaction building, balancing, blueprint-aware diffing, and the
   with full-jitter exponential backoff via `Control.Retry`, gated by
   an LSQ tip probe (issue
   [#97](https://github.com/lambdasistemi/cardano-node-clients/issues/97)).
+
+## Library Components
+
+- `cardano-node-clients` contains the node-client APIs and bundled
+  UTxO indexer follower/daemon surface.
+- `cardano-node-clients:block-indexer` contains only generic
+  rollback-log, handler-composition, and readiness helpers. It does
+  not depend on UTxO columns, `InterestSet`, or `UtxoOp`.
+- `cardano-node-clients:utxo-indexer-lib` contains the concrete UTxO
+  storage columns, `liveUtxoHandler`, and the source-compatible
+  `InterestSet` / `filterBlockOps` exports re-exported by the follower.
 
 ## Testing
 
