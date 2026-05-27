@@ -47,13 +47,13 @@ behavior.
 `cardano-node-clients.cabal`,
 existing focused unit tests if imports need updates.
 
-- [ ] T004 Move the `Runner.processBlock` phase wrapper and rollback-log
+- [X] T004 Move the `Runner.processBlock` phase wrapper and rollback-log
   transaction shell into `BlockIndexer.Engine`.
-- [ ] T005 Keep `UTxOIndexer.Indexer` query/await/storage behavior compatible
+- [X] T005 Keep `UTxOIndexer.Indexer` query/await/storage behavior compatible
   through a single UTxO handler path.
-- [ ] T006 Preserve restoration sentinels, following rows, rollback pruning,
+- [X] T006 Preserve restoration sentinels, following rows, rollback pruning,
   EBB skipping, and replay-from-Origin behavior under existing tests.
-- [ ] T007 Run focused unit tests for indexer/follower/persistence plus
+- [X] T007 Run focused unit tests for indexer/follower/persistence plus
   `./gate.sh`.
 
 **Commit**: `refactor(block-indexer): move single-handler engine core`  

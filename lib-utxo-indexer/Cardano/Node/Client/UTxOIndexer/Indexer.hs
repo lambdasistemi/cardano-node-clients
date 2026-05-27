@@ -1,5 +1,4 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 
 {- |
@@ -66,6 +65,7 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     AwaitObservation (..),
 ) where
 
+import Cardano.Node.Client.BlockIndexer.Engine qualified as Engine
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols (..),
     addressIndexCodecs,
@@ -109,7 +109,6 @@ import Control.Concurrent.STM (
  )
 import Control.Exception (Exception, throwIO)
 import Control.Monad (when)
-import Control.Tracer (nullTracer)
 import Data.ByteString qualified as BS
 import Data.Default.Class (def)
 import Data.Dependent.Map (DMap)
@@ -127,10 +126,7 @@ import Data.Maybe (isJust)
 import Database.KV.Cursor (
     Cursor,
     Entry (..),
-    firstEntry,
-    lastEntry,
     nextEntry,
-    prevEntry,
     seekKey,
  )
 import Database.KV.Database (Codecs, KV, mkColumns)
@@ -187,19 +183,9 @@ data AwaitObservation = AwaitObservation
     deriving stock (Eq, Show)
 
 type IndexerTx cf op =
-    Transaction IO cf Cols op
+    Engine.EngineTx IO cf Cols op
 
 data IndexerBlock = IndexerBlock !SlotNo !BlockHash ![UtxoOp]
-
-type IndexerRunnerPhase cf op =
-    Runner.Phase
-        IO
-        cf
-        Cols
-        op
-        IndexerBlock
-        [UtxoOp]
-        BlockHash
 
 {- | Opaque chain-follower phase state for the UTxO
 indexer. It packages the concrete @kv-transactions@
@@ -210,14 +196,17 @@ internals to downstream consumers.
 -}
 data IndexerFollowerState where
     IndexerFollowerState ::
-        { ifsRunTransaction ::
-            forall a.
-            IndexerTx cf op a ->
-            IO a
+        { ifsEngine ::
+            !( Engine.EngineState
+                cf
+                Cols
+                op
+                IndexerBlock
+                [UtxoOp]
+                BlockHash
+             )
         , ifsWaiters :: !Waiters
         , ifsObserved :: !Observed
-        , ifsCount :: !(TVar Int)
-        , ifsPhase :: !(IndexerRunnerPhase cf op)
         } ->
         IndexerFollowerState
 
@@ -402,11 +391,7 @@ state.
 countRollbackEntries ::
     Transaction IO cf Cols op Int
 countRollbackEntries =
-    iterating RollbackCol $
-        firstEntry >>= go 0
-  where
-    go !n Nothing = pure n
-    go !n (Just _) = nextEntry >>= go (n + 1)
+    Engine.countRollbackEntries RollbackCol
 
 -- Internal -------------------------------------------------------
 
@@ -440,7 +425,7 @@ mkHandle
             { applyAtSlot = \slot bh ops -> do
                 outcome <- runTransaction (applyAndLog slot bh ops)
                 case outcome of
-                    Applied ->
+                    Engine.ApplyLogApplied ->
                         atomically $ do
                             modifyTVar' countVar (+ 1)
                             fireWaiters
@@ -449,8 +434,8 @@ mkHandle
                                 slot
                                 bh
                                 ops
-                    AlreadyApplied -> pure ()
-                    Conflict existing _attempted ->
+                    Engine.ApplyLogAlreadyApplied -> pure ()
+                    Engine.ApplyLogConflict existing _attempted ->
                         throwIO
                             ApplyConflict
                                 { acSlot = slot
@@ -458,7 +443,12 @@ mkHandle
                                 , acAttemptedBlockHash = bh
                                 }
             , rollbackTo = \slot -> do
-                deleted <- runTransaction (rollbackToSlot slot)
+                deleted <-
+                    runTransaction $
+                        Engine.rollbackLogAfter
+                            RollbackCol
+                            applyRollbackEntry
+                            slot
                 atomically $ do
                     modifyTVar' countVar (subtract deleted)
                     pruneObservedAfter observedVar slot
@@ -504,16 +494,6 @@ mkHandle
                     (Rollbacks.queryHistory RollbackCol)
             }
 
-{- | Internal: outcome of the apply transaction. Private
-to this module — the public API surfaces 'Applied' /
-'AlreadyApplied' as an @IO ()@ (with conflict throwing
-'ApplyConflict').
--}
-data ApplyResult
-    = Applied
-    | AlreadyApplied
-    | Conflict !BlockHash !BlockHash
-
 newIndexerFollowerState ::
     (forall a. IndexerTx cf op a -> IO a) ->
     Waiters ->
@@ -539,11 +519,15 @@ newIndexerFollowerState
                     Runner.InFollowing count indexerFollowing
         pure
             IndexerFollowerState
-                { ifsRunTransaction = runTransaction
+                { ifsEngine =
+                    Engine.EngineState
+                        { Engine.engineRunTransaction =
+                            runTransaction
+                        , Engine.engineCount = countVar
+                        , Engine.enginePhase = phase
+                        }
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
-                , ifsCount = countVar
-                , ifsPhase = phase
                 }
 
 processIndexerFollowerBlock ::
@@ -556,30 +540,25 @@ processIndexerFollowerBlock ::
     IO (IndexerFollowerState, Bool)
 processIndexerFollowerBlock
     IndexerFollowerState
-        { ifsRunTransaction = runTransaction
+        { ifsEngine = engine
         , ifsWaiters = waitersVar
         , ifsObserved = observedVar
-        , ifsCount = countVar
-        , ifsPhase = phase
         }
     securityParam
     withinStabilityWindow
     slot
     bh
     ops = do
-        phase' <-
-            Runner.processBlock
-                nullTracer
-                withinStabilityWindow
-                runTransaction
+        let phase = Engine.enginePhase engine
+        engine' <-
+            Engine.processEngineBlock
                 RollbackCol
                 securityParam
+                withinStabilityWindow
                 slot
                 (IndexerBlock slot bh ops)
-                phase
-        atomically $
-            syncRunnerCount countVar phase phase'
-        when (blockWasFollowed phase withinStabilityWindow) $
+                engine
+        when (Engine.blockWasFollowed phase withinStabilityWindow) $
             atomically $
                 fireWaiters
                     waitersVar
@@ -589,11 +568,9 @@ processIndexerFollowerBlock
                     ops
         pure
             ( IndexerFollowerState
-                { ifsRunTransaction = runTransaction
+                { ifsEngine = engine'
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
-                , ifsCount = countVar
-                , ifsPhase = phase'
                 }
             , True
             )
@@ -604,60 +581,25 @@ rollbackIndexerFollowerState ::
     IO IndexerFollowerState
 rollbackIndexerFollowerState
     IndexerFollowerState
-        { ifsRunTransaction = runTransaction
+        { ifsEngine = engine
         , ifsWaiters = waitersVar
         , ifsObserved = observedVar
-        , ifsCount = countVar
-        , ifsPhase = phase
         }
     slot = do
-        deleted <- runTransaction (rollbackToSlot slot)
-        let phase' = reducePhaseCount deleted phase
-        atomically $ do
-            modifyTVar' countVar (subtract deleted)
+        (engine', _deleted) <-
+            Engine.rollbackEngineState
+                RollbackCol
+                applyRollbackEntry
+                slot
+                engine
+        atomically $
             pruneObservedAfter observedVar slot
         pure
             IndexerFollowerState
-                { ifsRunTransaction = runTransaction
+                { ifsEngine = engine'
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
-                , ifsCount = countVar
-                , ifsPhase = phase'
                 }
-
-blockWasFollowed ::
-    IndexerRunnerPhase cf op ->
-    Bool ->
-    Bool
-blockWasFollowed (Runner.InFollowing _ _) _ = True
-blockWasFollowed (Runner.InRestoration _) withinStabilityWindow =
-    withinStabilityWindow
-
-syncRunnerCount ::
-    TVar Int ->
-    IndexerRunnerPhase cf op ->
-    IndexerRunnerPhase cf op ->
-    STM ()
-syncRunnerCount countVar oldPhase newPhase =
-    case newPhase of
-        Runner.InRestoration _ ->
-            case oldPhase of
-                Runner.InRestoration _ ->
-                    modifyTVar' countVar (+ 1)
-                Runner.InFollowing _ _ ->
-                    writeTVar countVar 0
-        Runner.InFollowing n _ ->
-            writeTVar countVar n
-
-reducePhaseCount ::
-    Int ->
-    IndexerRunnerPhase cf op ->
-    IndexerRunnerPhase cf op
-reducePhaseCount deleted = \case
-    Runner.InRestoration restoring ->
-        Runner.InRestoration restoring
-    Runner.InFollowing n following ->
-        Runner.InFollowing (max 0 (n - deleted)) following
 
 indexerRestoring ::
     Restoring IO (IndexerTx cf op) IndexerBlock [UtxoOp] BlockHash
@@ -746,42 +688,16 @@ applyAndLog ::
     SlotNo ->
     BlockHash ->
     [UtxoOp] ->
-    Transaction IO cf Cols op ApplyResult
-applyAndLog slot bh ops = do
-    mTipSlot <- Rollbacks.queryTip RollbackCol
-    case mTipSlot of
-        Nothing -> applyFresh
-        Just tipSlot
-            | slot > tipSlot -> applyFresh
-            | otherwise -> do
-                existing <- query RollbackCol slot
-                case existing of
-                    Nothing ->
-                        -- Pruned: we can't compare hashes,
-                        -- but the slot is below the tip so
-                        -- it has been applied.
-                        pure AlreadyApplied
-                    Just RollbackPoint{rpMeta = Just existingBh}
-                        | existingBh == bh -> pure AlreadyApplied
-                        | otherwise ->
-                            pure (Conflict existingBh bh)
-                    Just RollbackPoint{rpMeta = Nothing} ->
-                        -- Restoration sentinels carry no block
-                        -- hash. The slot is at-or-below the
-                        -- rollback-log tip, so treat it as a
-                        -- skipped/already-processed block.
-                        pure AlreadyApplied
+    Transaction IO cf Cols op (Engine.ApplyLogResult BlockHash)
+applyAndLog slot bh ops =
+    Engine.applyWithRollbackLog
+        RollbackCol
+        slot
+        bh
+        applyFresh
   where
-    applyFresh = do
-        inverses <- traverse step ops
-        Rollbacks.storeRollbackPoint
-            RollbackCol
-            slot
-            RollbackPoint
-                { rpInverses = [reverse inverses]
-                , rpMeta = Just bh
-                }
-        pure Applied
+    applyFresh =
+        reverse <$> traverse step ops
     step op = do
         inv <- inverseOf op
         applyOpsOnly slot bh [op]
@@ -912,65 +828,32 @@ lookupObservation txIn = do
                                         , aoTxOut = txOut
                                         }
 
-{- | Roll back every slot strictly greater than
-@target@. Walks 'RollbackCol' from the highest slot
-down via 'lastEntry'/'prevEntry', collecting entries
-@> target@, then in a second pass replays each
-inverse-op list and deletes the corresponding rollback
-entry — both inside the same transaction.
+{- | Apply a rollback-log entry collected by the generic
+engine rollback walk.
 
-Returns the number of rollback-log entries removed so
-the in-memory entry counter stays in sync.
+'applyOne' on rollback uses the slot+hash of the
+rolled-back entry. For an inverse 'UtxoCreate' (i.e.
+restoring a previously-spent UTxO) this means
+'ObservationCol' will record the rollback slot as the
+observation slot, not the UTxO's original creation slot.
+That is a known imprecision: 'awaitTxIn' after a rollback
+returns the rollback slot for restored UTxOs. The TxOut
+is still correct, which is what consumers actually care
+about.
 -}
-rollbackToSlot ::
+applyRollbackEntry ::
     SlotNo ->
-    Transaction IO cf Cols op Int
-rollbackToSlot target = do
-    entries <-
-        iterating RollbackCol $
-            collectGreaterThan target
-    traverse_ undoSlot entries
-    pure (length entries)
-  where
-    -- 'applyOne' on rollback uses the slot+hash of the
-    -- rolled-back entry. For an inverse 'UtxoCreate'
-    -- (i.e. restoring a previously-spent UTxO) this means
-    -- 'ObservationCol' will record the rollback slot as
-    -- the observation slot, not the UTxO's original
-    -- creation slot. That is a known imprecision: 'awaitTxIn'
-    -- after a rollback returns the rollback slot for restored
-    -- UTxOs. The TxOut is still correct, which is what
-    -- consumers actually care about.
-    undoSlot (slot, Just bh, invBatches) = do
-        traverse_ (traverse_ (applyOne slot bh)) invBatches
-        delete RollbackCol slot
-    undoSlot (slot, Nothing, []) =
-        delete RollbackCol slot
-    undoSlot (_slot, Nothing, _ : _) =
-        error
-            "rollbackToSlot: sentinel RollbackPoint carries \
-            \inverse operations — schema drift"
-
-{- | Cursor program: from 'lastEntry' walk backwards,
-collecting @(slot, metadata, invs)@ triples while
-@slot > target@. Returns them in descending-slot order.
--}
-collectGreaterThan ::
-    (Monad m) =>
-    SlotNo ->
-    Cursor
-        m
-        (KV SlotNo (RollbackPoint [UtxoOp] BlockHash))
-        [(SlotNo, Maybe BlockHash, [[UtxoOp]])]
-collectGreaterThan target =
-    lastEntry >>= go []
-  where
-    go acc Nothing = pure (reverse acc)
-    go acc (Just Entry{entryKey = slot, entryValue = rp})
-        | slot > target =
-            let invs = rpInverses rp
-             in prevEntry >>= go ((slot, rpMeta rp, invs) : acc)
-        | otherwise = pure (reverse acc)
+    Maybe BlockHash ->
+    [[UtxoOp]] ->
+    Transaction IO cf Cols op ()
+applyRollbackEntry slot (Just bh) invBatches =
+    traverse_ (traverse_ (applyOne slot bh)) invBatches
+applyRollbackEntry _slot Nothing [] =
+    pure ()
+applyRollbackEntry _slot Nothing (_ : _) =
+    error
+        "applyRollbackEntry: sentinel RollbackPoint carries \
+        \inverse operations — schema drift"
 
 -- | Inverse of a single op against current state.
 inverseOf ::
