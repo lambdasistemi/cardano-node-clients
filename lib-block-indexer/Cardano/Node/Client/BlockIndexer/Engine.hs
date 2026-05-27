@@ -1,16 +1,46 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 
--- | Engine entry points for the generic block indexer.
+{- |
+Module      : Cardano.Node.Client.BlockIndexer.Engine
+Description : Generic rollback-log engine for block indexers
+License     : Apache-2.0
+
+Engine utilities shared by concrete block indexers.
+
+The engine owns concerns that are independent of any indexed
+domain: rollback-log watermarks, restoration/following phase
+threading, rollback-log pruning counters, and replay/conflict
+classification. It deliberately has no dependency on UTxO columns,
+UTxO operations, address filters, or the Cardano node transport.
+
+Concrete indexers provide:
+
+* a typed rollback column,
+* a transaction runner,
+* a chain-follower phase built from one or more handlers, and
+* domain callbacks for applying rollback entries.
+
+All mutation supplied to 'applyWithRollbackLog' and
+'processEngineBlock' runs in the same @kv-transactions@
+transaction as rollback-point storage.
+-}
 module Cardano.Node.Client.BlockIndexer.Engine (
+    -- * Engine state
     EngineState (..),
     EngineTx,
     EnginePhase,
+
+    -- * Replay classification
     ApplyLogResult (..),
+
+    -- * Applying blocks
     applyWithRollbackLog,
     blockWasFollowed,
-    countRollbackEntries,
     processEngineBlock,
+
+    -- * Rollback log
+    countRollbackEntries,
     rollbackEngineState,
     rollbackLogAfter,
 ) where
@@ -57,21 +87,32 @@ type EnginePhase cf columns op block inverse meta =
         inverse
         meta
 
--- | Generic single-handler engine state.
+{- | Generic engine state.
+
+The @block@, @inverse@, and @meta@ parameters are supplied by the
+concrete indexer. For a multi-handler setup, @inverse@ is typically
+the combined inverse payload produced by the registered handlers.
+-}
 data EngineState cf columns op block inverse meta = EngineState
     { engineRunTransaction ::
         forall a.
         EngineTx IO cf columns op a ->
         IO a
+    -- ^ Runner for one atomic @kv-transactions@ transaction.
     , engineCount :: !(TVar Int)
+    -- ^ In-memory count of retained rollback-log entries.
     , enginePhase :: !(EnginePhase cf columns op block inverse meta)
+    -- ^ Current restoration/following continuation.
     }
 
 -- | Result of an apply attempt against the rollback log watermark.
 data ApplyLogResult meta
-    = ApplyLogApplied
-    | ApplyLogAlreadyApplied
-    | ApplyLogConflict !meta !meta
+    = -- | Fresh block was applied and a rollback point was stored.
+      ApplyLogApplied
+    | -- | Slot is at or below the rollback-log tip and matches known state.
+      ApplyLogAlreadyApplied
+    | -- | Stored metadata and attempted metadata disagree.
+      ApplyLogConflict !meta !meta
 
 {- | Apply a fresh block and store its inverse batch, or
 classify an already-applied/pruned/conflicting slot.

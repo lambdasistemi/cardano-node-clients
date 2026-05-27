@@ -7,14 +7,21 @@ Reusable readiness state for block-indexer consumers.
 
 The record is generic in both slot and upstream-status
 types so this library does not depend on any concrete
-node-client reconnect module or downstream indexer.
+node-client reconnect module or downstream indexer. UTxO
+daemon wire types adapt to this generic shape, but this
+module intentionally does not import the UTxO indexer.
 -}
 module Cardano.Node.Client.BlockIndexer.Readiness (
+    -- * Snapshot
     Readiness (..),
     initialReadiness,
     applyUpstreamToReadiness,
+
+    -- * Lag calculation
     slotLag,
     readinessSlotLag,
+
+    -- * Readiness decisions
     readyFromLag,
     readyWithinLag,
 )

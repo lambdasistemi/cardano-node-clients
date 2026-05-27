@@ -34,6 +34,11 @@ exposes the operations the rest of the daemon needs:
   using a 'Cursor'.
 * 'awaitTxIn' blocks until a given 'TxIn' is observed in
   the index (or the optional timeout fires).
+* 'liveUtxoHandler' exposes the UTxO storage mutation as a
+  generic 'IndexerHandler' for the @block-indexer@
+  sublibrary. The generic package still knows nothing about
+  'Cols', 'InterestSet', or 'UtxoOp'; those remain UTxO
+  indexer concepts.
 
 A 'TVar' tracks the current rollback-log entry count so
 the prune step does not re-scan the column on every
@@ -48,6 +53,13 @@ durable on-disk store. They share all of the apply /
 rollback / prune / snapshot / await machinery —
 'kv-transactions' makes the choice a one-line backend
 swap.
+
+= Compatibility note
+
+'InterestSet' and 'filterBlockOps' are defined here because
+handler-level filtering now belongs to 'liveUtxoHandler'. They
+remain re-exported by "Cardano.Node.Client.UTxOIndexer.Follower"
+so existing consumers can keep their old imports.
 -}
 module Cardano.Node.Client.UTxOIndexer.Indexer (
     -- * Indexer handle
@@ -57,10 +69,12 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     withInMemoryIndexer,
     withRocksDBIndexer,
 
-    -- * Operations
+    -- * UTxO operations and filters
     InterestSet (..),
     UtxoOp (..),
     filterBlockOps,
+
+    -- * Generic block-indexer handler
     liveUtxoHandler,
 
     -- * Replay conflict
@@ -205,13 +219,23 @@ the live UTxO handler mutates storage.
 keeps creates for the configured addresses and always keeps
 spends, so spending a previously-filtered create remains a
 clean no-op.
+
+This type remains re-exported from
+"Cardano.Node.Client.UTxOIndexer.Follower" for source
+compatibility with callers that configured the chain-sync follower
+before the handler split.
 -}
 data InterestSet
     = IndexAll
     | IndexAddressSet !(Set Address)
     deriving stock (Eq, Show)
 
--- | Pure interest-set filtering for a batch of UTxO operations.
+{- | Pure interest-set filtering for a batch of UTxO operations.
+
+Exported for tests and embedders that want to inspect the same
+filtering rule the live handler uses. Existing callers may continue
+to import it from "Cardano.Node.Client.UTxOIndexer.Follower".
+-}
 filterBlockOps :: InterestSet -> [UtxoOp] -> [UtxoOp]
 filterBlockOps IndexAll = id
 filterBlockOps (IndexAddressSet s) = filter (inInterestSet s)
@@ -529,7 +553,15 @@ mkHandle
                     (Rollbacks.queryHistory RollbackCol)
             }
 
--- | Retarget an opaque follower state to a handler interest set.
+{- | Retarget an opaque follower state to a handler interest set.
+
+This is the compatibility shim used by
+"Cardano.Node.Client.UTxOIndexer.Follower". The public
+'newFollowerState' handle field keeps its historical
+@Bool -> IO IndexerFollowerState@ shape and defaults to 'IndexAll';
+the follower applies this helper internally when
+'ChainSyncConfig.csInterestSet' is more selective.
+-}
 withFollowerInterest ::
     InterestSet ->
     IndexerFollowerState ->
@@ -720,7 +752,13 @@ applyOpsOnly ::
 applyOpsOnly slot bh =
     traverse_ (applyOne slot bh)
 
--- | Live UTxO storage handler for the generic block-indexer engine.
+{- | Live UTxO storage handler for the generic block-indexer engine.
+
+The handler owns UTxO-specific mutation: interest-set filtering,
+inverse creation, applying creates/spends, and applying stored
+rollback inverses. The generic block-indexer engine owns only the
+rollback-log transaction boundary and phase bookkeeping.
+-}
 liveUtxoHandler :: InterestSet -> IndexerHandler Cols [UtxoOp]
 liveUtxoHandler interestSet =
     IndexerHandler
