@@ -52,9 +52,11 @@ slice brief's "actual codebase wins" guidance.
 module Cardano.Node.Client.UTxOIndexer.Follower (
     -- * Configuration
     ChainSyncConfig (..),
+    coldBootResumePoints,
 
     -- * Interest-set filter
     InterestSet (..),
+    applyBlockOps,
     filterBlockOps,
 
     -- * Readiness state
@@ -65,7 +67,9 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
     FollowerHandle (..),
 
     -- * Bring-up
+    ChainSyncRunner,
     withChainSyncFollower,
+    withChainSyncFollowerUsing,
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots (..))
@@ -82,10 +86,12 @@ import Cardano.Node.Client.N2C.Reconnect (
     runReconnectLoop,
  )
 import Cardano.Node.Client.N2C.Trace (N2CEvent)
+import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.UTxOIndexer.BlockExtract (
     extractBlock,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    IndexerFollowerState,
     IndexerHandle (..),
  )
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (
@@ -112,13 +118,20 @@ import Control.Concurrent.STM (
     readTVarIO,
     writeTVar,
  )
+import Control.Exception (SomeException)
 import Control.Monad (void)
-import Control.Tracer (Tracer, nullTracer)
+import Control.Tracer (Tracer)
 import Data.ByteString.Short qualified as SBS
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Word (Word64)
+import Ouroboros.Consensus.Block.Abstract (
+    blockToIsEBB,
+ )
+import Ouroboros.Consensus.Block.EBB (
+    IsEBB (..),
+ )
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
     OneEraHash (..),
  )
@@ -142,6 +155,11 @@ data ChainSyncConfig = ChainSyncConfig
     , csByronEpochSlots :: !Word64
     -- ^ Byron @EpochSlots@, used by the chain-sync codec
     -- to decode pre-Shelley blocks.
+    , csStartPoint :: !(Maybe (SlotNo, BlockHash))
+    -- ^ Optional explicit cold-boot intersection point.
+    -- 'Nothing' preserves the historical Origin boot; a
+    -- concrete @(slot, hash)@ lets callers start from a
+    -- known point instead of replaying from genesis.
     , csReadyThresholdSlots :: !Word64
     -- ^ Slot-lag threshold beyond which @ready@ flips to
     -- @False@. Plumbed through to consumers (the follower
@@ -168,8 +186,40 @@ data ChainSyncConfig = ChainSyncConfig
     -- set; 'UtxoSpend' is always processed (a spend on a
     -- previously-filtered create is a clean no-op
     -- because the 'TxInCol' entry never existed).
+    , csBlockTracer :: !(Tracer IO Block)
+    -- ^ Per-roll-forward block tracer supplied to
+    -- 'mkChainSyncN2C'. Use 'nullTracer' to preserve the
+    -- historical quiet behavior.
+    , csTipTracer :: !(Tracer IO Network.SlotNo)
+    -- ^ Per-roll-forward chain-tip slot tracer supplied
+    -- to 'mkChainSyncN2C'. Use 'nullTracer' to preserve
+    -- the historical quiet behavior.
     }
-    deriving stock (Show)
+
+instance Show ChainSyncConfig where
+    show cfg =
+        "ChainSyncConfig"
+            <> " { csRelaySocket = "
+            <> show (csRelaySocket cfg)
+            <> ", csNetworkMagic = "
+            <> show (csNetworkMagic cfg)
+            <> ", csByronEpochSlots = "
+            <> show (csByronEpochSlots cfg)
+            <> ", csStartPoint = "
+            <> show (csStartPoint cfg)
+            <> ", csReadyThresholdSlots = "
+            <> show (csReadyThresholdSlots cfg)
+            <> ", csSecurityParamK = "
+            <> show (csSecurityParamK cfg)
+            <> ", csReconnectPolicy = "
+            <> show (csReconnectPolicy cfg)
+            <> ", csProbeConfig = "
+            <> show (csProbeConfig cfg)
+            <> ", csInterestSet = "
+            <> show (csInterestSet cfg)
+            <> ", csBlockTracer = <tracer>"
+            <> ", csTipTracer = <tracer>"
+            <> " }"
 
 {- | Address filter applied to each @[UtxoOp]@ batch
 between 'extractBlock' and 'applyAtSlot'.
@@ -225,6 +275,30 @@ filterBlockOps (IndexAddressSet s) = filter (inInterestSet s)
     inInterestSet set op = case op of
         UtxoCreate _ addr _ -> addr `Set.member` set
         UtxoSpend _ -> True
+
+{- | Apply a fetched block's extracted UTxO operations,
+unless the consensus layer identifies it as an Epoch
+Boundary Block. EBBs carry no UTxO operations and may
+share their slot with the following regular Byron block,
+so recording them in the rollback log would create a
+same-slot, different-hash conflict on mainnet cold boot.
+
+Returns 'True' only when the block was persisted via
+'applyAtSlot'.
+-}
+applyBlockOps ::
+    IndexerHandle ->
+    IsEBB ->
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    IO Bool
+applyBlockOps idx isEBB slot bh ops =
+    case isEBB of
+        IsEBB -> pure False
+        IsNotEBB -> do
+            applyAtSlot idx slot bh ops
+            pure True
 
 {- | Live readiness snapshot updated by the follower
 thread after every roll-forward and on every reconnect
@@ -283,6 +357,21 @@ data FollowerHandle = FollowerHandle
 -- ---------------------------------------------------------------------------
 -- Bring-up
 
+{- | Transport seam used by 'withChainSyncFollowerUsing'.
+Production code uses 'defaultChainSyncRunner'; tests can
+inject a runner that observes the caller-provided tracers
+without opening a real node socket.
+-}
+type ChainSyncRunner =
+    EpochSlots ->
+    NetworkMagic ->
+    FilePath ->
+    Tracer IO Block ->
+    Tracer IO Network.SlotNo ->
+    Intersector HeaderPoint Network.SlotNo Fetched ->
+    [HeaderPoint] ->
+    IO (Either SomeException ())
+
 {- | Run the chain-sync follower against a caller-owned
 'IndexerHandle' under a reconnect supervisor, and hand
 the resulting 'FollowerHandle' to the action. The follower
@@ -301,32 +390,59 @@ withChainSyncFollower ::
     IndexerHandle ->
     (FollowerHandle -> IO a) ->
     IO a
-withChainSyncFollower tracer cfg idx action = do
+withChainSyncFollower =
+    withChainSyncFollowerCore True defaultChainSyncRunner
+
+{- | Variant of 'withChainSyncFollower' with an injectable
+chain-sync runner. The supplied runner is executed
+directly, without the reconnect supervisor's node-ready
+probe, so unit tests can deterministically verify that
+'csBlockTracer' and 'csTipTracer' are surfaced to the N2C
+chain-sync layer without opening a real node socket.
+-}
+withChainSyncFollowerUsing ::
+    ChainSyncRunner ->
+    -- | Tracer for reconnect-supervisor lifecycle events.
+    Tracer IO N2CEvent ->
+    ChainSyncConfig ->
+    -- | Caller-owned handle the follower writes into.
+    IndexerHandle ->
+    (FollowerHandle -> IO a) ->
+    IO a
+withChainSyncFollowerUsing =
+    withChainSyncFollowerCore False
+
+withChainSyncFollowerCore ::
+    Bool ->
+    ChainSyncRunner ->
+    -- | Tracer for reconnect-supervisor lifecycle events.
+    Tracer IO N2CEvent ->
+    ChainSyncConfig ->
+    -- | Caller-owned handle the follower writes into.
+    IndexerHandle ->
+    (FollowerHandle -> IO a) ->
+    IO a
+withChainSyncFollowerCore supervise chainSyncRunner tracer cfg idx action = do
     now <- getCurrentTime
     readinessVar <- newTVarIO (initialReadiness now)
     let chainSession = do
             bootMode <- detectBootMode idx
             let resumePoints = case bootMode of
-                    ColdBoot ->
-                        [ Network.Point
-                            Network.Point.Origin
-                        ]
+                    ColdBoot -> coldBootResumePoints cfg
                     WarmBoot ps -> fmap toHeaderPoint ps
-            runChainSyncN2C
+            chainSyncRunner
                 (EpochSlots (csByronEpochSlots cfg))
                 (csNetworkMagic cfg)
                 (csRelaySocket cfg)
-                ( mkChainSyncN2C
-                    nullTracer
-                    nullTracer
-                    ( mkIntersector
-                        bootMode
-                        cfg
-                        readinessVar
-                        idx
-                    )
-                    resumePoints
+                (csBlockTracer cfg)
+                (csTipTracer cfg)
+                ( mkIntersector
+                    bootMode
+                    cfg
+                    readinessVar
+                    idx
                 )
+                resumePoints
         setUpstreamStatus newStatus = do
             tNow <- getCurrentTime
             atomically $
@@ -345,12 +461,33 @@ withChainSyncFollower tracer cfg idx action = do
                 setUpstreamStatus
                 getProcessedSlot
                 chainSession
-    withAsync (void chainAction) $ \a ->
+        directChainAction =
+            void chainSession
+        followerAction =
+            if supervise
+                then void chainAction
+                else directChainAction
+    withAsync followerAction $ \a ->
         action
             FollowerHandle
                 { fhReadiness = readTVar readinessVar
                 , fhAsync = a
                 }
+
+defaultChainSyncRunner :: ChainSyncRunner
+defaultChainSyncRunner
+    epochSlots
+    magic
+    sock
+    blockTracer
+    tipTracer
+    intersector
+    points =
+        runChainSyncN2C
+            epochSlots
+            magic
+            sock
+            (mkChainSyncN2C blockTracer tipTracer intersector points)
 
 {- | Initial 'Readiness' value at bring-up: no slots
 applied yet, supervisor-reported state is
@@ -406,6 +543,17 @@ toHeaderPoint (SlotNo s, BlockHash bh) =
             )
         )
 
+{- | Chain-sync resume points for an empty indexer. With
+no configured start point the follower preserves the
+historical Origin cold boot; with a configured point the
+first intersection request names that concrete block.
+-}
+coldBootResumePoints :: ChainSyncConfig -> [HeaderPoint]
+coldBootResumePoints cfg =
+    case csStartPoint cfg of
+        Nothing -> [Network.Point Network.Point.Origin]
+        Just startPoint -> [toHeaderPoint startPoint]
+
 -- ---------------------------------------------------------------------------
 -- Intersector + per-roll Follower
 
@@ -429,12 +577,16 @@ mkIntersector bootMode cfg readinessVar idx = self
                 -- retained point intersected because of
                 -- an offline rollback.
                 rollbackTo idx (slotOfPoint point)
-                pure (mkFollower cfg readinessVar idx)
+                followerState <-
+                    newFollowerState
+                        idx
+                        True
+                pure (mkFollower cfg readinessVar idx followerState)
             , intersectNotFound = case bootMode of
                 ColdBoot ->
                     pure
                         ( self
-                        , [Network.Point Network.Point.Origin]
+                        , coldBootResumePoints cfg
                         )
                 WarmBoot _ ->
                     -- Never origin-replay over a populated
@@ -470,10 +622,11 @@ mkFollower ::
     ChainSyncConfig ->
     TVar Readiness ->
     IndexerHandle ->
+    IndexerFollowerState ->
     Follower HeaderPoint Network.SlotNo Fetched
-mkFollower cfg readinessVar idx = self
+mkFollower cfg readinessVar idx = go
   where
-    self =
+    go followerState =
         Follower
             { rollForward = \fetched tip -> do
                 let (slot, rawOps) =
@@ -485,21 +638,77 @@ mkFollower cfg readinessVar idx = self
                     bh =
                         pointToBlockHash
                             (fetchedPoint fetched)
-                applyAtSlot idx slot bh ops
-                _ <-
-                    pruneRollbacks
+                    isEBB =
+                        blockToIsEBB (fetchedBlock fetched)
+                    withinWindow =
+                        withinStabilityWindow
+                            (csSecurityParamK cfg)
+                            slot
+                            tip
+                (nextFollowerState, _processed) <-
+                    applyBlockOpsWithPhase
+                        cfg
                         idx
-                        (csSecurityParamK cfg)
+                        followerState
+                        isEBB
+                        withinWindow
+                        slot
+                        bh
+                        ops
                 updateReadiness readinessVar slot tip
-                pure self
+                pure (go nextFollowerState)
             , rollBackward = \point -> do
                 let slot = case Network.pointSlot point of
                         Network.Point.Origin -> SlotNo 0
                         Network.Point.At s ->
                             SlotNo (Network.unSlotNo s)
-                rollbackTo idx slot
-                pure (Progress self)
+                state' <- rollbackFollowerState idx followerState slot
+                pure (Progress (go state'))
             }
+
+withinStabilityWindow :: Int -> SlotNo -> Network.SlotNo -> Bool
+withinStabilityWindow securityParamK (SlotNo blockSlot) tipSlot =
+    tip >= blockSlot
+        && tip - blockSlot <= fromIntegral (max 0 securityParamK)
+  where
+    tip = Network.unSlotNo tipSlot
+
+{- | Apply a block via the indexer's chain-follower
+Runner wrapper according to the block's distance from
+the upstream tip. Far-from-tip blocks stay in restoration;
+blocks inside the stability window transition to following.
+-}
+applyBlockOpsWithPhase ::
+    ChainSyncConfig ->
+    IndexerHandle ->
+    IndexerFollowerState ->
+    IsEBB ->
+    Bool ->
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    IO (IndexerFollowerState, Bool)
+applyBlockOpsWithPhase
+    cfg
+    idx
+    followerState
+    isEBB
+    withinWindow
+    slot
+    bh
+    ops =
+        case isEBB of
+            IsEBB ->
+                pure (followerState, False)
+            IsNotEBB ->
+                processFollowerBlock
+                    idx
+                    followerState
+                    (csSecurityParamK cfg)
+                    withinWindow
+                    slot
+                    bh
+                    ops
 
 {- | Pull the block hash bytes out of an
 'OneEraHash'-shaped 'HeaderPoint'. Origin (no block) maps

@@ -19,16 +19,17 @@ Three columns:
   @lenByte || address || txId || ix@ so a cursor seek to
   @lenByte || address@ yields every UTxO at that address
   with its full 'TxOut' inline (no second-stage lookup).
-* 'RollbackCol' :: @KV SlotNo ('RollbackPoint' 'UtxoOp'
+* 'RollbackCol' :: @KV SlotNo ('RollbackPoint' ['UtxoOp']
   'BlockHash')@ — slot-tagged inverse-op log used to
   undo apply-block writes on a chain-sync rollback.
   Keyed by 'SlotNo' (8-byte BE) so cursor ordering
   matches numeric slot ordering. The value uses
   @chain-follower@'s canonical 'RollbackPoint' shape —
-  @rpInverses@ holds the reverse-ordered op list to
-  replay, @rpMeta@ holds the block hash so a startup
-  can read the latest entry to derive the resume
-  @Point@ without a separate tip column.
+  @rpInverses@ holds block-level inverse batches. Normal
+  following rows keep one batch plus the block hash in
+  @rpMeta@ so a startup can derive resume @Point@s;
+  restoration rows are sentinels with @rpInverses = []@
+  and @rpMeta = Nothing@.
 
 Both the in-memory and RocksDB backends share these
 column definitions verbatim — the column choice happens
@@ -92,13 +93,13 @@ data Cols c where
     -- pairs directly.
     AddressIndex :: Cols (KV AddrKey TxOut)
     -- | Rollback log: 'SlotNo' →
-    -- @'RollbackPoint' 'UtxoOp' 'BlockHash'@. Uses
+    -- @'RollbackPoint' ['UtxoOp'] 'BlockHash'@. Uses
     -- @chain-follower@'s canonical shape: @rpInverses@
-    -- is the reverse-ordered op list (already in apply
-    -- order on rollback), @rpMeta@ holds the block hash
-    -- so a future startup can recover the resume
-    -- @Point@ from the latest entry.
-    RollbackCol :: Cols (KV SlotNo (RollbackPoint UtxoOp BlockHash))
+    -- stores block-level inverse batches (each already in
+    -- apply order on rollback). Following rows keep one
+    -- batch plus the block hash in @rpMeta@; restoration
+    -- rows are sentinels with @rpMeta = Nothing@.
+    RollbackCol :: Cols (KV SlotNo (RollbackPoint [UtxoOp] BlockHash))
     -- | Observation index: every live (i.e. created and
     -- not yet spent) 'TxIn' carries the @('SlotNo',
     -- 'BlockHash')@ of the block that created it. Used
@@ -155,14 +156,16 @@ observationColCodecs =
         , valueCodec = observationPrism
         }
 
-{- | Codecs for the rollback-log column. The on-disk
-value is @blockHashLen(4 BE) || blockHash || ops@ where
-@ops@ uses the stable hand-rolled form (see 'encodeOps').
-Decoded into @chain-follower@'s 'RollbackPoint' shape so
-the @Rollbacks.*@ library functions accept it directly.
+{- | Codecs for the rollback-log column. Following rows use
+@blockHashLen(4 BE) || blockHash || ops@ where @ops@ uses
+the stable hand-rolled form (see 'encodeOps'). Restoration
+sentinels use @0xffffffff || ops@, with @ops@ normally
+empty. Decoded into @chain-follower@'s 'RollbackPoint'
+shape so the @Rollbacks.*@ library functions accept it
+directly.
 -}
 rollbackCodecs ::
-    Codecs (KV SlotNo (RollbackPoint UtxoOp BlockHash))
+    Codecs (KV SlotNo (RollbackPoint [UtxoOp] BlockHash))
 rollbackCodecs =
     Codecs
         { keyCodec = slotPrism
@@ -200,33 +203,52 @@ slotPrism :: Prism' ByteString SlotNo
 slotPrism = prism' slotToBytes slotFromBytes
 
 {- | Codec for the rollback entry. On-disk shape stays
-@blockHashLen(4 BE) || blockHash || encodeOps@; we just
-wrap/unwrap @chain-follower@'s 'RollbackPoint'. The
-'BlockHash' lives in @rpMeta@ as @Just bh@ — the indexer
-always records a hash, so we never produce or accept
-@Nothing@ on disk.
+@blockHashLen(4 BE) || blockHash || encodeOps@ for normal
+following rows. Restoration rows use a reserved length word
+(@0xffffffff@) followed by @encodeOps@ and decode as
+@rpMeta = Nothing@.
 -}
 rollbackEntryPrism ::
-    Prism' ByteString (RollbackPoint UtxoOp BlockHash)
+    Prism' ByteString (RollbackPoint [UtxoOp] BlockHash)
 rollbackEntryPrism = prism' encode decode
   where
     encode RollbackPoint{rpInverses, rpMeta} =
         case rpMeta of
             Just (BlockHash bh) ->
-                lenPrefixed bh <> encodeOps rpInverses
+                lenPrefixed bh <> encodeOps (flattenBatches rpInverses)
             Nothing ->
-                error
-                    "rollbackEntryPrism: encountered \
-                    \RollbackPoint with rpMeta = Nothing; \
-                    \indexer always records a block hash."
+                noMetadataPrefix <> encodeOps (flattenBatches rpInverses)
     decode bs0 = do
-        (bhBs, rest) <- readLenPrefixed bs0
-        ops <- decodeOps rest
-        Just
-            RollbackPoint
-                { rpInverses = ops
-                , rpMeta = Just (BlockHash bhBs)
-                }
+        (n, rest0) <- readWord32 bs0
+        if n == noMetadataMarker
+            then do
+                ops <- decodeOps rest0
+                Just
+                    RollbackPoint
+                        { rpInverses = toBatches ops
+                        , rpMeta = Nothing
+                        }
+            else do
+                (bhBs, rest1) <- readFixedLen n rest0
+                ops <- decodeOps rest1
+                Just
+                    RollbackPoint
+                        { rpInverses = [ops]
+                        , rpMeta = Just (BlockHash bhBs)
+                        }
+
+flattenBatches :: [[UtxoOp]] -> [UtxoOp]
+flattenBatches = concat
+
+toBatches :: [UtxoOp] -> [[UtxoOp]]
+toBatches [] = []
+toBatches ops = [ops]
+
+noMetadataMarker :: Word32
+noMetadataMarker = maxBound
+
+noMetadataPrefix :: ByteString
+noMetadataPrefix = word32BE noMetadataMarker
 
 {- | Codec for the @('SlotNo', 'BlockHash')@ observation
 entry: @slotBytes(8 BE) || blockHashLen(4 BE) || blockHash@.
@@ -313,10 +335,14 @@ splitFixed n bs
 readLenPrefixed :: ByteString -> Maybe (ByteString, ByteString)
 readLenPrefixed bs0 = do
     (n, rest0) <- readWord32 bs0
+    readFixedLen n rest0
+
+readFixedLen :: Word32 -> ByteString -> Maybe (ByteString, ByteString)
+readFixedLen n bs =
     let len = fromIntegral n
-    if BS.length rest0 < len
-        then Nothing
-        else Just (BS.splitAt len rest0)
+     in if BS.length bs < len
+            then Nothing
+            else Just (BS.splitAt len bs)
 
 readWord32 :: ByteString -> Maybe (Word32, ByteString)
 readWord32 bs

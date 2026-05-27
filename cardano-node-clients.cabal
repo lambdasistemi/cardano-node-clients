@@ -75,6 +75,7 @@ library
     , bytestring
     , cardano-binary
     , cardano-crypto-class
+    , cardano-crypto-wrapper
     , cardano-diffusion
     , cardano-diffusion:protocols
     , cardano-ledger-allegra
@@ -176,6 +177,7 @@ library utxo-indexer-lib
     , bytestring
     , chain-follower
     , containers
+    , contra-tracer
     , data-default-class
     , dependent-map
     , dependent-sum
@@ -208,9 +210,11 @@ test-suite unit-tests
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
+    Cardano.Node.Client.UTxOIndexer.BlockExtractSpec
     Cardano.Node.Client.UTxOIndexer.DaemonSpec
     Cardano.Node.Client.UTxOIndexer.FollowerSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
+    Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
@@ -224,11 +228,13 @@ test-suite unit-tests
     , base16-bytestring
     , bytestring
     , cardano-crypto-class
+    , cardano-crypto-wrapper
     , cardano-data
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-binary
+    , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
@@ -236,13 +242,16 @@ test-suite unit-tests
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting
     , cardano-strict-containers
+    , chain-follower
     , containers
+    , contra-tracer
     , directory
     , filepath
     , hspec
     , microlens
     , network
     , ouroboros-consensus
+    , ouroboros-consensus:cardano
     , ouroboros-network:api
     , plutus-core
     , QuickCheck

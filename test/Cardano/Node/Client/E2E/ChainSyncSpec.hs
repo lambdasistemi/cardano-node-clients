@@ -237,6 +237,7 @@ mkTestFollower runTx phaseRef blockCountRef transitionVar =
                         tipSlot > 0 && slot >= tipSlot
                 phase' <-
                     processBlock
+                        nullTracer
                         atTip
                         runTx
                         RollbackCol

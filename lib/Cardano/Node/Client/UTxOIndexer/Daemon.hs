@@ -54,7 +54,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
  )
 import Control.Concurrent.STM (atomically)
 import Control.Exception (onException)
-import Control.Tracer (Tracer, traceWith)
+import Control.Tracer (Tracer, nullTracer, traceWith)
 import Data.Word (Word32, Word64)
 import Ouroboros.Network.Magic (NetworkMagic (..))
 
@@ -141,6 +141,7 @@ toChainSyncCfg cfg =
         { csRelaySocket = dcRelaySocket cfg
         , csNetworkMagic = NetworkMagic (dcNetworkMagic cfg)
         , csByronEpochSlots = dcByronEpochSlots cfg
+        , csStartPoint = Nothing
         , csReadyThresholdSlots = dcReadyThresholdSlots cfg
         , csSecurityParamK = dcSecurityParamK cfg
         , csReconnectPolicy = dcReconnectPolicy cfg
@@ -151,6 +152,8 @@ toChainSyncCfg cfg =
           -- a 'ChainSyncConfig' directly with
           -- 'IndexAddressSet' to bound the on-disk store.
           csInterestSet = IndexAll
+        , csBlockTracer = nullTracer
+        , csTipTracer = nullTracer
         }
 
 {- | Derive the bundled daemon's wire-format 'ReadyStatus'

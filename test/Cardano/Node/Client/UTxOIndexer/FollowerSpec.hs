@@ -22,6 +22,7 @@ against a devnet node.
 -}
 module Cardano.Node.Client.UTxOIndexer.FollowerSpec (spec) where
 
+import Cardano.Node.Client.N2C.ChainSync (HeaderPoint)
 import Cardano.Node.Client.N2C.Probe (defaultProbeConfig)
 import Cardano.Node.Client.N2C.Reconnect (
     defaultReconnectPolicy,
@@ -32,10 +33,14 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     FollowerHandle (..),
     InterestSet (..),
     Readiness (..),
+    applyBlockOps,
+    coldBootResumePoints,
     filterBlockOps,
     withChainSyncFollower,
+    withChainSyncFollowerUsing,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    ApplyConflict,
     IndexerHandle (..),
     withInMemoryIndexer,
  )
@@ -49,18 +54,52 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     TxIn (..),
     TxOut (..),
  )
+import ChainFollower.Rollbacks.Types (RollbackPoint (..))
 import Control.Concurrent.Async qualified as Async
-import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM (
+    atomically,
+    check,
+    modifyTVar',
+    newTVarIO,
+    readTVar,
+    writeTVar,
+ )
+import Control.Exception (try)
+import Control.Tracer (Tracer (..), nullTracer, traceWith)
 import Data.ByteString qualified as BS
+import Data.ByteString.Short qualified as SBS
 import Data.Set qualified as Set
+import Ouroboros.Consensus.Block.EBB (
+    IsEBB (..),
+ )
+import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
+    OneEraHash (..),
+ )
+import Ouroboros.Network.Block qualified as Network
 import Ouroboros.Network.Magic (NetworkMagic (..))
+import Ouroboros.Network.Point qualified as Network.Point
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 
 spec :: Spec
 spec =
     describe "Cardano.Node.Client.UTxOIndexer.Follower" $ do
         describe "withChainSyncFollower" $ do
+            it
+                "uses a configured start point for cold-boot\
+                \ intersection"
+                $ do
+                    let startSlot = SlotNo 5_000_000
+                        startHash =
+                            BlockHash (BS.replicate 32 0x42)
+                        cfg =
+                            (mkCfg "unused.sock")
+                                { csStartPoint =
+                                    Just (startSlot, startHash)
+                                }
+                    coldBootResumePoints cfg
+                        `shouldBe` [toHeaderPoint startSlot startHash]
+
             it
                 "brings up against a caller-owned\
                 \ in-memory IndexerHandle and exposes a\
@@ -133,7 +172,96 @@ spec =
                                         _follower = fhAsync fh
                                     pure ()
 
+            it
+                "surfaces configured block and tip tracers\
+                \ to the chain-sync runner"
+                $ withInMemoryIndexer
+                $ \idx ->
+                    withSystemTempDirectory
+                        "follower-spec"
+                        $ \dir -> do
+                            blockSeen <- newTVarIO False
+                            tipSlots <- newTVarIO []
+                            let cfg =
+                                    (mkCfg (dir <> "/unused.sock"))
+                                        { csBlockTracer =
+                                            Tracer $
+                                                \_ ->
+                                                    atomically $
+                                                        writeTVar
+                                                            blockSeen
+                                                            True
+                                        , csTipTracer =
+                                            Tracer $
+                                                \slot ->
+                                                    atomically $
+                                                        modifyTVar'
+                                                            tipSlots
+                                                            (slot :)
+                                        }
+                                runner
+                                    _epochSlots
+                                    _magic
+                                    _sock
+                                    blockTracer
+                                    tipTracer
+                                    _intersector
+                                    _points = do
+                                        traceWith
+                                            blockTracer
+                                            ( error
+                                                "block tracer test\
+                                                \ payload is not\
+                                                \ evaluated"
+                                            )
+                                        traceWith
+                                            tipTracer
+                                            (Network.SlotNo 123)
+                                        pure (Right ())
+                            withChainSyncFollowerUsing
+                                runner
+                                nullN2CTracer
+                                cfg
+                                idx
+                                $ \_fh -> do
+                                    observedTips <-
+                                        atomically $ do
+                                            seen <- readTVar blockSeen
+                                            tips <- readTVar tipSlots
+                                            check
+                                                ( seen
+                                                    && not (null tips)
+                                                )
+                                            pure tips
+                                    observedTips
+                                        `shouldBe` [Network.SlotNo 123]
+
         describe "filterBlockOps (interest-set semantics)" $ do
+            it
+                "skips an EBB before a regular block at the\
+                \ same slot"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    result <- try @ApplyConflict $ do
+                        ebbApplied <-
+                            applyBlockOps
+                                idx
+                                IsEBB
+                                (SlotNo 0)
+                                blk1
+                                []
+                        blockApplied <-
+                            applyBlockOps
+                                idx
+                                IsNotEBB
+                                (SlotNo 0)
+                                blk2
+                                [UtxoCreate txInA addrA outA]
+                        pure (ebbApplied, blockApplied)
+                    result `shouldBe` Right (False, True)
+                    snapA <- snapshotAt idx addrA
+                    snapA `shouldBe` [(txInA, outA)]
+
             it
                 "keeps UtxoCreate ops at addresses in the\
                 \ interest set and drops the rest"
@@ -253,6 +381,91 @@ spec =
                     snapB <- snapshotAt idx addrB
                     snapB `shouldBe` [(txInB, outB)]
 
+        describe "tip-distance phase transition" $ do
+            it
+                "writes sentinel rows while far from tip and\
+                \ full rollback rows once within k"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    let k = 2
+                        tip = Network.SlotNo 10
+                        withinWindow (SlotNo slot) =
+                            Network.unSlotNo tip >= slot
+                                && Network.unSlotNo tip - slot
+                                    <= fromIntegral k
+                        step slot bh ops state = do
+                            (state', _processed) <-
+                                processFollowerBlock
+                                    idx
+                                    state
+                                    k
+                                    (withinWindow slot)
+                                    slot
+                                    bh
+                                    ops
+                            pure state'
+
+                    state0 <- newFollowerState idx True
+                    state1 <-
+                        step
+                            (SlotNo 1)
+                            blk1
+                            [UtxoCreate txInA addrA outA]
+                            state0
+                    state2 <-
+                        step
+                            (SlotNo 2)
+                            blk2
+                            [UtxoCreate txInB addrB outB]
+                            state1
+                    restorationHistory <- getRollbackHistory idx
+                    fmap (rpInverses . snd) restorationHistory
+                        `shouldBe` [[], []]
+                    fmap (rpMeta . snd) restorationHistory
+                        `shouldBe` [Nothing, Nothing]
+                    snapshotAt idx addrA
+                        `shouldReturn` [(txInA, outA)]
+                    snapshotAt idx addrB
+                        `shouldReturn` [(txInB, outB)]
+
+                    state3 <-
+                        step
+                            (SlotNo 8)
+                            blk3
+                            [UtxoCreate txInC addrC outC]
+                            state2
+                    _state4 <-
+                        step
+                            (SlotNo 9)
+                            blk4
+                            [UtxoSpend txInC]
+                            state3
+
+                    history <- getRollbackHistory idx
+                    fmap (rpInverses . snd) history
+                        `shouldBe` [
+                                       [ [UtxoSpend txInC]
+                                       ]
+                                   ,
+                                       [
+                                           [ UtxoCreate
+                                                txInC
+                                                addrC
+                                                outC
+                                           ]
+                                       ]
+                                   ]
+                    fmap (rpMeta . snd) history
+                        `shouldBe` [ Just blk3
+                                   , Just blk4
+                                   ]
+                    snapshotAt idx addrA
+                        `shouldReturn` [(txInA, outA)]
+                    snapshotAt idx addrB
+                        `shouldReturn` [(txInB, outB)]
+                    snapshotAt idx addrC
+                        `shouldReturn` []
+
 -- ---------------------------------------------------------------------------
 -- Helpers + interest-set test fixtures
 
@@ -267,12 +480,25 @@ mkCfg sock =
         { csRelaySocket = sock
         , csNetworkMagic = NetworkMagic 42
         , csByronEpochSlots = 86_400
+        , csStartPoint = Nothing
         , csReadyThresholdSlots = 5
         , csSecurityParamK = 432
         , csReconnectPolicy = defaultReconnectPolicy
         , csProbeConfig = defaultProbeConfig
         , csInterestSet = IndexAll
+        , csBlockTracer = nullTracer
+        , csTipTracer = nullTracer
         }
+
+toHeaderPoint :: SlotNo -> BlockHash -> HeaderPoint
+toHeaderPoint (SlotNo slot) (BlockHash hashBytes) =
+    Network.Point
+        ( Network.Point.At
+            ( Network.Point.Block
+                (Network.SlotNo slot)
+                (OneEraHash (SBS.toShort hashBytes))
+            )
+        )
 
 -- Three distinct test addresses (1-byte tag plus padding
 -- so they're distinguishable on the wire).
@@ -294,8 +520,10 @@ outA = TxOut "tag-A"
 outB = TxOut "tag-B"
 outC = TxOut "tag-C"
 
--- Two distinct block hashes for the two apply-block slots
--- used across the filter scenarios.
-blk1, blk2 :: BlockHash
+-- Distinct block hashes for the apply-block slots used
+-- across the filter and phase scenarios.
+blk1, blk2, blk3, blk4 :: BlockHash
 blk1 = BlockHash (BS.replicate 32 0xF1)
 blk2 = BlockHash (BS.replicate 32 0xF2)
+blk3 = BlockHash (BS.replicate 32 0xF3)
+blk4 = BlockHash (BS.replicate 32 0xF4)
