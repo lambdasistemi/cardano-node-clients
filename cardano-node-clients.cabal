@@ -159,6 +159,19 @@ library devnet
     , time
     , unix
 
+library block-indexer
+  import:           warnings
+  visibility:       public
+  hs-source-dirs:   lib-block-indexer
+  default-language: GHC2021
+  exposed-modules:
+    Cardano.Node.Client.BlockIndexer.Engine
+    Cardano.Node.Client.BlockIndexer.Handler
+    Cardano.Node.Client.BlockIndexer.Readiness
+    Cardano.Node.Client.BlockIndexer.Types
+
+  build-depends:    base
+
 library utxo-indexer-lib
   import:           warnings
   visibility:       public
