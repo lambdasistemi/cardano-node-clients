@@ -24,10 +24,10 @@ behavior.
 `lib-block-indexer/Cardano/Node/Client/BlockIndexer/Engine.hs`,
 `lib-block-indexer/Cardano/Node/Client/BlockIndexer/Readiness.hs`.
 
-- [ ] T001 Create the `block-indexer` public sublibrary in
+- [X] T001 Create the `block-indexer` public sublibrary in
   `cardano-node-clients.cabal` with minimal existing dependencies only.
-- [ ] T002 Add Haddock-complete skeleton modules under `lib-block-indexer/`.
-- [ ] T003 Prove `nix develop --quiet -c cabal build all -O0` and `./gate.sh`
+- [X] T002 Add Haddock-complete skeleton modules under `lib-block-indexer/`.
+- [X] T003 Prove `nix develop --quiet -c cabal build all -O0` and `./gate.sh`
   pass with the shell in place.
 
 **Commit**: `build(block-indexer): add package shell`  
