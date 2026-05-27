@@ -100,14 +100,14 @@ are required,
 `test/Cardano/Node/Client/UTxOIndexer/IndexerSpec.hs`,
 `cardano-node-clients.cabal`.
 
-- [ ] T012 Define and expose `IndexerHandler cols inv` and the engine-level
+- [X] T012 Define and expose `IndexerHandler cols inv` and the engine-level
   composite handler/inverse machinery.
-- [ ] T013 Change block application so all registered handlers execute in one
+- [X] T013 Change block application so all registered handlers execute in one
   transaction per block and rollback fans out deterministically.
-- [ ] T014 Expose and use
+- [X] T014 Expose and use
   `liveUtxoHandler :: InterestSet -> IndexerHandler Cols [UtxoOp]`.
-- [ ] T015 Prove existing `InterestSet` semantics remain unchanged.
-- [ ] T016 Run focused handler/indexer/follower tests plus `./gate.sh`.
+- [X] T015 Prove existing `InterestSet` semantics remain unchanged.
+- [X] T016 Run focused handler/indexer/follower tests plus `./gate.sh`.
 
 **Commit**: `refactor(utxo-indexer): port live utxo to handler interface`  
 **Trailer**: `Tasks: T012, T013, T014, T015, T016`
