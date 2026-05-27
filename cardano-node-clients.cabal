@@ -170,7 +170,12 @@ library block-indexer
     Cardano.Node.Client.BlockIndexer.Readiness
     Cardano.Node.Client.BlockIndexer.Types
 
-  build-depends:    base
+  build-depends:
+    , base
+    , chain-follower
+    , contra-tracer
+    , rocksdb-kv-transactions:kv-transactions
+    , stm
 
 library utxo-indexer-lib
   import:           warnings
@@ -188,6 +193,7 @@ library utxo-indexer-lib
     , async
     , base
     , bytestring
+    , cardano-node-clients:block-indexer
     , chain-follower
     , containers
     , contra-tracer
