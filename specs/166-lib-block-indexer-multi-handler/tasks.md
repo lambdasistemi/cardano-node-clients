@@ -156,11 +156,11 @@ behavior-equivalence proof.
 
 ## Finalization
 
-- [ ] T023 Run final `./gate.sh` at HEAD.
-- [ ] T024 Run the finalization audit against this task file.
-- [ ] T025 Update PR #167 body with delivered behavior and remaining
+- [X] T023 Run final `./gate.sh` at HEAD.
+- [X] T024 Run the finalization audit against this task file.
+- [X] T025 Update PR #167 body with delivered behavior and remaining
   downstream non-goals.
-- [ ] T026 Drop `gate.sh` in `chore: drop gate.sh (ready for review)` and
+- [X] T026 Drop `gate.sh` in `chore: drop gate.sh (ready for review)` and
   push the final draft PR branch.
 
 **Commit**: `chore: drop gate.sh (ready for review)`
