@@ -228,6 +228,7 @@ test-suite unit-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.AddressSpec
+    Cardano.Node.Client.BlockIndexer.HandlerSpec
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
@@ -267,6 +268,7 @@ test-suite unit-tests
     , chain-follower
     , containers
     , contra-tracer
+    , dependent-map
     , directory
     , filepath
     , hspec
@@ -278,6 +280,8 @@ test-suite unit-tests
     , plutus-core
     , QuickCheck
     , random
+    , rocksdb-kv-transactions
+    , rocksdb-kv-transactions:kv-transactions
     , sop-extras
     , stm
     , temporary

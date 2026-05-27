@@ -145,11 +145,11 @@ behavior-equivalence proof.
 `test/unit-main.hs`,
 `cardano-node-clients.cabal` if a new test module is added.
 
-- [ ] T020 Add a RED multi-handler test with a trivial second handler proving
+- [X] T020 Add a RED multi-handler test with a trivial second handler proving
   roll-forward composition.
-- [ ] T021 Extend the test to prove rollback fanout through the composite
+- [X] T021 Extend the test to prove rollback fanout through the composite
   inverse.
-- [ ] T022 Run `./gate.sh` and record the passing evidence.
+- [X] T022 Run `./gate.sh` and record the passing evidence.
 
 **Commit**: `test(block-indexer): prove multi-handler composition`  
 **Trailer**: `Tasks: T020, T021, T022`
