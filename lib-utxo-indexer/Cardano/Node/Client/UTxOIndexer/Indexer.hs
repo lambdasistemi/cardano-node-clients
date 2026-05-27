@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 
 {- |
@@ -52,11 +53,15 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     -- * Indexer handle
     IndexerHandle (..),
     IndexerFollowerState,
+    withFollowerInterest,
     withInMemoryIndexer,
     withRocksDBIndexer,
 
     -- * Operations
+    InterestSet (..),
     UtxoOp (..),
+    filterBlockOps,
+    liveUtxoHandler,
 
     -- * Replay conflict
     ApplyConflict (..),
@@ -66,6 +71,12 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
 ) where
 
 import Cardano.Node.Client.BlockIndexer.Engine qualified as Engine
+import Cardano.Node.Client.BlockIndexer.Handler (
+    HandlerBlock (..),
+    HandlerContext (..),
+    IndexerHandler (..),
+ )
+import Cardano.Node.Client.BlockIndexer.Handler qualified as Handler
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols (..),
     addressIndexCodecs,
@@ -81,10 +92,6 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     SlotNo (..),
     TxIn (..),
     TxOut,
- )
-import ChainFollower.Backend (
-    Following (..),
-    Restoring (..),
  )
 import ChainFollower.Rollbacks.Store qualified as Rollbacks
 import ChainFollower.Rollbacks.Types (
@@ -119,10 +126,14 @@ import Data.IORef (
     readIORef,
     writeIORef,
  )
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.SampleFibonacci (sampleAtFibonacciIntervals)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
+import Data.Set (Set)
+import Data.Set qualified as Set
+import Data.Typeable (Typeable, cast)
 import Database.KV.Cursor (
     Cursor,
     Entry (..),
@@ -185,7 +196,29 @@ data AwaitObservation = AwaitObservation
 type IndexerTx cf op =
     Engine.EngineTx IO cf Cols op
 
-data IndexerBlock = IndexerBlock !SlotNo !BlockHash ![UtxoOp]
+type IndexerBlock = HandlerBlock SlotNo BlockHash [UtxoOp]
+
+{- | Address filter applied to each @[UtxoOp]@ batch before
+the live UTxO handler mutates storage.
+
+'IndexAll' preserves every create/spend. 'IndexAddressSet'
+keeps creates for the configured addresses and always keeps
+spends, so spending a previously-filtered create remains a
+clean no-op.
+-}
+data InterestSet
+    = IndexAll
+    | IndexAddressSet !(Set Address)
+    deriving stock (Eq, Show)
+
+-- | Pure interest-set filtering for a batch of UTxO operations.
+filterBlockOps :: InterestSet -> [UtxoOp] -> [UtxoOp]
+filterBlockOps IndexAll = id
+filterBlockOps (IndexAddressSet s) = filter (inInterestSet s)
+  where
+    inInterestSet set op = case op of
+        UtxoCreate _ addr _ -> addr `Set.member` set
+        UtxoSpend _ -> True
 
 {- | Opaque chain-follower phase state for the UTxO
 indexer. It packages the concrete @kv-transactions@
@@ -205,6 +238,7 @@ data IndexerFollowerState where
                 [UtxoOp]
                 BlockHash
              )
+        , ifsInterestSet :: !InterestSet
         , ifsWaiters :: !Waiters
         , ifsObserved :: !Observed
         } ->
@@ -458,6 +492,7 @@ mkHandle
                     waitersVar
                     observedVar
                     countVar
+                    IndexAll
             , processFollowerBlock =
                 processIndexerFollowerBlock
             , rollbackFollowerState =
@@ -494,11 +529,73 @@ mkHandle
                     (Rollbacks.queryHistory RollbackCol)
             }
 
+-- | Retarget an opaque follower state to a handler interest set.
+withFollowerInterest ::
+    InterestSet ->
+    IndexerFollowerState ->
+    IndexerFollowerState
+withFollowerInterest
+    interestSet
+    IndexerFollowerState
+        { ifsEngine = engine
+        , ifsWaiters = waitersVar
+        , ifsObserved = observedVar
+        } =
+        IndexerFollowerState
+            { ifsEngine =
+                remapEngineHandlers
+                    interestSet
+                    engine
+            , ifsInterestSet = interestSet
+            , ifsWaiters = waitersVar
+            , ifsObserved = observedVar
+            }
+
+remapEngineHandlers ::
+    InterestSet ->
+    Engine.EngineState
+        cf
+        Cols
+        op
+        IndexerBlock
+        [UtxoOp]
+        BlockHash ->
+    Engine.EngineState
+        cf
+        Cols
+        op
+        IndexerBlock
+        [UtxoOp]
+        BlockHash
+remapEngineHandlers interestSet engine =
+    engine
+        { Engine.enginePhase =
+            remapPhaseHandlers
+                interestSet
+                (Engine.enginePhase engine)
+        }
+
+remapPhaseHandlers ::
+    InterestSet ->
+    Engine.EnginePhase cf Cols op IndexerBlock [UtxoOp] BlockHash ->
+    Engine.EnginePhase cf Cols op IndexerBlock [UtxoOp] BlockHash
+remapPhaseHandlers interestSet = \case
+    Runner.InRestoration _ ->
+        Runner.InRestoration
+            (Handler.composeHandlerRestoring handlers)
+    Runner.InFollowing count _ ->
+        Runner.InFollowing
+            count
+            (Handler.composeHandlerFollowing handlers)
+  where
+    handlers = liveUtxoHandler interestSet :| []
+
 newIndexerFollowerState ::
     (forall a. IndexerTx cf op a -> IO a) ->
     Waiters ->
     Observed ->
     TVar Int ->
+    InterestSet ->
     Bool ->
     IO IndexerFollowerState
 newIndexerFollowerState
@@ -506,17 +603,21 @@ newIndexerFollowerState
     waitersVar
     observedVar
     countVar
+    interestSet
     startRestoring = do
         history <- runTransaction (Rollbacks.queryHistory RollbackCol)
         count <- readTVarIO countVar
         let hasFollowingRows =
                 any (isJust . rpMeta . snd) history
-            restoring = indexerRestoring
+            handlers = liveUtxoHandler interestSet :| []
+            restoring = Handler.composeHandlerRestoring handlers
             phase
                 | startRestoring && not hasFollowingRows =
                     Runner.InRestoration restoring
                 | otherwise =
-                    Runner.InFollowing count indexerFollowing
+                    Runner.InFollowing
+                        count
+                        (Handler.composeHandlerFollowing handlers)
         pure
             IndexerFollowerState
                 { ifsEngine =
@@ -526,6 +627,7 @@ newIndexerFollowerState
                         , Engine.engineCount = countVar
                         , Engine.enginePhase = phase
                         }
+                , ifsInterestSet = interestSet
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
                 }
@@ -541,6 +643,7 @@ processIndexerFollowerBlock ::
 processIndexerFollowerBlock
     IndexerFollowerState
         { ifsEngine = engine
+        , ifsInterestSet = interestSet
         , ifsWaiters = waitersVar
         , ifsObserved = observedVar
         }
@@ -556,8 +659,13 @@ processIndexerFollowerBlock
                 securityParam
                 withinStabilityWindow
                 slot
-                (IndexerBlock slot bh ops)
+                HandlerBlock
+                    { hbSlot = slot
+                    , hbMeta = bh
+                    , hbPayload = ops
+                    }
                 engine
+        let appliedOps = filterBlockOps interestSet ops
         when (Engine.blockWasFollowed phase withinStabilityWindow) $
             atomically $
                 fireWaiters
@@ -565,10 +673,11 @@ processIndexerFollowerBlock
                     observedVar
                     slot
                     bh
-                    ops
+                    appliedOps
         pure
             ( IndexerFollowerState
                 { ifsEngine = engine'
+                , ifsInterestSet = interestSet
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
                 }
@@ -582,6 +691,7 @@ rollbackIndexerFollowerState ::
 rollbackIndexerFollowerState
     IndexerFollowerState
         { ifsEngine = engine
+        , ifsInterestSet = interestSet
         , ifsWaiters = waitersVar
         , ifsObserved = observedVar
         }
@@ -597,42 +707,10 @@ rollbackIndexerFollowerState
         pure
             IndexerFollowerState
                 { ifsEngine = engine'
+                , ifsInterestSet = interestSet
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
                 }
-
-indexerRestoring ::
-    Restoring IO (IndexerTx cf op) IndexerBlock [UtxoOp] BlockHash
-indexerRestoring = restoring
-  where
-    restoring =
-        Restoring
-            { restore = \(IndexerBlock slot bh ops) -> do
-                applyOpsOnly slot bh ops
-                pure restoring
-            , toFollowing = pure indexerFollowing
-            }
-
-indexerFollowing ::
-    Following IO (IndexerTx cf op) IndexerBlock [UtxoOp] BlockHash
-indexerFollowing = following
-  where
-    following =
-        Following
-            { follow = followBlock
-            , toRestoring = pure indexerRestoring
-            , applyInverse =
-                traverse_
-                    (applyOne (SlotNo 0) (BlockHash mempty))
-            }
-    followBlock (IndexerBlock slot bh ops) = do
-        inverses <- traverse step ops
-        pure (reverse inverses, Just bh, following)
-      where
-        step op = do
-            inv <- inverseOf op
-            applyOpsOnly slot bh [op]
-            pure inv
 
 applyOpsOnly ::
     SlotNo ->
@@ -641,6 +719,38 @@ applyOpsOnly ::
     Transaction IO cf Cols op ()
 applyOpsOnly slot bh =
     traverse_ (applyOne slot bh)
+
+-- | Live UTxO storage handler for the generic block-indexer engine.
+liveUtxoHandler :: InterestSet -> IndexerHandler Cols [UtxoOp]
+liveUtxoHandler interestSet =
+    IndexerHandler
+        { handlerRestore = \context ops -> do
+            let (slot, bh) = utxoContextSlotHash context
+            applyOpsOnly slot bh (filterBlockOps interestSet ops)
+        , handlerFollow = \context ops -> do
+            let (slot, bh) = utxoContextSlotHash context
+            reverse
+                <$> traverse
+                    (followOne slot bh)
+                    (filterBlockOps interestSet ops)
+        , handlerRollback = \context ops -> do
+            let (slot, bh) = utxoContextSlotHash context
+            applyOpsOnly slot bh ops
+        }
+  where
+    followOne slot bh op = do
+        inv <- inverseOf op
+        applyOpsOnly slot bh [op]
+        pure inv
+
+utxoContextSlotHash ::
+    (Typeable slot, Typeable meta) =>
+    HandlerContext slot meta ->
+    (SlotNo, BlockHash)
+utxoContextSlotHash HandlerContext{hcSlot, hcMeta} =
+    case (cast hcSlot, hcMeta >>= cast) of
+        (Just slot, Just bh) -> (slot, bh)
+        _ -> (SlotNo 0, BlockHash mempty)
 
 {- | Within one transaction: decide whether @slot@ has
 already been applied.
@@ -697,11 +807,13 @@ applyAndLog slot bh ops =
         applyFresh
   where
     applyFresh =
-        reverse <$> traverse step ops
-    step op = do
-        inv <- inverseOf op
-        applyOpsOnly slot bh [op]
-        pure inv
+        Handler.followHandlers
+            (liveUtxoHandler IndexAll :| [])
+            HandlerContext
+                { hcSlot = slot
+                , hcMeta = Just bh
+                }
+            ops
 
 {- | After @applyAndLog@ commits, walk the ops and:
 
@@ -847,7 +959,15 @@ applyRollbackEntry ::
     [[UtxoOp]] ->
     Transaction IO cf Cols op ()
 applyRollbackEntry slot (Just bh) invBatches =
-    traverse_ (traverse_ (applyOne slot bh)) invBatches
+    traverse_
+        ( Handler.rollbackHandlers
+            (liveUtxoHandler IndexAll :| [])
+            HandlerContext
+                { hcSlot = slot
+                , hcMeta = Just bh
+                }
+        )
+        invBatches
 applyRollbackEntry _slot Nothing [] =
     pure ()
 applyRollbackEntry _slot Nothing (_ : _) =

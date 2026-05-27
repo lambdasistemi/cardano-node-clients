@@ -94,12 +94,14 @@ import Cardano.Node.Client.UTxOIndexer.BlockExtract (
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerFollowerState,
     IndexerHandle (..),
+    InterestSet (..),
+    filterBlockOps,
+    withFollowerInterest,
  )
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (
     UtxoOp (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
-    Address,
     BlockHash (..),
     SlotNo (..),
  )
@@ -123,8 +125,6 @@ import Control.Exception (SomeException)
 import Control.Monad (void)
 import Control.Tracer (Tracer)
 import Data.ByteString.Short qualified as SBS
-import Data.Set (Set)
-import Data.Set qualified as Set
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Ouroboros.Consensus.Block.Abstract (
@@ -253,29 +253,6 @@ not exposed for STM updates). A future ticket can lift
 the field into an STM-mutable value if multi-tenant
 onboarding requires it.
 -}
-data InterestSet
-    = -- | Pass-through; preserves the pre-#158 daemon
-      -- semantics.
-      IndexAll
-    | -- | Keep only 'UtxoCreate' ops whose address
-      -- belongs to the set. Spends always pass.
-      IndexAddressSet !(Set Address)
-    deriving stock (Eq, Show)
-
-{- | Pure: filter a batch of 'UtxoOp's against an
-'InterestSet'. Called by the follower's @rollForward@
-between 'extractBlock' and 'applyAtSlot'; exported so
-unit tests can exercise the filter without spinning up
-a chain-sync session.
--}
-filterBlockOps :: InterestSet -> [UtxoOp] -> [UtxoOp]
-filterBlockOps IndexAll = id
-filterBlockOps (IndexAddressSet s) = filter (inInterestSet s)
-  where
-    inInterestSet :: Set Address -> UtxoOp -> Bool
-    inInterestSet set op = case op of
-        UtxoCreate _ addr _ -> addr `Set.member` set
-        UtxoSpend _ -> True
 
 {- | Apply a fetched block's extracted UTxO operations,
 unless the consensus layer identifies it as an Epoch
@@ -573,9 +550,8 @@ mkIntersector bootMode cfg readinessVar idx = self
                 -- an offline rollback.
                 rollbackTo idx (slotOfPoint point)
                 followerState <-
-                    newFollowerState
-                        idx
-                        True
+                    withFollowerInterest (csInterestSet cfg)
+                        <$> newFollowerState idx True
                 pure (mkFollower cfg readinessVar idx followerState)
             , intersectNotFound = case bootMode of
                 ColdBoot ->
@@ -624,12 +600,8 @@ mkFollower cfg readinessVar idx = go
     go followerState =
         Follower
             { rollForward = \fetched tip -> do
-                let (slot, rawOps) =
+                let (slot, ops) =
                         extractBlock (fetchedBlock fetched)
-                    ops =
-                        filterBlockOps
-                            (csInterestSet cfg)
-                            rawOps
                     bh =
                         pointToBlockHash
                             (fetchedPoint fetched)

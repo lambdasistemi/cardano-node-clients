@@ -12,9 +12,19 @@ target slot.
 -}
 module Cardano.Node.Client.UTxOIndexer.IndexerSpec (spec) where
 
+import Cardano.Node.Client.BlockIndexer.Handler (
+    IndexerHandler,
+ )
+import Cardano.Node.Client.UTxOIndexer.Columns (
+    Cols,
+ )
+import Cardano.Node.Client.UTxOIndexer.Follower (
+    InterestSet (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     UtxoOp (..),
+    liveUtxoHandler,
     withInMemoryIndexer,
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
@@ -29,6 +39,12 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 
 spec :: Spec
 spec = describe "Cardano.Node.Client.UTxOIndexer.Indexer" $ do
+    describe "liveUtxoHandler" $
+        it "is exposed as the UTxO block-indexer handler" $ do
+            let _handler :: IndexerHandler Cols [UtxoOp]
+                _handler = liveUtxoHandler IndexAll
+            pure () :: IO ()
+
     describe "applyAtSlot + snapshotAt" $ do
         it "snapshots an empty address as an empty list" $
             withInMemoryIndexer $ \h -> do
