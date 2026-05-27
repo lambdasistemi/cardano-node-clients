@@ -25,6 +25,7 @@ module Cardano.Node.Client.UTxOIndexer.Daemon (
     applyUpstreamStatus,
 ) where
 
+import Cardano.Node.Client.BlockIndexer.Readiness qualified as Readiness
 import Cardano.Node.Client.N2C.Probe (ProbeConfig)
 import Cardano.Node.Client.N2C.Reconnect (
     ReconnectPolicy,
@@ -169,20 +170,23 @@ locked in by "DaemonSpec").
 readyStatusFrom :: DaemonConfig -> Readiness -> ReadyStatus
 readyStatusFrom cfg r =
     ReadyStatus
-        { rsReady = case (rUpstream r, behind) of
-            (UpstreamConnected, Just b) ->
-                b <= dcReadyThresholdSlots cfg
-            _ -> False
+        { rsReady =
+            Readiness.readyFromLag
+                upstreamConnected
+                (dcReadyThresholdSlots cfg)
+                (rUpstream r)
+                behind
         , rsTipSlot = rTipSlot r
         , rsProcessedSlot = rProcessedSlot r
         , rsSlotsBehind = behind
         , rsUpstream = rUpstream r
         }
   where
-    behind = case (rProcessedSlot r, rTipSlot r) of
-        (Just (SlotNo p), Just (SlotNo t)) ->
-            Just (if t > p then t - p else 0)
-        _ -> Nothing
+    behind =
+        Readiness.slotLag unSlotNo (rProcessedSlot r) (rTipSlot r)
+    unSlotNo (SlotNo slot) = slot
+    upstreamConnected UpstreamConnected = True
+    upstreamConnected (UpstreamDisconnected _) = False
 
 {- | Apply a supervisor status transition to a 'ReadyStatus'.
 

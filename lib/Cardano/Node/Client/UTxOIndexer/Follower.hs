@@ -73,6 +73,7 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots (..))
+import Cardano.Node.Client.BlockIndexer.Readiness qualified as BI
 import Cardano.Node.Client.N2C.ChainSync (
     Fetched (..),
     HeaderPoint,
@@ -300,9 +301,8 @@ applyBlockOps idx isEBB slot bh ops =
             applyAtSlot idx slot bh ops
             pure True
 
-{- | Live readiness snapshot updated by the follower
-thread after every roll-forward and on every reconnect
-status transition.
+{- | UTxO follower readiness snapshot updated after every
+roll-forward and on every reconnect status transition.
 
 The 'Maybe' slot fields are 'Nothing' before the first
 'rollForward' fires; once set they are preserved across
@@ -497,13 +497,8 @@ matches the bundled daemon's historical initial
 @ReadyStatus@).
 -}
 initialReadiness :: UTCTime -> Readiness
-initialReadiness now =
-    Readiness
-        { rProcessedSlot = Nothing
-        , rTipSlot = Nothing
-        , rUpstream = UpstreamConnected
-        , rUpdatedAt = now
-        }
+initialReadiness =
+    fromBlockReadiness . BI.initialReadiness UpstreamConnected
 
 -- ---------------------------------------------------------------------------
 -- Boot mode + chain-sync resume points
@@ -762,5 +757,25 @@ only 'rUpstream' and 'rUpdatedAt' are updated.
 -}
 applyUpstreamToReadiness ::
     UpstreamStatus -> UTCTime -> Readiness -> Readiness
-applyUpstreamToReadiness newStatus now r =
-    r{rUpstream = newStatus, rUpdatedAt = now}
+applyUpstreamToReadiness newStatus now =
+    fromBlockReadiness
+        . BI.applyUpstreamToReadiness newStatus now
+        . toBlockReadiness
+
+toBlockReadiness :: Readiness -> BI.Readiness SlotNo UpstreamStatus
+toBlockReadiness r =
+    BI.Readiness
+        { BI.rProcessedSlot = rProcessedSlot r
+        , BI.rTipSlot = rTipSlot r
+        , BI.rUpstream = rUpstream r
+        , BI.rUpdatedAt = rUpdatedAt r
+        }
+
+fromBlockReadiness :: BI.Readiness SlotNo UpstreamStatus -> Readiness
+fromBlockReadiness r =
+    Readiness
+        { rProcessedSlot = BI.rProcessedSlot r
+        , rTipSlot = BI.rTipSlot r
+        , rUpstream = BI.rUpstream r
+        , rUpdatedAt = BI.rUpdatedAt r
+        }
