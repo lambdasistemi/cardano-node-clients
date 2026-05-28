@@ -31,6 +31,6 @@
 
 ## Finalization
 
-- [ ] T018 Update PR body with delivered behavior and testing evidence.
-- [ ] T019 Run finalization audit for PR #169 and this task file.
-- [ ] T020 Drop `gate.sh` in `chore: drop gate.sh (ready for review)`.
+- [X] T018 Update PR body with delivered behavior and testing evidence.
+- [X] T019 Run finalization audit for PR #169 and this task file.
+- [X] T020 Drop `gate.sh` in `chore: drop gate.sh (ready for review)`.
