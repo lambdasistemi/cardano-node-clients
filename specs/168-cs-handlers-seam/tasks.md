@@ -16,11 +16,11 @@
 
 ## Slice 3 - Multi-Handler Regression
 
-- [ ] T009 Add a unit test with `liveUtxoHandler IndexAll :| [trivialSecondHandler]`.
-- [ ] T010 Assert roll-forward writes both the normal UTxO columns and the second handler's observable state.
-- [ ] T011 Assert rollback restores both handlers symmetrically.
-- [ ] T012 Run the focused unit test plus `./gate.sh`.
-- [ ] T013 Commit as `test(utxo-indexer): cover ChainSyncConfig handler fanout`.
+- [X] T009 Add a unit test with `liveUtxoHandler IndexAll :| [trivialSecondHandler]`.
+- [X] T010 Assert roll-forward writes both the normal UTxO columns and the second handler's observable state.
+- [X] T011 Assert rollback restores both handlers symmetrically.
+- [X] T012 Run the focused unit test plus `./gate.sh`.
+- [X] T013 Commit as `test(utxo-indexer): cover ChainSyncConfig handler fanout`.
 
 ## Slice 4 - Haddock and Public Guidance
 

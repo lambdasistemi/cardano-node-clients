@@ -17,12 +17,19 @@ import Cardano.Node.Client.BlockIndexer.Handler (
     IndexerHandler (..),
  )
 import Cardano.Node.Client.BlockIndexer.Handler qualified as Handler
+import Cardano.Node.Client.N2C.Probe (defaultProbeConfig)
+import Cardano.Node.Client.N2C.Reconnect (
+    defaultReconnectPolicy,
+ )
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols (..),
     addressIndexCodecs,
     observationColCodecs,
     rollbackCodecs,
     txInColCodecs,
+ )
+import Cardano.Node.Client.UTxOIndexer.Follower (
+    ChainSyncConfig (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     InterestSet (..),
@@ -37,6 +44,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     TxOut (..),
  )
 import ChainFollower.Rollbacks.Types (RollbackPoint (..))
+import Control.Tracer (nullTracer)
 import Data.ByteString qualified as BS
 import Data.Dependent.Map (DMap)
 import Data.Foldable (traverse_)
@@ -53,6 +61,7 @@ import Database.KV.Transaction (
     newRunTransaction,
     query,
  )
+import Ouroboros.Network.Magic (NetworkMagic (..))
 import Test.Hspec (
     Spec,
     describe,
@@ -63,72 +72,86 @@ import Test.Hspec (
 
 spec :: Spec
 spec =
-    describe "Cardano.Node.Client.BlockIndexer.Handler"
-        $ it
+    describe "Cardano.Node.Client.BlockIndexer.Handler" $ do
+        it
             "composes live UTxO follow and deterministic rollback fanout"
-        $ do
-            db <-
-                mkInMemoryDatabase
-                    (mkColumns [0 :: Int ..] indexerTestCodecs)
-            RunTransaction{runTransaction} <- newRunTransaction db
+            $ assertFollowRollbackFanout
+                (liveUtxoHandler IndexAll :| [recordingHandler liveTxIn])
 
-            let handlers =
-                    liveUtxoHandler IndexAll
-                        :| [recordingHandler liveTxIn]
-                context =
-                    HandlerContext
-                        { hcSlot = followedSlot
-                        , hcMeta = Just followedHash
-                        }
+        it
+            "uses ChainSyncConfig csHandlers for handler fanout"
+            $ do
+                let cfg =
+                        testChainSyncConfig
+                            { csHandlers =
+                                liveUtxoHandler IndexAll
+                                    :| [recordingHandler liveTxIn]
+                            }
+                assertFollowRollbackFanout (csHandlers cfg)
 
-            result <-
-                runTransaction $
-                    Engine.applyWithRollbackLog
-                        RollbackCol
-                        followedSlot
-                        followedHash
-                        ( Handler.followHandlers
-                            handlers
-                            context
-                            [UtxoCreate liveTxIn liveAddress liveTxOut]
-                        )
-            case result of
-                Engine.ApplyLogApplied -> pure ()
-                Engine.ApplyLogAlreadyApplied ->
-                    expectationFailure "block was not freshly applied"
-                Engine.ApplyLogConflict _existing _attempted ->
-                    expectationFailure "unexpected rollback-log conflict"
+assertFollowRollbackFanout ::
+    NonEmpty (IndexerHandler Cols [UtxoOp]) ->
+    IO ()
+assertFollowRollbackFanout handlers = do
+    db <-
+        mkInMemoryDatabase
+            (mkColumns [0 :: Int ..] indexerTestCodecs)
+    RunTransaction{runTransaction} <- newRunTransaction db
 
-            applied <- runTransaction queryAppliedState
-            applied
-                `shouldBe` ( Just liveAddress
-                           , Just (followedSlot, followedHash)
-                           , Nothing
-                           , Just
-                                RollbackPoint
-                                    { rpInverses =
-                                        [[UtxoSpend liveTxIn]]
-                                    , rpMeta = Just followedHash
-                                    }
-                           )
+    let context =
+            HandlerContext
+                { hcSlot = followedSlot
+                , hcMeta = Just followedHash
+                }
 
-            deleted <-
-                runTransaction $
-                    Engine.rollbackLogAfter
-                        RollbackCol
-                        (rollbackEntry handlers)
-                        rollbackTarget
-            deleted `shouldBe` 1
+    result <-
+        runTransaction $
+            Engine.applyWithRollbackLog
+                RollbackCol
+                followedSlot
+                followedHash
+                ( Handler.followHandlers
+                    handlers
+                    context
+                    [UtxoCreate liveTxIn liveAddress liveTxOut]
+                )
+    case result of
+        Engine.ApplyLogApplied -> pure ()
+        Engine.ApplyLogAlreadyApplied ->
+            expectationFailure "block was not freshly applied"
+        Engine.ApplyLogConflict _existing _attempted ->
+            expectationFailure "unexpected rollback-log conflict"
 
-            rolledBack <- runTransaction queryRolledBackState
-            rolledBack
-                `shouldBe` ( Nothing
-                           , Just (followedSlot, followedHash)
-                           , Nothing
-                           , Just (followedSlot, followedHash)
-                           , Nothing
-                           , Nothing
-                           )
+    applied <- runTransaction queryAppliedState
+    applied
+        `shouldBe` ( Just liveAddress
+                   , Just (followedSlot, followedHash)
+                   , Nothing
+                   , Just
+                        RollbackPoint
+                            { rpInverses =
+                                [[UtxoSpend liveTxIn]]
+                            , rpMeta = Just followedHash
+                            }
+                   )
+
+    deleted <-
+        runTransaction $
+            Engine.rollbackLogAfter
+                RollbackCol
+                (rollbackEntry handlers)
+                rollbackTarget
+    deleted `shouldBe` 1
+
+    rolledBack <- runTransaction queryRolledBackState
+    rolledBack
+        `shouldBe` ( Nothing
+                   , Just (followedSlot, followedHash)
+                   , Nothing
+                   , Just (followedSlot, followedHash)
+                   , Nothing
+                   , Nothing
+                   )
 
 indexerTestCodecs :: DMap Cols Codecs
 indexerTestCodecs =
@@ -270,3 +293,20 @@ rollbackSawMissing = markerTxIn 0xF4
 
 markerTxIn :: Word -> TxIn
 markerTxIn tag = TxIn (BS.replicate 32 (fromIntegral tag)) 0
+
+testChainSyncConfig :: ChainSyncConfig
+testChainSyncConfig =
+    ChainSyncConfig
+        { csRelaySocket = "unused.sock"
+        , csNetworkMagic = NetworkMagic 42
+        , csByronEpochSlots = 86_400
+        , csStartPoint = Nothing
+        , csReadyThresholdSlots = 5
+        , csSecurityParamK = 432
+        , csReconnectPolicy = defaultReconnectPolicy
+        , csProbeConfig = defaultProbeConfig
+        , csInterestSet = IndexAll
+        , csHandlers = liveUtxoHandler IndexAll :| []
+        , csBlockTracer = nullTracer
+        , csTipTracer = nullTracer
+        }
