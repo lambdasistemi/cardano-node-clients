@@ -65,6 +65,7 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     -- * Indexer handle
     IndexerHandle (..),
     IndexerFollowerState,
+    withFollowerHandlers,
     withFollowerInterest,
     withInMemoryIndexer,
     withRocksDBIndexer,
@@ -553,21 +554,23 @@ mkHandle
                     (Rollbacks.queryHistory RollbackCol)
             }
 
-{- | Retarget an opaque follower state to a handler interest set.
+{- | Retarget an opaque follower state to a handler list.
 
-This is the compatibility shim used by
+This is the handler-list seam used by
 "Cardano.Node.Client.UTxOIndexer.Follower". The public
 'newFollowerState' handle field keeps its historical
 @Bool -> IO IndexerFollowerState@ shape and defaults to 'IndexAll';
 the follower applies this helper internally when
-'ChainSyncConfig.csInterestSet' is more selective.
+'ChainSyncConfig.csHandlers' supplies a richer handler pipeline.
 -}
-withFollowerInterest ::
+withFollowerHandlers ::
     InterestSet ->
+    NonEmpty (IndexerHandler Cols [UtxoOp]) ->
     IndexerFollowerState ->
     IndexerFollowerState
-withFollowerInterest
+withFollowerHandlers
     interestSet
+    handlers
     IndexerFollowerState
         { ifsEngine = engine
         , ifsWaiters = waitersVar
@@ -576,15 +579,28 @@ withFollowerInterest
         IndexerFollowerState
             { ifsEngine =
                 remapEngineHandlers
-                    interestSet
+                    handlers
                     engine
             , ifsInterestSet = interestSet
             , ifsWaiters = waitersVar
             , ifsObserved = observedVar
             }
 
-remapEngineHandlers ::
+{- | Retarget an opaque follower state to a handler interest set.
+
+Compatibility wrapper for existing callers. It preserves the historical
+single live UTxO handler behavior while sharing the same retargeting path
+as 'withFollowerHandlers'.
+-}
+withFollowerInterest ::
     InterestSet ->
+    IndexerFollowerState ->
+    IndexerFollowerState
+withFollowerInterest interestSet =
+    withFollowerHandlers interestSet (liveUtxoHandler interestSet :| [])
+
+remapEngineHandlers ::
+    NonEmpty (IndexerHandler Cols [UtxoOp]) ->
     Engine.EngineState
         cf
         Cols
@@ -599,19 +615,19 @@ remapEngineHandlers ::
         IndexerBlock
         [UtxoOp]
         BlockHash
-remapEngineHandlers interestSet engine =
+remapEngineHandlers handlers engine =
     engine
         { Engine.enginePhase =
             remapPhaseHandlers
-                interestSet
+                handlers
                 (Engine.enginePhase engine)
         }
 
 remapPhaseHandlers ::
-    InterestSet ->
+    NonEmpty (IndexerHandler Cols [UtxoOp]) ->
     Engine.EnginePhase cf Cols op IndexerBlock [UtxoOp] BlockHash ->
     Engine.EnginePhase cf Cols op IndexerBlock [UtxoOp] BlockHash
-remapPhaseHandlers interestSet = \case
+remapPhaseHandlers handlers = \case
     Runner.InRestoration _ ->
         Runner.InRestoration
             (Handler.composeHandlerRestoring handlers)
@@ -619,8 +635,6 @@ remapPhaseHandlers interestSet = \case
         Runner.InFollowing
             count
             (Handler.composeHandlerFollowing handlers)
-  where
-    handlers = liveUtxoHandler interestSet :| []
 
 newIndexerFollowerState ::
     (forall a. IndexerTx cf op a -> IO a) ->

@@ -9,10 +9,10 @@
 
 ## Slice 2 - Wire Follower State
 
-- [ ] T005 Route follower state creation/remapping through `csHandlers` instead of hardcoded `liveUtxoHandler`.
-- [ ] T006 Preserve `csInterestSet` behavior for filtering and waiter bookkeeping.
-- [ ] T007 Run focused follower/indexer tests plus `./gate.sh`.
-- [ ] T008 Commit as `feat(utxo-indexer): use ChainSyncConfig handlers`.
+- [X] T005 Route follower state creation/remapping through `csHandlers` instead of hardcoded `liveUtxoHandler`.
+- [X] T006 Preserve `csInterestSet` behavior for filtering and waiter bookkeeping.
+- [X] T007 Run focused follower/indexer tests plus `./gate.sh`.
+- [X] T008 Commit as `feat(utxo-indexer): use ChainSyncConfig handlers`.
 
 ## Slice 3 - Multi-Handler Regression
 

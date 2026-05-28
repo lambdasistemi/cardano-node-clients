@@ -112,7 +112,7 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     InterestSet (..),
     filterBlockOps,
-    withFollowerInterest,
+    withFollowerHandlers,
  )
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (
     UtxoOp (..),
@@ -571,7 +571,7 @@ mkIntersector bootMode cfg readinessVar idx = self
                 -- an offline rollback.
                 rollbackTo idx (slotOfPoint point)
                 followerState <-
-                    withFollowerInterest (csInterestSet cfg)
+                    withFollowerHandlers (csInterestSet cfg) (csHandlers cfg)
                         <$> newFollowerState idx True
                 pure (mkFollower cfg readinessVar idx followerState)
             , intersectNotFound = case bootMode of
