@@ -28,6 +28,7 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     withChainSyncFollower,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    liveUtxoHandler,
     withRocksDBIndexer,
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
@@ -45,6 +46,7 @@ import Control.Concurrent.STM (
  )
 import Control.Tracer (Tracer (..), nullTracer)
 import Data.ByteString.Short qualified as SBS
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
     getOneEraHash,
@@ -96,6 +98,7 @@ runMainnetSmoke socketPath = do
                         , csReconnectPolicy = defaultReconnectPolicy
                         , csProbeConfig = defaultProbeConfig
                         , csInterestSet = IndexAll
+                        , csHandlers = liveUtxoHandler IndexAll :| []
                         , csBlockTracer = nullTracer
                         , csTipTracer = nullTracer
                         }

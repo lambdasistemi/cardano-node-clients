@@ -43,6 +43,7 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     withChainSyncFollower,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    liveUtxoHandler,
     withInMemoryIndexer,
     withRocksDBIndexer,
  )
@@ -56,6 +57,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
 import Control.Concurrent.STM (atomically)
 import Control.Exception (onException)
 import Control.Tracer (Tracer, nullTracer, traceWith)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Word (Word32, Word64)
 import Ouroboros.Network.Magic (NetworkMagic (..))
 
@@ -153,6 +155,7 @@ toChainSyncCfg cfg =
           -- a 'ChainSyncConfig' directly with
           -- 'IndexAddressSet' to bound the on-disk store.
           csInterestSet = IndexAll
+        , csHandlers = liveUtxoHandler IndexAll :| []
         , csBlockTracer = nullTracer
         , csTipTracer = nullTracer
         }

@@ -2,10 +2,10 @@
 
 ## Slice 1 - Add `csHandlers` Field
 
-- [ ] T001 Add `csHandlers :: NonEmpty (IndexerHandler Cols [UtxoOp])` to `ChainSyncConfig`.
-- [ ] T002 Update required imports and `Show ChainSyncConfig`.
-- [ ] T003 Update direct `ChainSyncConfig` construction sites to compile with the singleton UTxO handler default.
-- [ ] T004 Run a focused build or unit command and commit as `feat(utxo-indexer): add ChainSyncConfig handler list`.
+- [X] T001 Add `csHandlers :: NonEmpty (IndexerHandler Cols [UtxoOp])` to `ChainSyncConfig`.
+- [X] T002 Update required imports and `Show ChainSyncConfig`.
+- [X] T003 Update direct `ChainSyncConfig` construction sites to compile with the singleton UTxO handler default.
+- [X] T004 Run a focused build or unit command and commit as `feat(utxo-indexer): add ChainSyncConfig handler list`.
 
 ## Slice 2 - Wire Follower State
 

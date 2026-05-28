@@ -83,6 +83,9 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
 ) where
 
 import Cardano.Chain.Slotting (EpochSlots (..))
+import Cardano.Node.Client.BlockIndexer.Handler (
+    IndexerHandler,
+ )
 import Cardano.Node.Client.BlockIndexer.Readiness qualified as BI
 import Cardano.Node.Client.N2C.ChainSync (
     Fetched (..),
@@ -100,6 +103,9 @@ import Cardano.Node.Client.N2C.Trace (N2CEvent)
 import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.UTxOIndexer.BlockExtract (
     extractBlock,
+ )
+import Cardano.Node.Client.UTxOIndexer.Columns (
+    Cols,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerFollowerState,
@@ -135,6 +141,7 @@ import Control.Exception (SomeException)
 import Control.Monad (void)
 import Control.Tracer (Tracer)
 import Data.ByteString.Short qualified as SBS
+import Data.List.NonEmpty (NonEmpty)
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Ouroboros.Consensus.Block.Abstract (
@@ -197,6 +204,9 @@ data ChainSyncConfig = ChainSyncConfig
     -- set; 'UtxoSpend' is always processed (a spend on a
     -- previously-filtered create is a clean no-op
     -- because the 'TxInCol' entry never existed).
+    , csHandlers :: !(NonEmpty (IndexerHandler Cols [UtxoOp]))
+    -- ^ Block-indexer storage handlers to apply to each
+    -- extracted UTxO operation batch.
     , csBlockTracer :: !(Tracer IO Block)
     -- ^ Per-roll-forward block tracer supplied to
     -- 'mkChainSyncN2C'. Use 'nullTracer' to preserve the
@@ -228,6 +238,7 @@ instance Show ChainSyncConfig where
             <> show (csProbeConfig cfg)
             <> ", csInterestSet = "
             <> show (csInterestSet cfg)
+            <> ", csHandlers = <handlers>"
             <> ", csBlockTracer = <tracer>"
             <> ", csTipTracer = <tracer>"
             <> " }"

@@ -42,6 +42,7 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     ApplyConflict,
     IndexerHandle (..),
+    liveUtxoHandler,
     withInMemoryIndexer,
  )
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (
@@ -68,6 +69,7 @@ import Control.Exception (try)
 import Control.Tracer (Tracer (..), nullTracer, traceWith)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Set qualified as Set
 import Ouroboros.Consensus.Block.EBB (
     IsEBB (..),
@@ -486,6 +488,7 @@ mkCfg sock =
         , csReconnectPolicy = defaultReconnectPolicy
         , csProbeConfig = defaultProbeConfig
         , csInterestSet = IndexAll
+        , csHandlers = liveUtxoHandler IndexAll :| []
         , csBlockTracer = nullTracer
         , csTipTracer = nullTracer
         }
