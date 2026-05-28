@@ -24,10 +24,10 @@
 
 ## Slice 4 - Haddock and Public Guidance
 
-- [ ] T014 Document `csHandlers` and the recommended handler-extension pattern.
-- [ ] T015 Verify module exports/imports are sufficient for downstream handler-list construction.
-- [ ] T016 Run `./gate.sh`.
-- [ ] T017 Commit as `docs(utxo-indexer): document follower handler seam`.
+- [X] T014 Document `csHandlers` and the recommended handler-extension pattern.
+- [X] T015 Verify module exports/imports are sufficient for downstream handler-list construction.
+- [X] T016 Run `./gate.sh`.
+- [X] T017 Commit as `docs(utxo-indexer): document follower handler seam`.
 
 ## Finalization
 

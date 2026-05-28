@@ -57,6 +57,25 @@ continue importing them from this follower module. New storage
 filtering is applied by the UTxO 'liveUtxoHandler' at the generic
 block-indexer handler boundary, so the follower passes raw extracted
 operations into 'processFollowerBlock'.
+
+= Handler pipeline
+
+'ChainSyncConfig.csHandlers' is the block-indexer handler pipeline
+used by the follower after each block is extracted into @[UtxoOp]@.
+The historical UTxO indexer behavior is preserved by configuring
+@csHandlers = liveUtxoHandler csInterestSet :| []@.
+
+Consumers that add another handler should keep 'liveUtxoHandler' in
+the list when they still need the normal UTxO columns populated for
+'snapshotAt', 'awaitTxIn', resume points, and rollback. Additional
+handlers run through the same follow and rollback fanout as the live
+UTxO handler, so they observe the same follower phase transitions.
+
+The follower obtains its initial 'IndexerFollowerState' from
+'IndexerHandle.newFollowerState' without changing that handle field's
+historical shape, then retargets the phase handlers with
+'withFollowerHandlers'. That helper is the public extension point for
+applying a configured handler list to follower state.
 -}
 module Cardano.Node.Client.UTxOIndexer.Follower (
     -- * Configuration
@@ -205,8 +224,14 @@ data ChainSyncConfig = ChainSyncConfig
     -- previously-filtered create is a clean no-op
     -- because the 'TxInCol' entry never existed).
     , csHandlers :: !(NonEmpty (IndexerHandler Cols [UtxoOp]))
-    -- ^ Block-indexer storage handlers to apply to each
-    -- extracted UTxO operation batch.
+    -- ^ Block-indexer storage handler pipeline used by
+    -- the follower for every extracted UTxO operation
+    -- batch. Use @liveUtxoHandler csInterestSet :| []@
+    -- to preserve the normal UTxO columns. When adding
+    -- extra handlers, keep 'liveUtxoHandler' in this list
+    -- if callers still need the standard UTxO indexer
+    -- reads; every handler in the list participates in
+    -- the same follow and rollback fanout.
     , csBlockTracer :: !(Tracer IO Block)
     -- ^ Per-roll-forward block tracer supplied to
     -- 'mkChainSyncN2C'. Use 'nullTracer' to preserve the

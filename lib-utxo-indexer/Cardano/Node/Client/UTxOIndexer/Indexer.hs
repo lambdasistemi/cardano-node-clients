@@ -560,8 +560,15 @@ This is the handler-list seam used by
 "Cardano.Node.Client.UTxOIndexer.Follower". The public
 'newFollowerState' handle field keeps its historical
 @Bool -> IO IndexerFollowerState@ shape and defaults to 'IndexAll';
-the follower applies this helper internally when
+the follower applies this public helper internally when
 'ChainSyncConfig.csHandlers' supplies a richer handler pipeline.
+
+Use @liveUtxoHandler interestSet :| []@ to preserve the normal UTxO
+indexer behavior. Consumers that append their own handlers should keep
+'liveUtxoHandler' in the list when they still need the standard UTxO
+columns. The supplied handlers replace the follower state's phase
+handlers together, so restore, follow, and rollback use the same
+block-indexer fanout path.
 -}
 withFollowerHandlers ::
     InterestSet ->
