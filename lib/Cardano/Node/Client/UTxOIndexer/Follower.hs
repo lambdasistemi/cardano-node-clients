@@ -82,6 +82,13 @@ module Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
     coldBootResumePoints,
 
+    -- * Same-session history attachment (cursor model 2)
+    -- $cursorModel
+    HistoryAttachment (..),
+    historyAttachment,
+    sharedResumePoint,
+    processSharedFollowerBlock,
+
     -- * Interest-set filter
     -- $interestSet
     InterestSet (..),
@@ -119,9 +126,20 @@ import Cardano.Node.Client.N2C.Reconnect (
     runReconnectLoop,
  )
 import Cardano.Node.Client.N2C.Trace (N2CEvent)
+import Cardano.Node.Client.TxHistoryIndexer.BlockExtract (
+    BlockTx,
+    DecodeTx,
+ )
+import Cardano.Node.Client.TxHistoryIndexer.Indexer (
+    HistoryIndexer,
+    getHistoryResumePoints,
+    processHistoryBlock,
+    rollbackHistoryTo,
+ )
 import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.UTxOIndexer.BlockExtract (
     extractBlock,
+    extractBlockTxs,
  )
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols,
@@ -140,6 +158,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     BlockHash (..),
     SlotNo (..),
  )
+import Cardano.Slotting.Slot qualified as Slot
 import ChainFollower (
     Follower (..),
     Intersector (..),
@@ -159,8 +178,10 @@ import Control.Concurrent.STM (
 import Control.Exception (SomeException)
 import Control.Monad (void)
 import Control.Tracer (Tracer)
+import Data.ByteString (ByteString)
 import Data.ByteString.Short qualified as SBS
 import Data.List.NonEmpty (NonEmpty)
+import Data.Maybe (mapMaybe)
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Ouroboros.Consensus.Block.Abstract (
@@ -240,6 +261,17 @@ data ChainSyncConfig = ChainSyncConfig
     -- ^ Per-roll-forward chain-tip slot tracer supplied
     -- to 'mkChainSyncN2C'. Use 'nullTracer' to preserve
     -- the historical quiet behavior.
+    , csHistory :: !(Maybe HistoryAttachment)
+    -- ^ Optional same-session tx-history attachment. When
+    -- 'Just', the follower extracts each block's
+    -- 'BlockTx' list from the /same/ @fetchedBlock@ it
+    -- extracts UTxO operations from and drives the
+    -- history store through 'processSharedFollowerBlock'
+    -- on the one chain-sync session — never through
+    -- 'csHandlers' (which stays @[UtxoOp]@-only) or
+    -- 'csBlockTracer' (a tracer, not a data path), and
+    -- never via a second chain-sync runner. 'Nothing'
+    -- preserves the historical UTxO-only follower.
     }
 
 instance Show ChainSyncConfig where
@@ -266,7 +298,145 @@ instance Show ChainSyncConfig where
             <> ", csHandlers = <handlers>"
             <> ", csBlockTracer = <tracer>"
             <> ", csTipTracer = <tracer>"
+            <> ", csHistory = "
+            <> maybe "Nothing" (const "Just <history>") (csHistory cfg)
             <> " }"
+
+{- $cursorModel
+The same-session tx-history attachment implements cursor model 2 from
+the implementation plan: /one/ chain-sync session drives both the UTxO
+indexer and the tx-history indexer, each through its own persisted
+cursor, and resume picks the oldest safe point across both stores.
+
+* Roll-forward: 'mkFollower' extracts the block's 'BlockTx' list from
+  the same @fetchedBlock@ it extracts UTxO operations from and applies
+  both through 'processSharedFollowerBlock' — there is no second
+  chain-sync runner and no @csBlockTracer@ data path. @csHandlers@
+  stays @[UtxoOp]@-only.
+* Roll-backward: the same path rolls the history store back via
+  'rollbackHistoryTo' alongside the UTxO rollback, so a chain switch
+  drops history entries above the target slot.
+* Resume: 'sharedResumePoint' negotiates the intersection from the
+  oldest safe point across the UTxO and history persisted cursors, so
+  neither store is asked to skip a block it never saw.
+
+The two stores are separate RocksDB databases, so a per-block write
+across them is not atomic. The model tolerates this: history applies
+are idempotent in the block slot, and resuming from the oldest safe
+point re-applies any block a mid-write crash left in only one store.
+
+= HistoryAttachment
+
+A 'HistoryAttachment' bundles the treasury-neutral 'DecodeTx' plug
+point with the 'HistoryIndexer' the follower writes into. The decoder
+is supplied by the downstream application; this module never inspects
+a 'BlockTx'.
+-}
+
+{- | The same-session tx-history attachment: a treasury-neutral
+'DecodeTx' plug point plus the 'HistoryIndexer' to write decoded
+entries into. Build with 'historyAttachment'.
+-}
+data HistoryAttachment = HistoryAttachment
+    { haDecode :: DecodeTx
+    -- ^ Caller-supplied decoder; owns all application semantics.
+    -- Called with the current block's slot plus each transaction's
+    -- raw bytes (see 'DecodeTx').
+    , haIndexer :: HistoryIndexer
+    -- ^ History store driven by the shared follower path.
+    }
+
+-- | Both fields are functions; show an opaque placeholder.
+instance Show HistoryAttachment where
+    show _ = "HistoryAttachment <decode> <indexer>"
+
+-- | Build a 'HistoryAttachment' from a decoder and a history store.
+historyAttachment :: DecodeTx -> HistoryIndexer -> HistoryAttachment
+historyAttachment = HistoryAttachment
+
+{- | Choose the same-session resume intersection: the oldest safe
+point across the UTxO and history persisted cursors.
+
+Both argument lists are newest-first (as returned by
+@getResumePoints@ / 'getHistoryResumePoints'). The result is whichever
+store's newest retained point has the /smaller/ slot — resuming any
+newer would ask the lagging store to skip blocks it never saw.
+'Nothing' (cold boot) when either store has no retained point.
+-}
+sharedResumePoint ::
+    [(SlotNo, BlockHash)] ->
+    [(SlotNo, BlockHash)] ->
+    Maybe (SlotNo, BlockHash)
+sharedResumePoint utxoPoints historyPoints =
+    case (utxoPoints, historyPoints) of
+        (u@(us, _) : _, h@(hs, _) : _)
+            | us <= hs -> Just u
+            | otherwise -> Just h
+        _ -> Nothing
+
+{- | Apply one block to both the UTxO indexer and the attached
+history store in a single follower pass.
+
+The UTxO operations and the 'BlockTx' list are both extracted from the
+same block upstream. UTxO state is applied first (preserving the
+historical follower behavior), then the 'DecodeTx' is called with this
+block's slot (@toHistorySlot slot@) and each transaction's raw bytes,
+so the decoder keys its entries on the actual block slot rather than
+guessing it; the decoded history entries are filed under the same slot
+via 'processHistoryBlock'. The returned state/flag are exactly the
+UTxO 'processFollowerBlock' result.
+-}
+processSharedFollowerBlock ::
+    IndexerHandle ->
+    HistoryAttachment ->
+    IndexerFollowerState ->
+    Int ->
+    Bool ->
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    [BlockTx] ->
+    IO (IndexerFollowerState, Bool)
+processSharedFollowerBlock
+    idx
+    att
+    followerState
+    securityParamK
+    withinWindow
+    slot
+    bh
+    ops
+    blockTxs = do
+        result <-
+            processFollowerBlock
+                idx
+                followerState
+                securityParamK
+                withinWindow
+                slot
+                bh
+                ops
+        let entries =
+                concat
+                    (mapMaybe (haDecode att (toHistorySlot slot)) blockTxs)
+        processHistoryBlock
+            (haIndexer att)
+            (toHistorySlot slot)
+            (unBlockHash bh)
+            entries
+        pure result
+
+{- | Convert the follower's 'SlotNo' to the history store's
+'Cardano.Slotting.Slot.SlotNo'.
+-}
+toHistorySlot :: SlotNo -> Slot.SlotNo
+toHistorySlot (SlotNo s) = Slot.SlotNo s
+
+{- | Adapt a history resume point to the follower's
+@(SlotNo, BlockHash)@ shape for 'sharedResumePoint'.
+-}
+historyResumePoint :: (Slot.SlotNo, ByteString) -> (SlotNo, BlockHash)
+historyResumePoint (Slot.SlotNo s, hash) = (SlotNo s, BlockHash hash)
 
 {- $interestSet
 Address filter applied to each @[UtxoOp]@ batch by the
@@ -450,9 +620,27 @@ withChainSyncFollowerCore supervise chainSyncRunner tracer cfg idx action = do
     readinessVar <- newTVarIO (initialReadiness now)
     let chainSession = do
             bootMode <- detectBootMode idx
+            historyPts <- case csHistory cfg of
+                Nothing -> pure []
+                Just att ->
+                    fmap historyResumePoint
+                        <$> getHistoryResumePoints (haIndexer att)
             let resumePoints = case bootMode of
                     ColdBoot -> coldBootResumePoints cfg
-                    WarmBoot ps -> fmap toHeaderPoint ps
+                    WarmBoot ps -> case csHistory cfg of
+                        Nothing -> fmap toHeaderPoint ps
+                        -- Same-session resume (cursor model 2):
+                        -- intersect at the oldest safe point across
+                        -- the UTxO and history persisted cursors.
+                        -- If either store has no cursor,
+                        -- 'sharedResumePoint' is 'Nothing' and we
+                        -- cold-boot — resuming at the UTxO warm
+                        -- points would skip the history blocks the
+                        -- empty history store never saw.
+                        Just _ ->
+                            case sharedResumePoint ps historyPts of
+                                Just p -> [toHeaderPoint p]
+                                Nothing -> coldBootResumePoints cfg
             chainSyncRunner
                 (EpochSlots (csByronEpochSlots cfg))
                 (csNetworkMagic cfg)
@@ -659,15 +847,32 @@ mkFollower cfg readinessVar idx = go
                             slot
                             tip
                 (nextFollowerState, _processed) <-
-                    applyBlockOpsWithPhase
-                        cfg
-                        idx
-                        followerState
-                        isEBB
-                        withinWindow
-                        slot
-                        bh
-                        ops
+                    case csHistory cfg of
+                        Nothing ->
+                            applyBlockOpsWithPhase
+                                cfg
+                                idx
+                                followerState
+                                isEBB
+                                withinWindow
+                                slot
+                                bh
+                                ops
+                        Just att ->
+                            -- Shared path: extract the history
+                            -- [BlockTx] from the SAME fetchedBlock
+                            -- and drive both stores in one pass.
+                            applySharedBlockWithPhase
+                                cfg
+                                idx
+                                att
+                                followerState
+                                isEBB
+                                withinWindow
+                                slot
+                                bh
+                                ops
+                                (extractBlockTxs (fetchedBlock fetched))
                 updateReadiness readinessVar slot tip
                 pure (go nextFollowerState)
             , rollBackward = \point -> do
@@ -676,6 +881,14 @@ mkFollower cfg readinessVar idx = go
                         Network.Point.At s ->
                             SlotNo (Network.unSlotNo s)
                 state' <- rollbackFollowerState idx followerState slot
+                -- Roll the attached history store back on the same
+                -- path, dropping entries above the target slot.
+                case csHistory cfg of
+                    Nothing -> pure ()
+                    Just att ->
+                        rollbackHistoryTo
+                            (haIndexer att)
+                            (toHistorySlot slot)
                 pure (Progress (go state'))
             }
 
@@ -722,6 +935,49 @@ applyBlockOpsWithPhase
                     slot
                     bh
                     ops
+
+{- | Shared-path variant of 'applyBlockOpsWithPhase': applies the
+block to the UTxO indexer /and/ the attached history store in one
+pass via 'processSharedFollowerBlock'. EBBs carry no operations and
+are skipped for both stores, exactly as in 'applyBlockOpsWithPhase'.
+-}
+applySharedBlockWithPhase ::
+    ChainSyncConfig ->
+    IndexerHandle ->
+    HistoryAttachment ->
+    IndexerFollowerState ->
+    IsEBB ->
+    Bool ->
+    SlotNo ->
+    BlockHash ->
+    [UtxoOp] ->
+    [BlockTx] ->
+    IO (IndexerFollowerState, Bool)
+applySharedBlockWithPhase
+    cfg
+    idx
+    att
+    followerState
+    isEBB
+    withinWindow
+    slot
+    bh
+    ops
+    blockTxs =
+        case isEBB of
+            IsEBB ->
+                pure (followerState, False)
+            IsNotEBB ->
+                processSharedFollowerBlock
+                    idx
+                    att
+                    followerState
+                    (csSecurityParamK cfg)
+                    withinWindow
+                    slot
+                    bh
+                    ops
+                    blockTxs
 
 {- | Pull the block hash bytes out of an
 'OneEraHash'-shaped 'HeaderPoint'. Origin (no block) maps

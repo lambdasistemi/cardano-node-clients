@@ -491,6 +491,7 @@ mkCfg sock =
         , csHandlers = liveUtxoHandler IndexAll :| []
         , csBlockTracer = nullTracer
         , csTipTracer = nullTracer
+        , csHistory = Nothing
         }
 
 toHeaderPoint :: SlotNo -> BlockHash -> HeaderPoint

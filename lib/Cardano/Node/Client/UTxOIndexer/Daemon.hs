@@ -158,6 +158,7 @@ toChainSyncCfg cfg =
         , csHandlers = liveUtxoHandler IndexAll :| []
         , csBlockTracer = nullTracer
         , csTipTracer = nullTracer
+        , csHistory = Nothing
         }
 
 {- | Derive the bundled daemon's wire-format 'ReadyStatus'
