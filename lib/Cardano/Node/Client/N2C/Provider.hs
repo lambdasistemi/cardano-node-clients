@@ -19,9 +19,12 @@ module Cardano.Node.Client.N2C.Provider (
     mkN2CProvider,
 ) where
 
+import Prelude hiding (foldl')
+
 import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Coerce (coerce)
+import Data.List (foldl')
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
