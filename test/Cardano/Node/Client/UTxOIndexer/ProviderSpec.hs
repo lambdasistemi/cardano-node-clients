@@ -24,10 +24,9 @@ import Cardano.Ledger.Val (inject)
 import Cardano.Node.Client.Provider qualified as LedgerProvider
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols (..),
-    addressIndexCodecs,
-    observationColCodecs,
-    rollbackCodecs,
-    txInColCodecs,
+ )
+import Cardano.Node.Client.UTxOIndexer.Indexer (
+    withInMemoryIndexerRunner,
  )
 import Cardano.Node.Client.UTxOIndexer.Provider (
     Provider (..),
@@ -44,15 +43,10 @@ import Cardano.Node.Client.UTxOIndexer.Types qualified as Indexer
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
-import Data.Dependent.Map (DMap)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as Text
-import Database.KV.Database (mkColumns)
-import Database.KV.InMemory (mkInMemoryDatabase)
 import Database.KV.Transaction (
-    Codecs,
-    DSum ((:=>)),
     RunTransaction (..),
  )
 import Database.KV.Transaction qualified as KV
@@ -130,24 +124,14 @@ withIndexedOutput ::
     ) ->
     IO a
 withIndexedOutput action = do
-    db <- mkInMemoryDatabase (mkColumns [0 :: Int ..] testCodecs)
-    runner@RunTransaction{runTransaction} <- KV.newRunTransaction db
-    runTransaction $ do
-        KV.insert TxInCol testIndexerTxIn indexedAddr
-        KV.insert
-            AddressIndex
-            (Indexer.AddrKey indexedAddr testIndexerTxIn)
-            (Indexer.TxOut (serialize' conwayVersion testTxOut))
-    action runner testLedgerTxIn testTxOut
-
-testCodecs :: DMap Cols Codecs
-testCodecs =
-    KV.fromList
-        [ TxInCol :=> txInColCodecs
-        , AddressIndex :=> addressIndexCodecs
-        , ObservationCol :=> observationColCodecs
-        , RollbackCol :=> rollbackCodecs
-        ]
+    withInMemoryIndexerRunner $ \_handle runner@RunTransaction{runTransaction} -> do
+        runTransaction $ do
+            KV.insert TxInCol testIndexerTxIn indexedAddr
+            KV.insert
+                AddressIndex
+                (Indexer.AddrKey indexedAddr testIndexerTxIn)
+                (Indexer.TxOut (serialize' conwayVersion testTxOut))
+        action runner testLedgerTxIn testTxOut
 
 failingUtxoLedgerProvider :: LedgerProvider.Provider IO
 failingUtxoLedgerProvider =
