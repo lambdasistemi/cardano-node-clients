@@ -22,6 +22,6 @@
 
 ## Slice 3 — Finalization
 
-- [ ] T172-S3 Run `./gate.sh`.
-- [ ] T172-S3 Update PR body with downstream proof link.
-- [ ] T172-S3 Drop `gate.sh` before ready.
+- [X] T172-S3 Run `./gate.sh`.
+- [X] T172-S3 Update PR body with downstream proof link.
+- [X] T172-S3 Drop `gate.sh` before ready.
