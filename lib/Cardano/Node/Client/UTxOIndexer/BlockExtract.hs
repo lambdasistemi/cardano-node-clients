@@ -19,6 +19,7 @@ live below 'cardano-ledger-read''s API surface.
 -}
 module Cardano.Node.Client.UTxOIndexer.BlockExtract (
     extractBlock,
+    extractBlockTxs,
 ) where
 
 import Cardano.Chain.Common (unsafeGetLovelace)
@@ -51,6 +52,10 @@ import Cardano.Ledger.Core qualified as Ledger
 import Cardano.Ledger.Hashes (extractHash, unsafeMakeSafeHash)
 import Cardano.Ledger.TxIn qualified as SH
 import Cardano.Ledger.Val (inject)
+import Cardano.Node.Client.TxHistoryIndexer.BlockExtract (
+    BlockTx,
+    mkBlockTx,
+ )
 import Cardano.Node.Client.Types (Block)
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (UtxoOp (..))
 import Cardano.Node.Client.UTxOIndexer.Types (
@@ -98,6 +103,49 @@ extractBlock blk =
     ( blockSlot blk
     , applyEraFun (changes . getEraTransactions) (fromConsensusBlock blk)
     )
+
+{- | Extract the raw, treasury-neutral per-transaction payloads
+('BlockTx') from a Cardano consensus block, in transaction order.
+
+Each Shelley-family transaction is re-serialised to its on-chain
+CBOR bytes and wrapped in a 'BlockTx'; this library attaches no
+meaning to those bytes — a downstream
+'Cardano.Node.Client.TxHistoryIndexer.BlockExtract.DecodeTx' owns all
+interpretation. Byron transactions carry no treasury history and are
+skipped (history indexing targets the Shelley-and-later eras).
+-}
+extractBlockTxs :: Block -> [BlockTx]
+extractBlockTxs blk =
+    applyEraFun (blockTxs . getEraTransactions) (fromConsensusBlock blk)
+
+{- | Per-era serialisation of a transaction list into 'BlockTx'
+payloads. Byron yields none; every Shelley-family era re-serialises
+each transaction to its CBOR bytes.
+-}
+blockTxs :: forall era. (IsEra era) => [Tx era] -> [BlockTx]
+blockTxs txs = case theEra @era of
+    Byron -> []
+    Shelley -> shelleyBlockTxs (unTx <$> txs)
+    Allegra -> shelleyBlockTxs (unTx <$> txs)
+    Mary -> shelleyBlockTxs (unTx <$> txs)
+    Alonzo -> shelleyBlockTxs (unTx <$> txs)
+    Babbage -> shelleyBlockTxs (unTx <$> txs)
+    Conway -> shelleyBlockTxs (unTx <$> txs)
+    Dijkstra -> shelleyBlockTxs (unTx <$> txs)
+
+{- | Re-serialise each Shelley-family transaction to its CBOR bytes
+and wrap it as a 'BlockTx'. Takes the ledger transaction directly (the
+per-era @TxT era ~ Core.Tx era@ refinement is applied at the call
+site), so the 'EraTx' superclass @EncCBOR (Tx era)@ supplies the
+encoder.
+-}
+shelleyBlockTxs ::
+    forall era.
+    (EraTx era) =>
+    [Ledger.Tx TopTx era] ->
+    [BlockTx]
+shelleyBlockTxs =
+    fmap (mkBlockTx . serialize' (eraProtVerLow @era))
 
 {- | Slot of the block. Cardano blocks are non-genesis;
 the @Origin@ case is structurally impossible here so

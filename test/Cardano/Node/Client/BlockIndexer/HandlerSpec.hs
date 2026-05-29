@@ -309,4 +309,5 @@ testChainSyncConfig =
         , csHandlers = liveUtxoHandler IndexAll :| []
         , csBlockTracer = nullTracer
         , csTipTracer = nullTracer
+        , csHistory = Nothing
         }

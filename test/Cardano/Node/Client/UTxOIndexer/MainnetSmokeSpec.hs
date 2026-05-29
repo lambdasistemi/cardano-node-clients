@@ -101,6 +101,7 @@ runMainnetSmoke socketPath = do
                         , csHandlers = liveUtxoHandler IndexAll :| []
                         , csBlockTracer = nullTracer
                         , csTipTracer = nullTracer
+                        , csHistory = Nothing
                         }
                 progressTarget = SlotNo 5_000_000
             withChainSyncFollower tracer cfg idx $ \fh ->
