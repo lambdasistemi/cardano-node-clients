@@ -340,6 +340,8 @@ entries into. Build with 'historyAttachment'.
 data HistoryAttachment = HistoryAttachment
     { haDecode :: DecodeTx
     -- ^ Caller-supplied decoder; owns all application semantics.
+    -- Called with the current block's slot plus each transaction's
+    -- raw bytes (see 'DecodeTx').
     , haIndexer :: HistoryIndexer
     -- ^ History store driven by the shared follower path.
     }
@@ -377,9 +379,12 @@ history store in a single follower pass.
 
 The UTxO operations and the 'BlockTx' list are both extracted from the
 same block upstream. UTxO state is applied first (preserving the
-historical follower behavior), then the decoded history entries are
-filed under the block's slot via 'processHistoryBlock'. The returned
-state/flag are exactly the UTxO 'processFollowerBlock' result.
+historical follower behavior), then the 'DecodeTx' is called with this
+block's slot (@toHistorySlot slot@) and each transaction's raw bytes,
+so the decoder keys its entries on the actual block slot rather than
+guessing it; the decoded history entries are filed under the same slot
+via 'processHistoryBlock'. The returned state/flag are exactly the
+UTxO 'processFollowerBlock' result.
 -}
 processSharedFollowerBlock ::
     IndexerHandle ->
@@ -411,7 +416,9 @@ processSharedFollowerBlock
                 slot
                 bh
                 ops
-        let entries = concat (mapMaybe (haDecode att) blockTxs)
+        let entries =
+                concat
+                    (mapMaybe (haDecode att (toHistorySlot slot)) blockTxs)
         processHistoryBlock
             (haIndexer att)
             (toHistorySlot slot)

@@ -30,6 +30,7 @@ module Cardano.Node.Client.TxHistoryIndexer.BlockExtract (
 ) where
 
 import Cardano.Node.Client.TxHistoryIndexer.Types (TxSummaryEntry)
+import Cardano.Slotting.Slot (SlotNo)
 import Data.ByteString (ByteString)
 
 {- | Raw, treasury-neutral payload for a single transaction in a
@@ -44,11 +45,20 @@ mkBlockTx :: ByteString -> BlockTx
 mkBlockTx = BlockTx
 
 {- | The decoder plug point. A downstream application supplies a
-function that maps one transaction's raw bytes to the history entries
-it wants persisted, or 'Nothing' if the transaction is irrelevant.
+function that maps the current block's slot plus one transaction's raw
+bytes to the history entries it wants persisted, or 'Nothing' if the
+transaction is irrelevant.
+
+The slot is the 'Cardano.Slotting.Slot.SlotNo' of the block the
+transaction was extracted from — the same slot type
+'Cardano.Node.Client.TxHistoryIndexer.Types.TxSummaryKey' keys on, so a
+decoder can build a well-keyed
+'Cardano.Node.Client.TxHistoryIndexer.Types.TxSummaryEntry' without
+guessing or hardcoding the slot. The shared follower supplies the slot
+of the block being processed; the decoder never has to infer it.
 
 The decoder owns all application semantics; keeping it a function
 type (rather than a class or concrete decoder) is what keeps decoding
 out of this repository.
 -}
-type DecodeTx = BlockTx -> Maybe [TxSummaryEntry]
+type DecodeTx = SlotNo -> BlockTx -> Maybe [TxSummaryEntry]

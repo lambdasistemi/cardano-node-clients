@@ -106,18 +106,20 @@ spec =
 
         describe "shared block-processing path drives both stores"
             $ it
-                "one block populates history via a non-trivial DecodeTx \
+                "one block populates history via a slot-aware DecodeTx \
                 \while preserving UTxO behavior"
             $ withInMemoryIndexer
             $ \utxoIdx ->
                 withInMemoryHistoryIndexer $ \histIdx -> do
-                    let att = historyAttachment decodeOne histIdx
+                    let att = historyAttachment decodeAtSlot histIdx
                     state0 <- newFollowerState utxoIdx True
                     -- Single pass over one block: the UTxO ops and
                     -- the history [BlockTx] extracted from the SAME
                     -- block are applied through one shared seam — no
                     -- second chain-sync runner, no csHandlers/tracer
-                    -- abuse.
+                    -- abuse. The processed slot is supplied here, not
+                    -- baked into a fixture, so a decoder that hardcodes
+                    -- or guesses its slot cannot satisfy the assertion.
                     _ <-
                         processSharedFollowerBlock
                             utxoIdx
@@ -125,7 +127,7 @@ spec =
                             state0
                             2 -- security param k
                             True -- within stability window
-                            (SlotNo 8)
+                            processedSlot
                             (BlockHash (BS.replicate 32 0xBB))
                             [UtxoCreate txInA addrA outA]
                             [mkBlockTx (BS.replicate 32 0xAB)]
@@ -134,36 +136,50 @@ spec =
                     snapshotAt utxoIdx addrA
                         `shouldReturn` [(txInA, outA)]
                     -- History populated through the decoder plug
-                    -- point on the same pass.
+                    -- point on the same pass, keyed at the block slot
+                    -- the decoder received.
                     queryHistory histIdx tenantA scopeX
-                        `shouldReturn` [decodedEntry]
+                        `shouldReturn` [decodedEntryAt expectedHistorySlot]
 
 -- | A treasury-neutral decoder that never emits history entries.
 decodeNothing :: DecodeTx
-decodeNothing = const Nothing
+decodeNothing _ _ = Nothing
 
 {- | A non-trivial, still treasury-neutral decoder: every transaction
-in the block yields one history entry. The decoder is defined in the
-test, not the library, so no scope/redeemer semantics leak into the
-plug point.
+in the block yields one history entry keyed at the /block slot the
+follower passes in/. The decoder is defined in the test, not the
+library, so no scope/redeemer semantics leak into the plug point; and
+because it builds its entry from the received slot it pins the
+slot-aware contract — a decoder that hardcoded a slot would file the
+entry under the wrong key.
 -}
-decodeOne :: DecodeTx
-decodeOne = const (Just [decodedEntry])
+decodeAtSlot :: DecodeTx
+decodeAtSlot slot _ = Just [decodedEntryAt slot]
 
--- | The single entry 'decodeOne' emits for the integration block.
-decodedEntry :: TxSummaryEntry
-decodedEntry =
+{- | The single entry 'decodeAtSlot' emits for the integration block,
+keyed at the slot it received.
+-}
+decodedEntryAt :: Slot.SlotNo -> TxSummaryEntry
+decodedEntryAt slot =
     TxSummaryEntry
         { tseKey =
             TxSummaryKey
                 { tskTenant = tenantA
                 , tskScope = scopeX
-                , tskSlot = Slot.SlotNo 8
+                , tskSlot = slot
                 , tskTxId = TxId (BS.replicate 32 0xAB)
                 , tskRole = TxRole "output"
                 }
         , tsePayload = "history-payload"
         }
+
+-- | The block slot driven through the shared follower pass.
+processedSlot :: SlotNo
+processedSlot = SlotNo 12
+
+-- | The history-store slot the decoder must receive for 'processedSlot'.
+expectedHistorySlot :: Slot.SlotNo
+expectedHistorySlot = Slot.SlotNo 12
 
 tenantA :: TenantId
 tenantA = TenantId "tenant-a"
