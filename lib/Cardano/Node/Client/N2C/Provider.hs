@@ -19,12 +19,10 @@ module Cardano.Node.Client.N2C.Provider (
     mkN2CProvider,
 ) where
 
-import Prelude hiding (foldl')
-
 import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Coerce (coerce)
-import Data.List (foldl')
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -452,7 +450,7 @@ groupUTxOByAddress addrs utxo =
     emptyRequested =
         Map.fromSet (const []) addrs
     grouped =
-        foldl' addEntry Map.empty $
+        List.foldl' addEntry Map.empty $
             Map.toAscList utxo
     addEntry acc (txIn, txOut)
         | Set.member addr addrs =
