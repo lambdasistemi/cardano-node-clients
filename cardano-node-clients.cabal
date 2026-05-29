@@ -64,6 +64,7 @@ library
     Cardano.Node.Client.UTxOIndexer.BlockExtract
     Cardano.Node.Client.UTxOIndexer.Daemon
     Cardano.Node.Client.UTxOIndexer.Follower
+    Cardano.Node.Client.UTxOIndexer.Provider
     Cardano.Node.Client.UTxOIndexer.Server
     Cardano.Node.Client.Validity
 
@@ -117,6 +118,7 @@ library
     , process
     , random
     , retry
+    , rocksdb-kv-transactions:kv-transactions
     , serialise
     , stm
     , text
@@ -238,6 +240,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
+    Cardano.Node.Client.UTxOIndexer.ProviderSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
     Cardano.Node.Client.ValiditySpec
