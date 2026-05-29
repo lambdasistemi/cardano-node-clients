@@ -2,11 +2,11 @@
 
 ## Slice 1 — Storage Foundation
 
-- [ ] T172-S1 Add cabal sublibrary stanza.
-- [ ] T172-S1 Add history types and tenant-prefixed key codecs.
-- [ ] T172-S1 Add in-memory and RocksDB open/query API.
-- [ ] T172-S1 Prove tenant isolation and ordered scope scans.
-- [ ] T172-S1 Commit:
+- [X] T172-S1 Add cabal sublibrary stanza.
+- [X] T172-S1 Add history types and tenant-prefixed key codecs.
+- [X] T172-S1 Add in-memory and RocksDB open/query API.
+- [X] T172-S1 Prove tenant isolation and ordered scope scans.
+- [X] T172-S1 Commit:
   `feat(tx-history): add tenant-prefixed history storage`.
 
 ## Slice 2 — Shared Follower

@@ -211,6 +211,30 @@ library utxo-indexer-lib
     , some
     , stm
 
+library tx-history-indexer-lib
+  import:           warnings
+  visibility:       public
+  hs-source-dirs:   lib-tx-history-indexer
+  default-language: GHC2021
+  exposed-modules:
+    Cardano.Node.Client.TxHistoryIndexer.Columns
+    Cardano.Node.Client.TxHistoryIndexer.Indexer
+    Cardano.Node.Client.TxHistoryIndexer.Types
+
+  build-depends:
+    , base
+    , bytestring
+    , cardano-slotting
+    , containers
+    , data-default-class
+    , dependent-map
+    , dependent-sum
+    , lens
+    , rocksdb-haskell-jprupp
+    , rocksdb-kv-transactions
+    , rocksdb-kv-transactions:kv-transactions
+    , stm
+
 executable utxo-indexer
   import:           warnings
   hs-source-dirs:   app/utxo-indexer
@@ -234,6 +258,7 @@ test-suite unit-tests
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
+    Cardano.Node.Client.TxHistoryIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.BlockExtractSpec
     Cardano.Node.Client.UTxOIndexer.DaemonSpec
     Cardano.Node.Client.UTxOIndexer.FollowerSpec
@@ -265,6 +290,7 @@ test-suite unit-tests
     , cardano-ledger-mary
     , cardano-node-clients
     , cardano-node-clients:block-indexer
+    , cardano-node-clients:tx-history-indexer-lib
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting
     , cardano-strict-containers
