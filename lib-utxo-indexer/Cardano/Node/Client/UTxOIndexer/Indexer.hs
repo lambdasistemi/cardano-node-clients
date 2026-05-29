@@ -68,7 +68,9 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     withFollowerHandlers,
     withFollowerInterest,
     withInMemoryIndexer,
+    withInMemoryIndexerRunner,
     withRocksDBIndexer,
+    withRocksDBIndexerRunner,
 
     -- * UTxO operations and filters
     InterestSet (..),
@@ -376,9 +378,25 @@ RocksDB one.
 -}
 withInMemoryIndexer :: (IndexerHandle -> IO a) -> IO a
 withInMemoryIndexer action = do
+    withInMemoryIndexerRunner $ \handle _runner ->
+        action handle
+
+{- | Open an in-memory indexer and expose both the public
+'IndexerHandle' and the underlying transaction runner.
+
+Most callers should use 'withInMemoryIndexer'. Server-style callers
+that also need typed transactional reads through
+"Cardano.Node.Client.UTxOIndexer.Provider" use this variant to pass
+the same runner to @'Cardano.Node.Client.UTxOIndexer.Provider.withProvider'@.
+-}
+withInMemoryIndexerRunner ::
+    (forall cf op. IndexerHandle -> RunTransaction IO cf Cols op -> IO a) ->
+    IO a
+withInMemoryIndexerRunner action = do
     db <- mkInMemoryDatabase (mkColumns [0 :: Int ..] indexerCodecs)
     runner <- newRunTransaction db
-    bootHandle runner action
+    bootHandle runner $ \handle ->
+        action handle runner
 
 {- | Open a RocksDB-backed indexer at @path@ (creating
 the directory tree if missing) and run the action with
@@ -400,6 +418,22 @@ the names are paired with the right typed selector.
 withRocksDBIndexer ::
     FilePath -> (IndexerHandle -> IO a) -> IO a
 withRocksDBIndexer path action =
+    withRocksDBIndexerRunner path $ \handle _runner ->
+        action handle
+
+{- | Open a RocksDB-backed indexer and expose both the public
+'IndexerHandle' and the underlying transaction runner.
+
+The handle remains the mutation/follower surface; the runner is the
+read transaction surface used by the typed provider bridge. Returning
+them from the same bracket guarantees the HTTP/server layer reads from
+the exact store its chain-sync follower is mutating.
+-}
+withRocksDBIndexerRunner ::
+    FilePath ->
+    (forall cf op. IndexerHandle -> RunTransaction IO cf Cols op -> IO a) ->
+    IO a
+withRocksDBIndexerRunner path action =
     withDBCF
         path
         def{createIfMissing = True}
@@ -414,7 +448,8 @@ withRocksDBIndexer path action =
                         rdb
                         (mkColumns (columnFamilies rdb) indexerCodecs)
             runner <- newRunTransaction database
-            bootHandle runner action
+            bootHandle runner $ \handle ->
+                action handle runner
 
 {- | Final stage shared by both constructors: derive the
 initial rollback-log counter from the database, set up
