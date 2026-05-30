@@ -33,6 +33,7 @@ import Cardano.Node.Client.TxHistoryIndexer.Indexer (
 import Cardano.Node.Client.TxHistoryIndexer.Types (
     HistoryScope (..),
     TenantId (..),
+    TxDirection (..),
     TxId (..),
     TxRole (..),
     TxSummary (..),
@@ -43,6 +44,8 @@ import Cardano.Node.Client.TxHistoryIndexer.Types (
     TxSummaryValue (..),
     summaryToEntry,
     summaryValueFromBytes,
+    summaryValueOf,
+    summaryValueToBytes,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import Data.ByteString (ByteString)
@@ -217,6 +220,14 @@ spec =
                             (TxId (BS.replicate 32 0x46))
                             `shouldReturn` Just summary
 
+            it "round-trips direction through the value codec" $ do
+                let value =
+                        (summaryValueOf (mkSummary tenantA scopeX 10 0x48 roleInput))
+                            { tsvDirection = TxDirection "inbound"
+                            }
+                summaryValueFromBytes (summaryValueToBytes value)
+                    `shouldBe` Just value
+
         describe "RocksDB compatibility" $ do
             it "opens a store created with the previous two column families" $
                 withSystemTempDirectory "tx-history-rocks-legacy-schema" $
@@ -244,6 +255,31 @@ spec =
                             , tsvFee = Nothing
                             , tsvRequiredSigners = []
                             , tsvBlockHash = Nothing
+                            , tsvDirection = TxDirection "outbound"
+                            }
+
+            it "decodes pre-direction v1 detail bytes as outbound" $ do
+                let payloadBytes = "v1-payload"
+                    v1Bytes =
+                        "\NULtx-summary-v1"
+                            <> lenPrefixed16Test payloadBytes
+                            <> "\NUL\NUL" -- inputs
+                            <> "\NUL\NUL" -- outputs
+                            <> "\NUL" -- redeemer
+                            <> "\NUL" -- fee
+                            <> "\NUL\NUL" -- required signers
+                            <> "\NUL" -- block hash
+                summaryValueFromBytes v1Bytes
+                    `shouldBe` Just
+                        TxSummaryValue
+                            { tsvPayload = payloadBytes
+                            , tsvInputs = []
+                            , tsvOutputs = []
+                            , tsvRedeemer = Nothing
+                            , tsvFee = Nothing
+                            , tsvRequiredSigners = []
+                            , tsvBlockHash = Nothing
+                            , tsvDirection = TxDirection "outbound"
                             }
 
 tenantA, tenantB :: TenantId
@@ -276,10 +312,16 @@ mkEntry tenant scope slot tx role =
                 , tskRole = role
                 }
         , tsePayload = payload tx
+        , tseDirection = TxDirection "outbound"
         }
 
 payload :: Word8 -> ByteString
 payload = BS.singleton
+
+lenPrefixed16Test :: ByteString -> ByteString
+lenPrefixed16Test bs =
+    let n = BS.length bs
+     in BS.pack [fromIntegral (n `div` 256), fromIntegral n] <> bs
 
 mkSummary ::
     TenantId ->
@@ -317,4 +359,5 @@ mkSummary tenant scope slot tx role =
         , txsFee = Just 2
         , txsRequiredSigners = ["signer-a", "signer-b"]
         , txsBlockHash = Just "block-hash"
+        , txsDirection = TxDirection "outbound"
         }

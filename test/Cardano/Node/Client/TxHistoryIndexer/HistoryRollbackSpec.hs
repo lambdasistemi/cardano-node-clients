@@ -35,6 +35,7 @@ import Cardano.Node.Client.TxHistoryIndexer.Indexer (
 import Cardano.Node.Client.TxHistoryIndexer.Types (
     HistoryScope (..),
     TenantId (..),
+    TxDirection (..),
     TxId (..),
     TxRole (..),
     TxSummary,
@@ -139,6 +140,7 @@ entryAt slot tx =
                 , tskRole = roleInput
                 }
         , tsePayload = BS.singleton tx
+        , tseDirection = TxDirection "outbound"
         }
 
 summaryAt :: Word8 -> Word8 -> TxSummary
