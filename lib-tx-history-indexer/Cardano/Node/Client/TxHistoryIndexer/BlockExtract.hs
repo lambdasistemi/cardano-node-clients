@@ -17,7 +17,7 @@ this library never interprets the bytes.
 'BlockTx' carries opaque bytes only. There is deliberately no scope,
 role, redeemer, or any application-specific structure here: a
 'DecodeTx' is free to parse the bytes however it likes and emit
-'Cardano.Node.Client.TxHistoryIndexer.Types.TxSummaryEntry' values, or
+'Cardano.Node.Client.TxHistoryIndexer.Types.TxSummary' values, or
 'Nothing' for transactions it does not care about.
 -}
 module Cardano.Node.Client.TxHistoryIndexer.BlockExtract (
@@ -29,7 +29,7 @@ module Cardano.Node.Client.TxHistoryIndexer.BlockExtract (
     DecodeTx,
 ) where
 
-import Cardano.Node.Client.TxHistoryIndexer.Types (TxSummaryEntry)
+import Cardano.Node.Client.TxHistoryIndexer.Types (TxSummary)
 import Cardano.Slotting.Slot (SlotNo)
 import Data.ByteString (ByteString)
 
@@ -53,7 +53,7 @@ The slot is the 'Cardano.Slotting.Slot.SlotNo' of the block the
 transaction was extracted from — the same slot type
 'Cardano.Node.Client.TxHistoryIndexer.Types.TxSummaryKey' keys on, so a
 decoder can build a well-keyed
-'Cardano.Node.Client.TxHistoryIndexer.Types.TxSummaryEntry' without
+'Cardano.Node.Client.TxHistoryIndexer.Types.TxSummary' without
 guessing or hardcoding the slot. The shared follower supplies the slot
 of the block being processed; the decoder never has to infer it.
 
@@ -61,4 +61,4 @@ The decoder owns all application semantics; keeping it a function
 type (rather than a class or concrete decoder) is what keeps decoding
 out of this repository.
 -}
-type DecodeTx = SlotNo -> BlockTx -> Maybe [TxSummaryEntry]
+type DecodeTx = SlotNo -> BlockTx -> Maybe [TxSummary]

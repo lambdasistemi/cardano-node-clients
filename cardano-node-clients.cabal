@@ -301,6 +301,7 @@ test-suite unit-tests
     , chain-follower
     , containers
     , contra-tracer
+    , data-default-class
     , dependent-map
     , directory
     , filepath
@@ -313,6 +314,7 @@ test-suite unit-tests
     , plutus-core
     , QuickCheck
     , random
+    , rocksdb-haskell-jprupp
     , rocksdb-kv-transactions
     , rocksdb-kv-transactions:kv-transactions
     , sop-extras

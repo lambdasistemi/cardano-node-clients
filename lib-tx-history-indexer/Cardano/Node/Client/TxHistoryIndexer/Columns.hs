@@ -11,13 +11,13 @@ against the 'Database.KV.Transaction' abstraction from
 
 Two columns:
 
-* 'HistoryCol' :: @KV TxSummaryKey ByteString@ — entries filed
+* 'HistoryCol' :: @KV TxSummaryKey TxSummaryValue@ — entries filed
   under the ordered composite key
   @lenTenant || tenant || lenScope || scope || slotBE || txid ||
   role@ (see "Cardano.Node.Client.TxHistoryIndexer.Types"), so a
   cursor seek to 'scopePrefix' yields every entry of one
   @(tenant, scope)@ in @(slot, txid, role)@ order. The value is
-  the opaque payload blob, stored verbatim.
+  the decoder-supplied summary detail, stored verbatim.
 
 * 'HistoryBlockCol' :: @KV SlotNo HistoryBlock@ — the per-block
   rollback/resume log keyed by chain slot (big-endian, so a cursor
@@ -47,8 +47,11 @@ module Cardano.Node.Client.TxHistoryIndexer.Columns (
 
 import Cardano.Node.Client.TxHistoryIndexer.Types (
     TxSummaryKey,
+    TxSummaryValue,
     summaryKeyFromBytes,
     summaryKeyToBytes,
+    summaryValueFromBytes,
+    summaryValueToBytes,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import Control.Lens (Prism', prism')
@@ -82,12 +85,12 @@ data HistoryBlock = HistoryBlock
 
 -- | The tx-history indexer database's column families.
 data Cols c where
-    -- | Entries table: @TxSummaryKey → payload@. Key is the
+    -- | Entries table: @TxSummaryKey → TxSummaryValue@. Key is the
     -- ordered composite key; a cursor prefix-scan by
     -- 'Cardano.Node.Client.TxHistoryIndexer.Types.scopePrefix'
     -- yields every entry of one @(tenant, scope)@ in
     -- @(slot, txid, role)@ order.
-    HistoryCol :: Cols (KV TxSummaryKey ByteString)
+    HistoryCol :: Cols (KV TxSummaryKey TxSummaryValue)
     -- | Per-block rollback/resume log: @SlotNo → HistoryBlock@,
     -- keyed by chain slot in big-endian byte order.
     HistoryBlockCol :: Cols (KV SlotNo HistoryBlock)
@@ -104,11 +107,11 @@ instance GCompare Cols where
     gcompare HistoryBlockCol HistoryBlockCol = GEQ
 
 -- | Codecs for 'HistoryCol'.
-historyColCodecs :: Codecs (KV TxSummaryKey ByteString)
+historyColCodecs :: Codecs (KV TxSummaryKey TxSummaryValue)
 historyColCodecs =
     Codecs
         { keyCodec = summaryKeyPrism
-        , valueCodec = payloadPrism
+        , valueCodec = summaryValuePrism
         }
 
 -- | Codecs for 'HistoryBlockCol'.
@@ -140,8 +143,8 @@ encodeKey k = case summaryKeyToBytes k of
             "summaryKeyPrism: tenant or scope exceeds 255 \
             \bytes — invariant violation"
 
-payloadPrism :: Prism' ByteString ByteString
-payloadPrism = prism' id Just
+summaryValuePrism :: Prism' ByteString TxSummaryValue
+summaryValuePrism = prism' summaryValueToBytes summaryValueFromBytes
 
 slotPrism :: Prism' ByteString SlotNo
 slotPrism = prism' encode decode

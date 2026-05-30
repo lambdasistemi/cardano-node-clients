@@ -37,8 +37,10 @@ import Cardano.Node.Client.TxHistoryIndexer.Types (
     TenantId (..),
     TxId (..),
     TxRole (..),
+    TxSummary,
     TxSummaryEntry (..),
     TxSummaryKey (..),
+    entryToSummary,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import Data.ByteString (ByteString)
@@ -59,17 +61,17 @@ spec =
                             ix
                             (SlotNo 1)
                             (blockHash 1)
-                            [entryAt 1 0x11]
+                            [summaryAt 1 0x11]
                         processHistoryBlock
                             ix
                             (SlotNo 2)
                             (blockHash 2)
-                            [entryAt 2 0x22]
+                            [summaryAt 2 0x22]
                         processHistoryBlock
                             ix
                             (SlotNo 3)
                             (blockHash 3)
-                            [entryAt 3 0x33]
+                            [summaryAt 3 0x33]
                         rollbackHistoryTo ix (SlotNo 1)
                         queryHistory ix tenantA scopeX
                             `shouldReturn` [entryAt 1 0x11]
@@ -81,12 +83,12 @@ spec =
                             ix
                             (SlotNo 1)
                             (blockHash 1)
-                            [entryAt 1 0x11]
+                            [summaryAt 1 0x11]
                         processHistoryBlock
                             ix
                             (SlotNo 2)
                             (blockHash 2)
-                            [entryAt 2 0x22]
+                            [summaryAt 2 0x22]
                         pts <- getHistoryResumePoints ix
                         take 1 pts `shouldBe` [(SlotNo 2, blockHash 2)]
 
@@ -98,7 +100,7 @@ spec =
                                 ix
                                 (SlotNo 1)
                                 (blockHash 1)
-                                [entryAt 1 0x11]
+                                [summaryAt 1 0x11]
                         before <-
                             withRocksDBHistoryIndexer dir $ \ix ->
                                 queryHistory ix tenantA scopeX
@@ -108,7 +110,7 @@ spec =
                                     ix
                                     (SlotNo 1)
                                     (blockHash 1)
-                                    [entryAt 1 0x11]
+                                    [summaryAt 1 0x11]
                                 queryHistory ix tenantA scopeX
                         before `shouldBe` [entryAt 1 0x11]
                         after `shouldBe` before
@@ -138,3 +140,6 @@ entryAt slot tx =
                 }
         , tsePayload = BS.singleton tx
         }
+
+summaryAt :: Word8 -> Word8 -> TxSummary
+summaryAt slot tx = entryToSummary (entryAt slot tx)

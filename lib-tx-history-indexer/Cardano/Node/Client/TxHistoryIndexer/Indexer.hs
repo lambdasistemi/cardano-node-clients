@@ -11,8 +11,11 @@ Holds the tx-history indexer's state behind a backend-agnostic
 
 Slice 1 operations:
 
-* 'appendHistory' files a batch of 'TxSummaryEntry' under their
-  ordered composite keys.
+* 'appendSummaries' files a batch of detailed 'TxSummary' rows under
+  their ordered composite keys and maintains a tenant-local tx-id
+  lookup.
+* 'appendHistory' is the legacy empty-detail wrapper over
+  'appendSummaries'.
 * 'queryHistory' returns every entry of a single
   @(tenant, scope)@, ordered by @(slot, txid, role)@.
 
@@ -43,8 +46,9 @@ Two backends share the same handle and surface:
   a 'Map' from chain slot to the block's 'HistoryBlock' rollback row.
 * 'withRocksDBHistoryIndexer' uses a @kv-transactions@ RocksDB
   'Database' keyed by the 'Cols' GADT; the same ordered key codec
-  drives the on-disk byte order, and the 'HistoryBlockCol' column
-  persists the rollback/resume log.
+  drives the on-disk byte order. Direct tx-id lookup rows live in the
+  entries column under an internal reserved key namespace, and the
+  'HistoryBlockCol' column persists the rollback/resume log.
 -}
 module Cardano.Node.Client.TxHistoryIndexer.Indexer (
     -- * Indexer handle
@@ -54,7 +58,9 @@ module Cardano.Node.Client.TxHistoryIndexer.Indexer (
 
     -- * Slice 1 operations
     appendHistory,
+    appendSummaries,
     queryHistory,
+    getByTxId,
 
     -- * Slice 2 block/rollback/resume operations
     processHistoryBlock,
@@ -68,14 +74,24 @@ import Cardano.Node.Client.TxHistoryIndexer.Columns (
     historyCodecs,
  )
 import Cardano.Node.Client.TxHistoryIndexer.Types (
-    HistoryScope,
-    TenantId,
+    HistoryScope (..),
+    TenantId (..),
     TxId (..),
+    TxIdKey (..),
     TxRole (..),
+    TxSummary (..),
     TxSummaryEntry (..),
     TxSummaryKey (..),
+    TxSummaryValue (..),
+    entryToSummary,
     scopePrefix,
+    summaryFromValue,
+    summaryKeyFromBytes,
     summaryKeyToBytes,
+    summaryToEntry,
+    summaryValueOf,
+    txIdKeyOf,
+    txIdKeyToBytes,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import Control.Concurrent.STM (
@@ -102,10 +118,12 @@ import Database.KV.Database (KV, mkColumns)
 import Database.KV.RocksDB (mkRocksDBDatabase)
 import Database.KV.Transaction (
     RunTransaction (..),
+    Transaction,
     delete,
     insert,
     iterating,
     newRunTransaction,
+    query,
  )
 import Database.RocksDB (
     Config (..),
@@ -117,15 +135,17 @@ import Database.RocksDB (
 in-memory and RocksDB backends provide the same operations.
 -}
 data HistoryIndexer = HistoryIndexer
-    { hiAppend :: [TxSummaryEntry] -> IO ()
-    -- ^ File a batch of entries under their ordered keys.
+    { hiAppendSummaries :: [TxSummary] -> IO ()
+    -- ^ File a batch of detailed summaries under their ordered keys.
     , hiQuery :: TenantId -> HistoryScope -> IO [TxSummaryEntry]
     -- ^ Return every entry of @(tenant, scope)@, ordered by
     -- @(slot, txid, role)@.
+    , hiGetByTxId :: TenantId -> TxId -> IO (Maybe TxSummary)
+    -- ^ Directly look up a detailed summary by tenant-local tx id.
     , hiProcessBlock ::
         SlotNo ->
         ByteString ->
-        [TxSummaryEntry] ->
+        [TxSummary] ->
         IO ()
     -- ^ File a block's entries and record its
     -- @(slot, blockHash)@ rollback/resume point.
@@ -139,7 +159,14 @@ data HistoryIndexer = HistoryIndexer
 ordered composite-key bytes ('summaryKeyToBytes').
 -}
 appendHistory :: HistoryIndexer -> [TxSummaryEntry] -> IO ()
-appendHistory = hiAppend
+appendHistory indexer = appendSummaries indexer . fmap entryToSummary
+
+{- | File a batch of detailed history summaries. Each summary is keyed
+by its ordered composite-key bytes ('summaryKeyToBytes') and is also
+available through 'getByTxId'.
+-}
+appendSummaries :: HistoryIndexer -> [TxSummary] -> IO ()
+appendSummaries = hiAppendSummaries
 
 {- | Return every entry filed under @(tenant, scope)@, ordered
 by @(slot, txid, role)@. Entries of other tenants or scopes —
@@ -152,6 +179,17 @@ queryHistory ::
     IO [TxSummaryEntry]
 queryHistory = hiQuery
 
+{- | Return the detailed summary for a tenant-local transaction id.
+This is a direct lookup via the secondary index; it does not scan
+scopes or call a node.
+-}
+getByTxId ::
+    HistoryIndexer ->
+    TenantId ->
+    TxId ->
+    IO (Maybe TxSummary)
+getByTxId = hiGetByTxId
+
 {- | File a block's history entries and record a @(slot, blockHash)@
 rollback/resume point in the same write. Idempotent in the block slot:
 re-applying an already-applied block overwrites the same keys and the
@@ -161,7 +199,7 @@ processHistoryBlock ::
     HistoryIndexer ->
     SlotNo ->
     ByteString ->
-    [TxSummaryEntry] ->
+    [TxSummary] ->
     IO ()
 processHistoryBlock = hiProcessBlock
 
@@ -184,12 +222,13 @@ getHistoryResumePoints = hiResumePoints
 rollback/resume log.
 -}
 data MemState = MemState
-    { msEntries :: !(Map ByteString TxSummaryEntry)
+    { msEntries :: !(Map ByteString TxSummary)
+    , msByTxId :: !(Map ByteString TxSummary)
     , msBlocks :: !(Map SlotNo HistoryBlock)
     }
 
 emptyMemState :: MemState
-emptyMemState = MemState Map.empty Map.empty
+emptyMemState = MemState Map.empty Map.empty Map.empty
 
 {- | Open an in-memory tx-history indexer, run the action with
 the handle, and discard the store on exit. The store starts
@@ -200,41 +239,55 @@ withInMemoryHistoryIndexer action = do
     store <- newTVarIO emptyMemState
     action
         HistoryIndexer
-            { hiAppend = memAppend store
+            { hiAppendSummaries = memAppendSummaries store
             , hiQuery = memQuery store
+            , hiGetByTxId = memGetByTxId store
             , hiProcessBlock = memProcessBlock store
             , hiRollbackTo = memRollbackTo store
             , hiResumePoints = memResumePoints store
             }
 
-insertEntry ::
-    Map ByteString TxSummaryEntry ->
-    TxSummaryEntry ->
-    Map ByteString TxSummaryEntry
-insertEntry m entry =
-    case summaryKeyToBytes (tseKey entry) of
+insertSummary ::
+    Map ByteString TxSummary ->
+    TxSummary ->
+    Map ByteString TxSummary
+insertSummary m summary =
+    case summaryKeyToBytes (txsKey summary) of
         Nothing -> m
-        Just k -> Map.insert k entry m
+        Just k -> Map.insert k summary m
 
-memAppend :: TVar MemState -> [TxSummaryEntry] -> IO ()
-memAppend store entries =
+insertTxIdSummary ::
+    Map ByteString TxSummary ->
+    TxSummary ->
+    Map ByteString TxSummary
+insertTxIdSummary m summary =
+    case txIdKeyToBytes (txIdKeyOf (txsKey summary)) of
+        Nothing -> m
+        Just k -> Map.insert k summary m
+
+memAppendSummaries :: TVar MemState -> [TxSummary] -> IO ()
+memAppendSummaries store summaries =
     atomically $ modifyTVar' store $ \st ->
-        st{msEntries = foldl insertEntry (msEntries st) entries}
+        st
+            { msEntries = foldl insertSummary (msEntries st) summaries
+            , msByTxId = foldl insertTxIdSummary (msByTxId st) summaries
+            }
 
 memProcessBlock ::
     TVar MemState ->
     SlotNo ->
     ByteString ->
-    [TxSummaryEntry] ->
+    [TxSummary] ->
     IO ()
-memProcessBlock store slot hash entries =
+memProcessBlock store slot hash summaries =
     atomically $ modifyTVar' store $ \st ->
         st
-            { msEntries = foldl insertEntry (msEntries st) entries
+            { msEntries = foldl insertSummary (msEntries st) summaries
+            , msByTxId = foldl insertTxIdSummary (msByTxId st) summaries
             , msBlocks =
                 Map.insert
                     slot
-                    (HistoryBlock hash (tseKey <$> entries))
+                    (HistoryBlock hash (txsKey <$> summaries))
                     (msBlocks st)
             }
 
@@ -251,9 +304,17 @@ memRollbackTo store target =
                 , k <- hbEntryKeys hb
                 , Just kb <- [summaryKeyToBytes k]
                 ]
+            staleTxIdKeyBytes =
+                [ kb
+                | hb <- Map.elems stale
+                , k <- hbEntryKeys hb
+                , Just kb <- [txIdKeyToBytes (txIdKeyOf k)]
+                ]
          in st
                 { msEntries =
                     foldl (flip Map.delete) (msEntries st) staleKeyBytes
+                , msByTxId =
+                    foldl (flip Map.delete) (msByTxId st) staleTxIdKeyBytes
                 , msBlocks = keep
                 }
 
@@ -275,10 +336,21 @@ memQuery store tenant scope = do
     pure $ case scopePrefix tenant scope of
         Nothing -> []
         Just prefix ->
-            [ entry
-            | (k, entry) <- Map.toAscList (msEntries st)
+            [ summaryToEntry summary
+            | (k, summary) <- Map.toAscList (msEntries st)
             , prefix `BS.isPrefixOf` k
             ]
+
+memGetByTxId ::
+    TVar MemState ->
+    TenantId ->
+    TxId ->
+    IO (Maybe TxSummary)
+memGetByTxId store tenant txid = do
+    st <- readTVarIO store
+    pure $ do
+        keyBytes <- txIdKeyToBytes (TxIdKey tenant txid)
+        Map.lookup keyBytes (msByTxId st)
 
 -- RocksDB backend --------------------------------------------------
 
@@ -287,8 +359,8 @@ the directory tree if missing) and run the action with the
 handle. The on-disk store survives process restart.
 
 Two column families are created: @tx-history.entries@ (the
-'HistoryCol' table) and @tx-history.blocks@ (the 'HistoryBlockCol'
-rollback/resume log).
+'HistoryCol' table, including reserved direct-lookup rows) and
+@tx-history.blocks@ (the 'HistoryBlockCol' rollback/resume log).
 -}
 withRocksDBHistoryIndexer ::
     FilePath -> (HistoryIndexer -> IO a) -> IO a
@@ -307,38 +379,42 @@ withRocksDBHistoryIndexer path action =
             runner <- newRunTransaction database
             action
                 HistoryIndexer
-                    { hiAppend = rocksAppend runner
+                    { hiAppendSummaries = rocksAppendSummaries runner
                     , hiQuery = rocksQuery runner
+                    , hiGetByTxId = rocksGetByTxId runner
                     , hiProcessBlock = rocksProcessBlock runner
                     , hiRollbackTo = rocksRollbackTo runner
                     , hiResumePoints = rocksResumePoints runner
                     }
 
-rocksAppend ::
+rocksAppendSummaries ::
     RunTransaction IO cf Cols op ->
-    [TxSummaryEntry] ->
+    [TxSummary] ->
     IO ()
-rocksAppend RunTransaction{runTransaction} entries =
+rocksAppendSummaries RunTransaction{runTransaction} summaries =
     runTransaction $
-        mapM_
-            (\e -> insert HistoryCol (tseKey e) (tsePayload e))
-            entries
+        forM_ summaries insertSummaryRows
 
 rocksProcessBlock ::
     RunTransaction IO cf Cols op ->
     SlotNo ->
     ByteString ->
-    [TxSummaryEntry] ->
+    [TxSummary] ->
     IO ()
-rocksProcessBlock RunTransaction{runTransaction} slot hash entries =
+rocksProcessBlock RunTransaction{runTransaction} slot hash summaries =
     runTransaction $ do
-        mapM_
-            (\e -> insert HistoryCol (tseKey e) (tsePayload e))
-            entries
+        forM_ summaries insertSummaryRows
         insert
             HistoryBlockCol
             slot
-            (HistoryBlock hash (tseKey <$> entries))
+            (HistoryBlock hash (txsKey <$> summaries))
+
+insertSummaryRows ::
+    TxSummary ->
+    Transaction IO cf Cols op ()
+insertSummaryRows summary = do
+    insert HistoryCol (txsKey summary) (summaryValueOf summary)
+    insert HistoryCol (txIdLookupKeyOf (txsKey summary)) (summaryKeyRefValue (txsKey summary))
 
 rocksRollbackTo ::
     RunTransaction IO cf Cols op ->
@@ -349,7 +425,9 @@ rocksRollbackTo RunTransaction{runTransaction} target =
         rows <- iterating HistoryBlockCol collectAllBlocks
         forM_ rows $ \(slot, hb) ->
             when (slot > target) $ do
-                mapM_ (delete HistoryCol) (hbEntryKeys hb)
+                forM_ (hbEntryKeys hb) $ \key -> do
+                    delete HistoryCol key
+                    delete HistoryCol (txIdLookupKeyOf key)
                 delete HistoryBlockCol slot
 
 rocksResumePoints ::
@@ -368,6 +446,49 @@ rocksQuery ::
 rocksQuery RunTransaction{runTransaction} tenant scope =
     runTransaction $
         iterating HistoryCol (scanHistory tenant scope)
+
+rocksGetByTxId ::
+    RunTransaction IO cf Cols op ->
+    TenantId ->
+    TxId ->
+    IO (Maybe TxSummary)
+rocksGetByTxId RunTransaction{runTransaction} tenant txid =
+    runTransaction $ do
+        mKeyValue <- query HistoryCol (txIdLookupKey tenant txid)
+        case mKeyValue >>= summaryKeyFromBytes . tsvPayload of
+            Nothing -> pure Nothing
+            Just key -> fmap (summaryFromValue key) <$> query HistoryCol key
+
+txIdLookupKeyOf :: TxSummaryKey -> TxSummaryKey
+txIdLookupKeyOf TxSummaryKey{tskTenant, tskTxId} =
+    txIdLookupKey tskTenant tskTxId
+
+{- | Reserved key namespace for the direct txid lookup row stored in
+'HistoryCol'. Keeping the lookup inside the existing entries column
+lets an already-created two-column RocksDB database open after this
+schema extension.
+-}
+txIdLookupKey :: TenantId -> TxId -> TxSummaryKey
+txIdLookupKey (TenantId tenant) txid =
+    TxSummaryKey
+        { tskTenant = TenantId "\NULtx-history-by-txid"
+        , tskScope = HistoryScope tenant
+        , tskSlot = SlotNo 0
+        , tskTxId = txid
+        , tskRole = TxRole "\NULlookup"
+        }
+
+summaryKeyRefValue :: TxSummaryKey -> TxSummaryValue
+summaryKeyRefValue key =
+    TxSummaryValue
+        { tsvPayload = maybe BS.empty id (summaryKeyToBytes key)
+        , tsvInputs = []
+        , tsvOutputs = []
+        , tsvRedeemer = Nothing
+        , tsvFee = Nothing
+        , tsvRequiredSigners = []
+        , tsvBlockHash = Nothing
+        }
 
 {- | Cursor program: collect every row of the per-block
 rollback/resume log in ascending slot order.
@@ -389,7 +510,7 @@ scanHistory ::
     (Monad m) =>
     TenantId ->
     HistoryScope ->
-    Cursor m (KV TxSummaryKey ByteString) [TxSummaryEntry]
+    Cursor m (KV TxSummaryKey TxSummaryValue) [TxSummaryEntry]
 scanHistory tenant scope =
     let seekTo =
             TxSummaryKey
@@ -407,5 +528,5 @@ scanHistory tenant scope =
         case (mPrefix, summaryKeyToBytes k) of
             (Just prefix, Just kBytes)
                 | prefix `BS.isPrefixOf` kBytes ->
-                    nextEntry >>= go (TxSummaryEntry k v : acc)
+                    nextEntry >>= go (summaryToEntry (summaryFromValue k v) : acc)
             _ -> pure (reverse acc)

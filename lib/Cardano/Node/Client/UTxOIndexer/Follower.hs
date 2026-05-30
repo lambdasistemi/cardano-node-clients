@@ -335,7 +335,7 @@ a 'BlockTx'.
 
 {- | The same-session tx-history attachment: a treasury-neutral
 'DecodeTx' plug point plus the 'HistoryIndexer' to write decoded
-entries into. Build with 'historyAttachment'.
+summaries into. Build with 'historyAttachment'.
 -}
 data HistoryAttachment = HistoryAttachment
     { haDecode :: DecodeTx
@@ -381,8 +381,8 @@ The UTxO operations and the 'BlockTx' list are both extracted from the
 same block upstream. UTxO state is applied first (preserving the
 historical follower behavior), then the 'DecodeTx' is called with this
 block's slot (@toHistorySlot slot@) and each transaction's raw bytes,
-so the decoder keys its entries on the actual block slot rather than
-guessing it; the decoded history entries are filed under the same slot
+so the decoder keys its summaries on the actual block slot rather than
+guessing it; the decoded history summaries are filed under the same slot
 via 'processHistoryBlock'. The returned state/flag are exactly the
 UTxO 'processFollowerBlock' result.
 -}
@@ -416,14 +416,14 @@ processSharedFollowerBlock
                 slot
                 bh
                 ops
-        let entries =
+        let summaries =
                 concat
                     (mapMaybe (haDecode att (toHistorySlot slot)) blockTxs)
         processHistoryBlock
             (haIndexer att)
             (toHistorySlot slot)
             (unBlockHash bh)
-            entries
+            summaries
         pure result
 
 {- | Convert the follower's 'SlotNo' to the history store's
