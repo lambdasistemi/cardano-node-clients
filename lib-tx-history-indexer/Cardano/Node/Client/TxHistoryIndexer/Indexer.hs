@@ -107,6 +107,7 @@ import Data.ByteString qualified as BS
 import Data.Default.Class (def)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Database.KV.Cursor (
     Cursor,
     Entry (..),
@@ -487,7 +488,7 @@ txIdLookupKey (TenantId tenant) txid =
 summaryKeyRefValue :: TxSummaryKey -> TxSummaryValue
 summaryKeyRefValue key =
     TxSummaryValue
-        { tsvPayload = maybe BS.empty id (summaryKeyToBytes key)
+        { tsvPayload = fromMaybe BS.empty (summaryKeyToBytes key)
         , tsvInputs = []
         , tsvOutputs = []
         , tsvRedeemer = Nothing
