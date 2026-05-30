@@ -38,8 +38,10 @@ import Cardano.Node.Client.TxHistoryIndexer.Types (
     TenantId (..),
     TxId (..),
     TxRole (..),
+    TxSummary,
     TxSummaryEntry (..),
     TxSummaryKey (..),
+    entryToSummary,
  )
 import Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
@@ -154,7 +156,7 @@ slot-aware contract — a decoder that hardcoded a slot would file the
 entry under the wrong key.
 -}
 decodeAtSlot :: DecodeTx
-decodeAtSlot slot _ = Just [decodedEntryAt slot]
+decodeAtSlot slot _ = Just [decodedSummaryAt slot]
 
 {- | The single entry 'decodeAtSlot' emits for the integration block,
 keyed at the slot it received.
@@ -172,6 +174,9 @@ decodedEntryAt slot =
                 }
         , tsePayload = "history-payload"
         }
+
+decodedSummaryAt :: Slot.SlotNo -> TxSummary
+decodedSummaryAt = entryToSummary . decodedEntryAt
 
 -- | The block slot driven through the shared follower pass.
 processedSlot :: SlotNo

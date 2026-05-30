@@ -23,6 +23,9 @@ module Cardano.Node.Client.TxHistoryIndexer.IndexerSpec (spec) where
 
 import Cardano.Node.Client.TxHistoryIndexer.Indexer (
     appendHistory,
+    appendSummaries,
+    getByTxId,
+    processHistoryBlock,
     queryHistory,
     withInMemoryHistoryIndexer,
     withRocksDBHistoryIndexer,
@@ -32,13 +35,21 @@ import Cardano.Node.Client.TxHistoryIndexer.Types (
     TenantId (..),
     TxId (..),
     TxRole (..),
+    TxSummary (..),
     TxSummaryEntry (..),
+    TxSummaryInput (..),
     TxSummaryKey (..),
+    TxSummaryOutput (..),
+    TxSummaryValue (..),
+    summaryToEntry,
+    summaryValueFromBytes,
  )
 import Cardano.Slotting.Slot (SlotNo (..))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.Default.Class (def)
 import Data.Word (Word8)
+import Database.RocksDB (Config (..), withDBCF)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 
@@ -150,6 +161,91 @@ spec =
                                     queryHistory indexer tenantA scopeX
                 onDisk `shouldBe` inMem
 
+        describe "tx-id lookup" $ do
+            it "returns a detailed summary scoped by tenant and txid" $
+                withInMemoryHistoryIndexer $ \indexer -> do
+                    let summary =
+                            mkSummary tenantA scopeX 7 0x44 roleOutput
+                        otherTenant =
+                            mkSummary tenantB scopeX 7 0x44 roleInput
+                    appendSummaries indexer [otherTenant, summary]
+                    getByTxId
+                        indexer
+                        tenantA
+                        (TxId (BS.replicate 32 0x44))
+                        `shouldReturn` Just summary
+                    getByTxId
+                        indexer
+                        tenantB
+                        (TxId (BS.replicate 32 0x55))
+                        `shouldReturn` Nothing
+
+            it "keeps scope scans compatible with detailed summaries" $
+                withInMemoryHistoryIndexer $ \indexer -> do
+                    let summary =
+                            mkSummary tenantA scopeX 8 0x45 roleOutput
+                    appendSummaries indexer [summary]
+                    queryHistory indexer tenantA scopeX
+                        `shouldReturn` [summaryToEntry summary]
+
+            it "stamps block-processed summaries with the block hash" $
+                withInMemoryHistoryIndexer $ \indexer -> do
+                    let summary =
+                            (mkSummary tenantA scopeX 9 0x47 roleOutput)
+                                { txsBlockHash = Nothing
+                                }
+                        expected = summary{txsBlockHash = Just "block-9"}
+                    processHistoryBlock indexer (SlotNo 9) "block-9" [summary]
+                    getByTxId
+                        indexer
+                        tenantA
+                        (TxId (BS.replicate 32 0x47))
+                        `shouldReturn` Just expected
+
+            it
+                "round-trips detailed summaries through the RocksDB \
+                \codec and getByTxId"
+                $ withSystemTempDirectory "tx-history-rocks-detail"
+                $ \dir ->
+                    withRocksDBHistoryIndexer dir $ \indexer -> do
+                        let summary =
+                                mkSummary tenantA scopeX 9 0x46 roleOutput
+                        appendSummaries indexer [summary]
+                        getByTxId
+                            indexer
+                            tenantA
+                            (TxId (BS.replicate 32 0x46))
+                            `shouldReturn` Just summary
+
+        describe "RocksDB compatibility" $ do
+            it "opens a store created with the previous two column families" $
+                withSystemTempDirectory "tx-history-rocks-legacy-schema" $
+                    \dir -> do
+                        withDBCF
+                            dir
+                            def{createIfMissing = True}
+                            [ ("tx-history.entries", def)
+                            , ("tx-history.blocks", def)
+                            ]
+                            $ \_ -> pure ()
+                        withRocksDBHistoryIndexer dir $ \indexer ->
+                            queryHistory indexer tenantA scopeX
+                                `shouldReturn` []
+
+            it "decodes pre-detail payload bytes as empty-detail values" $ do
+                let legacyPayload = "\SOHlegacy-payload"
+                summaryValueFromBytes legacyPayload
+                    `shouldBe` Just
+                        TxSummaryValue
+                            { tsvPayload = legacyPayload
+                            , tsvInputs = []
+                            , tsvOutputs = []
+                            , tsvRedeemer = Nothing
+                            , tsvFee = Nothing
+                            , tsvRequiredSigners = []
+                            , tsvBlockHash = Nothing
+                            }
+
 tenantA, tenantB :: TenantId
 tenantA = TenantId "tenant-a"
 tenantB = TenantId "tenant-b"
@@ -184,3 +280,41 @@ mkEntry tenant scope slot tx role =
 
 payload :: Word8 -> ByteString
 payload = BS.singleton
+
+mkSummary ::
+    TenantId ->
+    HistoryScope ->
+    Word8 ->
+    Word8 ->
+    TxRole ->
+    TxSummary
+mkSummary tenant scope slot tx role =
+    TxSummary
+        { txsKey =
+            TxSummaryKey
+                { tskTenant = tenant
+                , tskScope = scope
+                , tskSlot = SlotNo (fromIntegral slot)
+                , tskTxId = TxId (BS.replicate 32 tx)
+                , tskRole = role
+                }
+        , txsPayload = payload tx
+        , txsInputs =
+            [ TxSummaryInput
+                { tsiTxIn = "input#0"
+                , tsiScope = Just scope
+                , tsiValue = "42 lovelace"
+                }
+            ]
+        , txsOutputs =
+            [ TxSummaryOutput
+                { tsoAddress = "addr1..."
+                , tsoValue = "40 lovelace"
+                , tsoDatum = Just "datum-summary"
+                }
+            ]
+        , txsRedeemer = Just "redeemer-summary"
+        , txsFee = Just 2
+        , txsRequiredSigners = ["signer-a", "signer-b"]
+        , txsBlockHash = Just "block-hash"
+        }
