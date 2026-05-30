@@ -25,6 +25,7 @@ import Cardano.Node.Client.TxHistoryIndexer.Indexer (
     appendHistory,
     appendSummaries,
     getByTxId,
+    processHistoryBlock,
     queryHistory,
     withInMemoryHistoryIndexer,
     withRocksDBHistoryIndexer,
@@ -186,6 +187,20 @@ spec =
                     appendSummaries indexer [summary]
                     queryHistory indexer tenantA scopeX
                         `shouldReturn` [summaryToEntry summary]
+
+            it "stamps block-processed summaries with the block hash" $
+                withInMemoryHistoryIndexer $ \indexer -> do
+                    let summary =
+                            (mkSummary tenantA scopeX 9 0x47 roleOutput)
+                                { txsBlockHash = Nothing
+                                }
+                        expected = summary{txsBlockHash = Just "block-9"}
+                    processHistoryBlock indexer (SlotNo 9) "block-9" [summary]
+                    getByTxId
+                        indexer
+                        tenantA
+                        (TxId (BS.replicate 32 0x47))
+                        `shouldReturn` Just expected
 
             it
                 "round-trips detailed summaries through the RocksDB \

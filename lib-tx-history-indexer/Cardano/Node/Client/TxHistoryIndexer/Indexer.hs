@@ -279,17 +279,22 @@ memProcessBlock ::
     ByteString ->
     [TxSummary] ->
     IO ()
-memProcessBlock store slot hash summaries =
-    atomically $ modifyTVar' store $ \st ->
-        st
-            { msEntries = foldl insertSummary (msEntries st) summaries
-            , msByTxId = foldl insertTxIdSummary (msByTxId st) summaries
-            , msBlocks =
-                Map.insert
-                    slot
-                    (HistoryBlock hash (txsKey <$> summaries))
-                    (msBlocks st)
-            }
+memProcessBlock store slot hash summaries0 =
+    let summaries = stampBlockHash hash summaries0
+     in atomically $ modifyTVar' store $ \st ->
+            st
+                { msEntries = foldl insertSummary (msEntries st) summaries
+                , msByTxId = foldl insertTxIdSummary (msByTxId st) summaries
+                , msBlocks =
+                    Map.insert
+                        slot
+                        (HistoryBlock hash (txsKey <$> summaries))
+                        (msBlocks st)
+                }
+
+stampBlockHash :: ByteString -> [TxSummary] -> [TxSummary]
+stampBlockHash hash =
+    fmap $ \summary -> summary{txsBlockHash = Just hash}
 
 memRollbackTo :: TVar MemState -> SlotNo -> IO ()
 memRollbackTo store target =
@@ -401,13 +406,14 @@ rocksProcessBlock ::
     ByteString ->
     [TxSummary] ->
     IO ()
-rocksProcessBlock RunTransaction{runTransaction} slot hash summaries =
-    runTransaction $ do
-        forM_ summaries insertSummaryRows
-        insert
-            HistoryBlockCol
-            slot
-            (HistoryBlock hash (txsKey <$> summaries))
+rocksProcessBlock RunTransaction{runTransaction} slot hash summaries0 =
+    let summaries = stampBlockHash hash summaries0
+     in runTransaction $ do
+            forM_ summaries insertSummaryRows
+            insert
+                HistoryBlockCol
+                slot
+                (HistoryBlock hash (txsKey <$> summaries))
 
 insertSummaryRows ::
     TxSummary ->
