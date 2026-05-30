@@ -76,6 +76,7 @@ import Cardano.Node.Client.TxHistoryIndexer.Columns (
 import Cardano.Node.Client.TxHistoryIndexer.Types (
     HistoryScope (..),
     TenantId (..),
+    TxDirection (..),
     TxId (..),
     TxIdKey (..),
     TxRole (..),
@@ -495,6 +496,7 @@ summaryKeyRefValue key =
         , tsvFee = Nothing
         , tsvRequiredSigners = []
         , tsvBlockHash = Nothing
+        , tsvDirection = TxDirection "outbound"
         }
 
 {- | Cursor program: collect every row of the per-block

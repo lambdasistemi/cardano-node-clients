@@ -36,6 +36,7 @@ import Cardano.Node.Client.TxHistoryIndexer.Indexer (
 import Cardano.Node.Client.TxHistoryIndexer.Types (
     HistoryScope (..),
     TenantId (..),
+    TxDirection (..),
     TxId (..),
     TxRole (..),
     TxSummary,
@@ -173,6 +174,7 @@ decodedEntryAt slot =
                 , tskRole = TxRole "output"
                 }
         , tsePayload = "history-payload"
+        , tseDirection = TxDirection "outbound"
         }
 
 decodedSummaryAt :: Slot.SlotNo -> TxSummary

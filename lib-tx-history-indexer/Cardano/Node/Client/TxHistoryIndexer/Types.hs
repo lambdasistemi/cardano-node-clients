@@ -33,6 +33,7 @@ module Cardano.Node.Client.TxHistoryIndexer.Types (
     HistoryScope (..),
     TxId (..),
     TxRole (..),
+    TxDirection (..),
     TxIdKey (..),
     TxSummaryKey (..),
     TxSummaryInput (..),
@@ -85,6 +86,13 @@ newtype TxId = TxId {unTxId :: ByteString}
 layer never interprets it.
 -}
 newtype TxRole = TxRole {unTxRole :: ByteString}
+    deriving newtype (Eq, Ord, Show)
+
+{- | Direction a transaction flows relative to the indexed tenant's
+interest set. Kept opaque so applications can choose their own
+vocabulary; treasury consumers use @"outbound"@ and @"inbound"@.
+-}
+newtype TxDirection = TxDirection {unTxDirection :: ByteString}
     deriving newtype (Eq, Ord, Show)
 
 {- | Secondary lookup key for a tenant-local transaction id.
@@ -145,6 +153,7 @@ data TxSummaryValue = TxSummaryValue
     , tsvFee :: !(Maybe Word64)
     , tsvRequiredSigners :: ![ByteString]
     , tsvBlockHash :: !(Maybe ByteString)
+    , tsvDirection :: !TxDirection
     }
     deriving stock (Eq, Ord, Show)
 
@@ -160,6 +169,7 @@ data TxSummary = TxSummary
     , txsFee :: !(Maybe Word64)
     , txsRequiredSigners :: ![ByteString]
     , txsBlockHash :: !(Maybe ByteString)
+    , txsDirection :: !TxDirection
     }
     deriving stock (Eq, Ord, Show)
 
@@ -169,12 +179,13 @@ blob forwarded unchanged to consumers.
 data TxSummaryEntry = TxSummaryEntry
     { tseKey :: !TxSummaryKey
     , tsePayload :: !ByteString
+    , tseDirection :: !TxDirection
     }
     deriving stock (Eq, Ord, Show)
 
 -- | Convert a legacy list row to an empty-detail 'TxSummary'.
 entryToSummary :: TxSummaryEntry -> TxSummary
-entryToSummary TxSummaryEntry{tseKey, tsePayload} =
+entryToSummary TxSummaryEntry{tseKey, tsePayload, tseDirection} =
     TxSummary
         { txsKey = tseKey
         , txsPayload = tsePayload
@@ -184,14 +195,16 @@ entryToSummary TxSummaryEntry{tseKey, tsePayload} =
         , txsFee = Nothing
         , txsRequiredSigners = []
         , txsBlockHash = Nothing
+        , txsDirection = tseDirection
         }
 
 -- | Project a detailed summary back to the stable list-row shape.
 summaryToEntry :: TxSummary -> TxSummaryEntry
-summaryToEntry TxSummary{txsKey, txsPayload} =
+summaryToEntry TxSummary{txsKey, txsPayload, txsDirection} =
     TxSummaryEntry
         { tseKey = txsKey
         , tsePayload = txsPayload
+        , tseDirection = txsDirection
         }
 
 -- | Extract the stored value from a 'TxSummary'.
@@ -205,6 +218,7 @@ summaryValueOf TxSummary{..} =
         , tsvFee = txsFee
         , tsvRequiredSigners = txsRequiredSigners
         , tsvBlockHash = txsBlockHash
+        , tsvDirection = txsDirection
         }
 
 -- | Rebuild a 'TxSummary' from its ordered key and stored value.
@@ -219,6 +233,7 @@ summaryFromValue txsKey TxSummaryValue{..} =
         , txsFee = tsvFee
         , txsRequiredSigners = tsvRequiredSigners
         , txsBlockHash = tsvBlockHash
+        , txsDirection = tsvDirection
         }
 
 -- | Build the tenant-local tx-id lookup key for a summary key.
@@ -315,8 +330,9 @@ txIdKeyFromBytes bs0 = do
 -- | Serialise a 'TxSummaryValue' for the RocksDB value codec.
 summaryValueToBytes :: TxSummaryValue -> ByteString
 summaryValueToBytes TxSummaryValue{..} =
-    summaryValueMagic
+    summaryValueMagicV2
         <> lenPrefixed16 tsvPayload
+        <> lenPrefixed16 (unTxDirection tsvDirection)
         <> list16 encodeInput tsvInputs
         <> list16 encodeOutput tsvOutputs
         <> maybeBytes tsvRedeemer
@@ -327,17 +343,29 @@ summaryValueToBytes TxSummaryValue{..} =
 -- | Parse a value produced by 'summaryValueToBytes'.
 summaryValueFromBytes :: ByteString -> Maybe TxSummaryValue
 summaryValueFromBytes bs0 =
-    case BS.stripPrefix summaryValueMagic bs0 of
+    case BS.stripPrefix summaryValueMagicV2 bs0 of
         Just rest ->
-            case readVersionedSummaryValue rest of
+            case readVersionedSummaryValueV2 rest of
                 Just value -> Just value
                 Nothing -> Just (legacySummaryValue bs0)
-        Nothing -> Just (legacySummaryValue bs0)
+        Nothing ->
+            case BS.stripPrefix summaryValueMagicV1 bs0 of
+                Just rest ->
+                    case readVersionedSummaryValueV1 rest of
+                        Just value -> Just value
+                        Nothing -> Just (legacySummaryValue bs0)
+                Nothing -> Just (legacySummaryValue bs0)
 
 -- Internal helpers --------------------------------------------------
 
-summaryValueMagic :: ByteString
-summaryValueMagic = "\NULtx-summary-v1"
+summaryValueMagicV1 :: ByteString
+summaryValueMagicV1 = "\NULtx-summary-v1"
+
+summaryValueMagicV2 :: ByteString
+summaryValueMagicV2 = "\NULtx-summary-v2"
+
+defaultDirection :: TxDirection
+defaultDirection = TxDirection "outbound"
 
 legacySummaryValue :: ByteString -> TxSummaryValue
 legacySummaryValue payload =
@@ -349,12 +377,27 @@ legacySummaryValue payload =
         , tsvFee = Nothing
         , tsvRequiredSigners = []
         , tsvBlockHash = Nothing
+        , tsvDirection = defaultDirection
         }
 
-readVersionedSummaryValue :: ByteString -> Maybe TxSummaryValue
-readVersionedSummaryValue bs0 = do
+readVersionedSummaryValueV1 :: ByteString -> Maybe TxSummaryValue
+readVersionedSummaryValueV1 bs0 = do
     (payload, rest0) <- readLenPrefixed16 bs0
-    (inputs, rest1) <- readList16 readInput rest0
+    readVersionedSummaryValueBody payload defaultDirection rest0
+
+readVersionedSummaryValueV2 :: ByteString -> Maybe TxSummaryValue
+readVersionedSummaryValueV2 bs0 = do
+    (payload, rest0) <- readLenPrefixed16 bs0
+    (direction, rest1) <- readLenPrefixed16 rest0
+    readVersionedSummaryValueBody payload (TxDirection direction) rest1
+
+readVersionedSummaryValueBody ::
+    ByteString ->
+    TxDirection ->
+    ByteString ->
+    Maybe TxSummaryValue
+readVersionedSummaryValueBody payload direction bs0 = do
+    (inputs, rest1) <- readList16 readInput bs0
     (outputs, rest2) <- readList16 readOutput rest1
     (redeemer, rest3) <- readMaybeBytes rest2
     (fee, rest4) <- readMaybeWord64 rest3
@@ -371,6 +414,7 @@ readVersionedSummaryValue bs0 = do
                     , tsvFee = fee
                     , tsvRequiredSigners = signers
                     , tsvBlockHash = blockHash
+                    , tsvDirection = direction
                     }
         else Nothing
 
