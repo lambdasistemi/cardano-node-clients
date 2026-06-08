@@ -45,6 +45,14 @@ library
   default-language: GHC2021
   exposed-modules:
     Cardano.Node.Client.Address
+    Cardano.Node.Client.Adversary.Application
+    Cardano.Node.Client.Adversary.ChainPoints
+    Cardano.Node.Client.Adversary.ChainSync.Codec
+    Cardano.Node.Client.Adversary.ChainSync.Connection
+    Cardano.Node.Client.Adversary.Daemon
+    Cardano.Node.Client.Adversary.RandomSource
+    Cardano.Node.Client.Adversary.Server
+    Cardano.Node.Client.Adversary.Types
     Cardano.Node.Client.Ledger
     Cardano.Node.Client.N2C.ChainSync
     Cardano.Node.Client.N2C.Codecs
@@ -86,6 +94,7 @@ library
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-dijkstra
     , cardano-ledger-mary
     , cardano-ledger-read
     , cardano-node-clients:block-indexer
@@ -248,6 +257,18 @@ executable utxo-indexer
     , cardano-node-clients
     , cardano-node-clients:utxo-indexer-lib
 
+executable cardano-adversary
+  import:           warnings
+  hs-source-dirs:   app/cardano-adversary
+  main-is:          Main.hs
+  default-language: GHC2021
+  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    , base
+    , cardano-node-clients
+    , network
+    , ouroboros-network:api
+
 test-suite unit-tests
   import:           warnings
   type:             exitcode-stdio-1.0
@@ -256,6 +277,8 @@ test-suite unit-tests
   default-language: GHC2021
   other-modules:
     Cardano.Node.Client.AddressSpec
+    Cardano.Node.Client.Adversary.ChainPointsSpec
+    Cardano.Node.Client.Adversary.ServerSpec
     Cardano.Node.Client.BlockIndexer.HandlerSpec
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.N2C.ProbeSpec
@@ -291,6 +314,7 @@ test-suite unit-tests
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-dijkstra
     , cardano-ledger-mary
     , cardano-node-clients
     , cardano-node-clients:block-indexer
