@@ -45,6 +45,7 @@ let
       text = ''
         test -e ${components.library}
         test -e ${components.sublibs."utxo-indexer-lib"}
+        test -e ${components.exes.cardano-adversary}
         test -e ${components.exes.utxo-indexer}
         echo "build outputs realized"
       '';

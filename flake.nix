@@ -27,12 +27,12 @@
     };
     CHaP = {
       url =
-        "github:intersectmbo/cardano-haskell-packages/887d73ce434831e3a67df48e070f4f979b3ac5a6";
+        "github:intersectmbo/cardano-haskell-packages/e8a483522ee73c8c9493ea6055553e5c2532e66b";
       flake = false;
     };
     mkdocs.url = "github:paolino/dev-assets?dir=mkdocs";
     cardano-node = {
-      url = "github:IntersectMBO/cardano-node/10.7.0";
+      url = "github:IntersectMBO/cardano-node/11.0.1";
     };
     bundlers = {
       url = "github:NixOS/bundlers";
@@ -57,7 +57,7 @@
           };
           lintPkgs = import lintNixpkgs { inherit system; };
           lib = pkgs.lib;
-          indexState = "2026-02-17T10:15:41Z";
+          indexState = "2026-03-26T20:21:33Z";
           indexTool = { index-state = indexState; };
           fix-libs = { lib, pkgs, ... }: {
             packages.cardano-crypto-praos.components.library.pkgconfig =
@@ -161,6 +161,7 @@
         in {
           packages = {
             default = components.exes.utxo-indexer;
+            cardano-adversary = components.exes.cardano-adversary;
             devnet-genesis = pkgs.runCommand "devnet-genesis" {} ''
               cp -r ${./e2e-test/genesis} $out
             '';
@@ -175,6 +176,11 @@
             utxo-indexer = {
               type = "app";
               program = "${components.exes.utxo-indexer}/bin/utxo-indexer";
+            };
+            cardano-adversary = {
+              type = "app";
+              program =
+                "${components.exes.cardano-adversary}/bin/cardano-adversary";
             };
           } // lib.optionalAttrs pkgs.stdenv.isLinux {
             linux-artifact-smoke = {
