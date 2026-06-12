@@ -1,49 +1,52 @@
-# cardano-node-clients Development Guidelines
+# Repository Agent Guide
 
-Auto-generated from feature plans. Last updated: 2026-05-10
+## What this repo is
 
-## Active Technologies
+`cardano-node-clients` is a Haskell package (Cabal multi-component,
+built with Nix/haskell.nix) of channel-driven clients for the Cardano
+node Ouroboros mini-protocols. It provides N2C LocalStateQuery,
+LocalTxSubmission, and ChainSync clients over the node's Unix socket,
+high-level `Provider`/`Submitter` record-of-functions interfaces, a
+reconnect supervisor with an LSQ tip probe, a layered indexer stack
+(generic `block-indexer`, address-keyed UTxO indexer, multi-tenant
+tx-history indexer), and an N2N adversary for fault-injection testing.
+It ships two executables: the `utxo-indexer` daemon and the
+`cardano-adversary` daemon. Transaction building/balancing/diffing
+lives in a separate repo,
+[cardano-tx-tools](https://github.com/lambdasistemi/cardano-tx-tools).
 
-- Haskell, GHC2021
-- Cabal multi-component package
-- Nix development environment
-- Cardano ledger and Plutus libraries
+## How to work here
 
-## Project Structure
+All commands run inside the Nix dev shell; `just` recipes pin `-O0`.
 
-```text
-lib/              # main cardano-node-clients library
-lib-utxo-indexer/ # UTxO indexer sublibrary
-e2e-test/         # devnet helper library
-app/              # executables
-test/             # unit and e2e test modules
-specs/            # Spec Kit feature artifacts
-```
+- Build: `nix develop -c just build` (library + both executables)
+- Unit tests: `nix develop -c just unit`
+- E2E tests (spawns a real devnet `cardano-node`): `nix develop -c just e2e`
+- Format: `nix develop -c just format` (fourmolu + cabal-fmt)
+- Lint: `nix develop -c just hlint`
+- Full gate: `nix develop -c just ci` (build + unit + format check + lint)
+- Docs preview: `nix develop -c just serve-docs`
+- Run an executable: `nix run .#utxo-indexer` / `nix run .#cardano-adversary`
 
-## Commands
+GHC is pinned to `ghc9123` by the flake; the package is `GHC2021`.
+Public modules must keep Haddock on exports and Apache-2.0 module
+headers. Do not break existing public module compatibility without a
+spec.
 
-```bash
-just build
-just unit
-just e2e
-just format
-just hlint
-just ci
-```
+## Skills
 
-Use focused Cabal commands with `-O0` while iterating.
+Activatable procedures live under `skills/`. Load the one whose
+description matches your task:
 
-## Code Style
+- `skills/cardano-node-clients-guide/` — repository map, exact
+  build/test/run commands, where each feature lives in the source,
+  verified CLI/library usage, and where answers to common questions
+  live.
 
-- Follow the repo's Fourmolu formatting.
-- Keep component dependencies minimal and explicit.
-- Preserve existing public module compatibility unless a spec says
-  otherwise.
+## Documentation
 
-## Recent Changes
-
-- `041-extract-txbuild`: planned extraction of TxBuild and Balance into
-  a non-network transaction-building component.
-
-<!-- MANUAL ADDITIONS START -->
-<!-- MANUAL ADDITIONS END -->
+- Human docs: <https://lambdasistemi.github.io/cardano-node-clients/>
+  (sources under `docs/`, built with mkdocs).
+- README.md — overview, install, quickstart, usage.
+- `app/utxo-indexer/README.md` — the indexer daemon's CLI and wire.
+- `specs/` — Spec Kit feature artifacts (one dir per feature).
