@@ -1,11 +1,22 @@
 site_name: cardano-node-clients
-site_url: https://paolino.github.io/cardano-node-clients/
+site_url: https://lambdasistemi.github.io/cardano-node-clients/
 repo_url: https://github.com/lambdasistemi/cardano-node-clients
 
 theme:
   name: material
   palette:
-    scheme: slate
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
   features:
     - navigation.indexes
     - toc.integrate
@@ -23,7 +34,11 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - admonition
@@ -33,9 +48,14 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Installation: installation.md
+  - Usage:
+      - utxo-indexer: usage/utxo-indexer.md
+      - cardano-adversary: usage/cardano-adversary.md
   - Architecture: architecture.md
   - Modules:
       - Provider: modules/provider.md
       - Submitter: modules/submitter.md
       - N2C: modules/n2c.md
       - Validity: modules/validity.md
+      - Indexers: modules/indexers.md
