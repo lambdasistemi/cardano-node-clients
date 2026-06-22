@@ -23,21 +23,20 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GITHUB_TOKEN: ${{ github.token }}
-      RELEASE_BOT_SSH_KEY_SET: ${{ secrets.RELEASE_BOT_SSH_KEY != '' }}
     steps:
-      - name: Validate release bot deploy key secret
-        if: ${{ env.RELEASE_BOT_SSH_KEY_SET != 'true' }}
-        run: |
-          echo "::error::Configure RELEASE_BOT_SSH_KEY with the release deploy key private half."
-          exit 1
+      - name: Mint a scoped release token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: lambdasistemi
+          repositories: ${{ github.event.repository.name }}
 
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ssh-key: ${{ secrets.RELEASE_BOT_SSH_KEY }}
-
-      - name: Use deploy key for release git writes
-        run: git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Plan or tag Cabal release
         run: scripts/release/plan
