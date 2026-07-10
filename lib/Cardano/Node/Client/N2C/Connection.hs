@@ -53,7 +53,7 @@ import Cardano.Node.Client.N2C.Codecs (
  )
 import Cardano.Node.Client.N2C.LocalStateQuery (
     mkLocalStateQueryClient,
-    monitorLocalStateQueryPeer,
+    monitorLocalStateQueryConnection,
  )
 import Cardano.Node.Client.N2C.LocalTxSubmission (
     mkLocalTxSubmissionClient,
@@ -151,19 +151,20 @@ runNodeClient ::
     IO (Either SomeException ())
 runNodeClient magic socketPath lsqCh ltxsCh =
     withIOManager $ \ioManager ->
-        connectTo
-            (localSnocket ioManager)
-            nullNetworkConnectTracers
-            ( simpleSingletonVersions
-                NodeToClientV_23
-                NodeToClientVersionData
-                    { networkMagic = magic
-                    , query = False
-                    }
-                $ const
-                $ mkN2CApp lsqCh ltxsCh
-            )
-            socketPath
+        monitorLocalStateQueryConnection lsqCh $
+            connectTo
+                (localSnocket ioManager)
+                nullNetworkConnectTracers
+                ( simpleSingletonVersions
+                    NodeToClientV_23
+                    NodeToClientVersionData
+                        { networkMagic = magic
+                        , query = False
+                        }
+                    $ const
+                    $ mkN2CApp lsqCh ltxsCh
+                )
+                socketPath
 
 {- | Build the N2C application with
 LocalStateQuery and LocalTxSubmission.
@@ -208,12 +209,11 @@ mkN2CApp lsqCh ltxsCh =
                     InitiatorProtocolOnly $
                         MiniProtocolCb $
                             \_ctx channel ->
-                                monitorLocalStateQueryPeer lsqCh
-                                    $ Stateful.runPeer
-                                        nullTracer
-                                        lsqCodec
-                                        channel
-                                        StateIdle
+                                Stateful.runPeer
+                                    nullTracer
+                                    lsqCodec
+                                    channel
+                                    StateIdle
                                     $ LSQ.localStateQueryClientPeer
                                     $ mkLocalStateQueryClient
                                         lsqCh
@@ -288,19 +288,20 @@ runNodeClientFull ::
     IO (Either SomeException ())
 runNodeClientFull magic epochSlots socketPath chainSyncApp lsqCh ltxsCh =
     withIOManager $ \ioManager ->
-        connectTo
-            (localSnocket ioManager)
-            nullNetworkConnectTracers
-            ( simpleSingletonVersions
-                NodeToClientV_23
-                NodeToClientVersionData
-                    { networkMagic = magic
-                    , query = False
-                    }
-                $ const
-                $ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh
-            )
-            socketPath
+        monitorLocalStateQueryConnection lsqCh $
+            connectTo
+                (localSnocket ioManager)
+                nullNetworkConnectTracers
+                ( simpleSingletonVersions
+                    NodeToClientV_23
+                    NodeToClientVersionData
+                        { networkMagic = magic
+                        , query = False
+                        }
+                    $ const
+                    $ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh
+                )
+                socketPath
 
 {- | Build the N2C application with ChainSync (num 5),
 LocalTxSubmission (num 6), and LocalStateQuery (num 7) on
@@ -365,12 +366,11 @@ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh =
                     InitiatorProtocolOnly $
                         MiniProtocolCb $
                             \_ctx channel ->
-                                monitorLocalStateQueryPeer lsqCh
-                                    $ Stateful.runPeer
-                                        nullTracer
-                                        lsqCodec
-                                        channel
-                                        StateIdle
+                                Stateful.runPeer
+                                    nullTracer
+                                    lsqCodec
+                                    channel
+                                    StateIdle
                                     $ LSQ.localStateQueryClientPeer
                                     $ mkLocalStateQueryClient
                                         lsqCh

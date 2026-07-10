@@ -357,6 +357,7 @@ test-suite e2e-tests
   hs-source-dirs:   test
   main-is:          main.hs
   default-language: GHC2021
+  ghc-options:      -threaded
   other-modules:
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.E2E.ChainSyncSpec
