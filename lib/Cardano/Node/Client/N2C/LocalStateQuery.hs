@@ -14,6 +14,7 @@ always begin from their own acquire.
 module Cardano.Node.Client.N2C.LocalStateQuery (
     -- * Client construction
     mkLocalStateQueryClient,
+    monitorLocalStateQueryPeer,
 
     -- * Query helpers
     queryLSQ,
@@ -27,22 +28,31 @@ import Cardano.Node.Client.N2C.Types (
     ConnectionLost (..),
     LSQChannel (..),
     LSQRequest (..),
+    LocalStateQueryTimeout (..),
     SomeLSQQuery (..),
  )
 import Cardano.Node.Client.Types (
     Block,
     BlockPoint,
  )
+import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (
     TMVar,
+    TVar,
     atomically,
+    check,
     newEmptyTMVarIO,
     newTBQueueIO,
+    orElse,
     putTMVar,
     readTBQueue,
+    readTVar,
+    readTVarIO,
+    registerDelay,
     takeTMVar,
     tryReadTBQueue,
     writeTBQueue,
+    writeTVar,
  )
 import Control.Exception (
     BlockedIndefinitelyOnSTM,
@@ -94,6 +104,34 @@ mkLocalStateQueryClient ::
         ()
 mkLocalStateQueryClient ch =
     LocalStateQueryClient $ waitAndAcquire ch
+
+{- | Run a LocalStateQuery peer until it completes or
+the channel's liveness generation changes. A generation
+change cancels the peer action and raises
+'LocalStateQueryTimeout'. Each invocation snapshots the
+current generation, so an earlier timeout does not
+invalidate a newly started peer.
+-}
+monitorLocalStateQueryPeer ::
+    LSQChannel ->
+    IO a ->
+    IO a
+monitorLocalStateQueryPeer ch peerAction = do
+    generation <-
+        readTVarIO $ lsqLivenessGeneration ch
+    raceResult <- race peerAction (waitForGenerationChange ch generation)
+    case raceResult of
+        Left result -> pure result
+        Right () ->
+            throwIO $
+                LocalStateQueryTimeout $
+                    lsqResponseTimeoutMicroseconds ch
+
+waitForGenerationChange :: LSQChannel -> Int -> IO ()
+waitForGenerationChange ch generation =
+    atomically $ do
+        current <- readTVar $ lsqLivenessGeneration ch
+        check $ current /= generation
 
 {- | Wait for a query to arrive, then acquire the
 volatile tip so we always get fresh state.
@@ -255,11 +293,15 @@ queryLSQ ::
     IO result
 queryLSQ ch query = do
     resultVar <- newEmptyTMVarIO
-    atomically $
-        writeTBQueue (lsqRequests ch) $
-            LSQOneShot $
-                SomeLSQQuery query resultVar
-    takeTMVarOrConnectionLost resultVar
+    deadline <- registerDelay $ lsqResponseTimeoutMicroseconds ch
+    generation <-
+        atomically $ do
+            current <- readTVar $ lsqLivenessGeneration ch
+            writeTBQueue (lsqRequests ch) $
+                LSQOneShot $
+                    SomeLSQQuery query resultVar
+            pure current
+    takeTMVarOrConnectionLost ch generation deadline resultVar
 
 {- | Acquire LocalStateQuery once, run a callback, then
 release the acquired session.
@@ -270,14 +312,18 @@ withAcquiredLSQ ::
     IO a
 withAcquiredLSQ ch action =
     mask $ \restore -> do
-        acquired <-
-            AcquiredLSQ
-                <$> newTBQueueIO acquiredLSQQueueCapacity
+        acquiredRequests <-
+            newTBQueueIO acquiredLSQQueueCapacity
+        let acquired = AcquiredLSQ acquiredRequests ch
         acquiredVar <- newEmptyTMVarIO
-        atomically $
-            writeTBQueue (lsqRequests ch) $
-                LSQAcquire acquired acquiredVar
-        takeTMVarOrConnectionLost acquiredVar
+        deadline <- registerDelay $ lsqResponseTimeoutMicroseconds ch
+        generation <-
+            atomically $ do
+                current <- readTVar $ lsqLivenessGeneration ch
+                writeTBQueue (lsqRequests ch) $
+                    LSQAcquire acquired acquiredVar
+                pure current
+        takeTMVarOrConnectionLost ch generation deadline acquiredVar
         result <-
             restore (action acquired)
                 `onException` releaseAcquiredLSQBestEffort acquired
@@ -292,24 +338,34 @@ queryAcquiredLSQ ::
     Query Block result ->
     IO result
 queryAcquiredLSQ acquired query = do
+    let ch = acquiredLSQChannel acquired
     resultVar <- newEmptyTMVarIO
-    atomically $
-        writeTBQueue
-            (acquiredLSQRequests acquired)
-            (AcquiredLSQQuery query resultVar)
-    takeTMVarOrConnectionLost resultVar
+    deadline <- registerDelay $ lsqResponseTimeoutMicroseconds ch
+    generation <-
+        atomically $ do
+            current <- readTVar $ lsqLivenessGeneration ch
+            writeTBQueue
+                (acquiredLSQRequests acquired)
+                (AcquiredLSQQuery query resultVar)
+            pure current
+    takeTMVarOrConnectionLost ch generation deadline resultVar
 
 releaseAcquiredLSQ ::
     AcquiredLSQ ->
     IO ()
 releaseAcquiredLSQ acquired = do
+    let ch = acquiredLSQChannel acquired
     releaseVar <- newEmptyTMVarIO
-    atomically $
-        writeTBQueue
-            (acquiredLSQRequests acquired)
-            (AcquiredLSQRelease releaseVar)
+    deadline <- registerDelay $ lsqResponseTimeoutMicroseconds ch
+    generation <-
+        atomically $ do
+            current <- readTVar $ lsqLivenessGeneration ch
+            writeTBQueue
+                (acquiredLSQRequests acquired)
+                (AcquiredLSQRelease releaseVar)
+            pure current
     void $
-        takeTMVarOrConnectionLost releaseVar
+        takeTMVarOrConnectionLost ch generation deadline releaseVar
 
 releaseAcquiredLSQBestEffort ::
     AcquiredLSQ ->
@@ -318,10 +374,18 @@ releaseAcquiredLSQBestEffort acquired =
     void (timeout 1000000 (releaseAcquiredLSQ acquired))
         `catch` \(_ :: SomeException) -> pure ()
 
+data LSQWaitResult a
+    = LSQResult a
+    | LSQConnectionLost
+    | LSQTimedOut
+
 takeTMVarOrConnectionLost ::
+    LSQChannel ->
+    Int ->
+    TVar Bool ->
     TMVar a ->
     IO a
-takeTMVarOrConnectionLost resultVar =
+takeTMVarOrConnectionLost ch generation deadline resultVar =
     -- Catch the synchronous-deadlock detection that GHC
     -- raises when the consumer thread died with this
     -- request in flight, and re-raise 'ConnectionLost' so
@@ -329,4 +393,32 @@ takeTMVarOrConnectionLost resultVar =
     -- reconnect supervisor will reopen the bearer.
     handle
         (\(_ :: BlockedIndefinitelyOnSTM) -> throwIO ConnectionLost)
-        (atomically $ takeTMVar resultVar)
+        $ do
+            waitResult <- atomically wait
+            case waitResult of
+                LSQResult result -> pure result
+                LSQConnectionLost -> throwIO ConnectionLost
+                LSQTimedOut ->
+                    throwIO $
+                        LocalStateQueryTimeout $
+                            lsqResponseTimeoutMicroseconds ch
+  where
+    wait =
+        (LSQResult <$> takeTMVar resultVar)
+            `orElse` generationChanged
+            `orElse` deadlineExpired
+    generationChanged = do
+        current <- readTVar $ lsqLivenessGeneration ch
+        check $ current /= generation
+        pure LSQConnectionLost
+    deadlineExpired = do
+        expired <- readTVar deadline
+        check expired
+        current <- readTVar $ lsqLivenessGeneration ch
+        if current == generation
+            then do
+                writeTVar
+                    (lsqLivenessGeneration ch)
+                    (current + 1)
+                pure LSQTimedOut
+            else pure LSQConnectionLost

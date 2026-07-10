@@ -27,6 +27,7 @@ module Cardano.Node.Client.N2C.Connection (
 
     -- * Channel creation
     newLSQChannel,
+    newLSQChannelWithTimeout,
     newLTxSChannel,
 ) where
 
@@ -52,6 +53,7 @@ import Cardano.Node.Client.N2C.Codecs (
  )
 import Cardano.Node.Client.N2C.LocalStateQuery (
     mkLocalStateQueryClient,
+    monitorLocalStateQueryPeer,
  )
 import Cardano.Node.Client.N2C.LocalTxSubmission (
     mkLocalTxSubmissionClient,
@@ -61,7 +63,7 @@ import Cardano.Node.Client.N2C.Types (
     LTxSChannel (..),
  )
 import Cardano.Node.Client.Types (Block)
-import Control.Concurrent.STM (newTBQueueIO)
+import Control.Concurrent.STM (newTBQueueIO, newTVarIO)
 import Control.Exception (SomeException)
 import Control.Tracer (nullTracer)
 import Data.ByteString.Lazy (LazyByteString)
@@ -206,11 +208,12 @@ mkN2CApp lsqCh ltxsCh =
                     InitiatorProtocolOnly $
                         MiniProtocolCb $
                             \_ctx channel ->
-                                Stateful.runPeer
-                                    nullTracer
-                                    lsqCodec
-                                    channel
-                                    StateIdle
+                                monitorLocalStateQueryPeer lsqCh
+                                    $ Stateful.runPeer
+                                        nullTracer
+                                        lsqCodec
+                                        channel
+                                        StateIdle
                                     $ LSQ.localStateQueryClientPeer
                                     $ mkLocalStateQueryClient
                                         lsqCh
@@ -362,11 +365,12 @@ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh =
                     InitiatorProtocolOnly $
                         MiniProtocolCb $
                             \_ctx channel ->
-                                Stateful.runPeer
-                                    nullTracer
-                                    lsqCodec
-                                    channel
-                                    StateIdle
+                                monitorLocalStateQueryPeer lsqCh
+                                    $ Stateful.runPeer
+                                        nullTracer
+                                        lsqCodec
+                                        channel
+                                        StateIdle
                                     $ LSQ.localStateQueryClientPeer
                                     $ mkLocalStateQueryClient
                                         lsqCh
@@ -404,15 +408,33 @@ mkN2CFullApp epochSlots chainSyncApp lsqCh ltxsCh =
             NodeToClientV_23
 
 {- | Create a new 'LSQChannel' with the given queue
-capacity.
+capacity and a 60-second response timeout.
 -}
 newLSQChannel ::
     -- | Maximum number of queued queries
     Int ->
     IO LSQChannel
 newLSQChannel capacity =
-    LSQChannel
-        <$> newTBQueueIO (fromIntegral capacity)
+    newLSQChannelWithTimeout capacity 60_000_000
+
+{- | Create a new 'LSQChannel' with the given queue
+capacity and positive response timeout in microseconds.
+-}
+newLSQChannelWithTimeout ::
+    -- | Maximum number of queued queries
+    Int ->
+    -- | Response timeout in microseconds
+    Int ->
+    IO LSQChannel
+newLSQChannelWithTimeout capacity responseTimeoutMicroseconds
+    | responseTimeoutMicroseconds <= 0 =
+        ioError $
+            userError "LSQ response timeout must be positive"
+    | otherwise =
+        LSQChannel
+            <$> newTBQueueIO (fromIntegral capacity)
+            <*> pure responseTimeoutMicroseconds
+            <*> newTVarIO 0
 
 {- | Create a new 'LTxSChannel' with the given queue
 capacity.

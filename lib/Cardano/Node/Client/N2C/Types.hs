@@ -31,9 +31,10 @@ module Cardano.Node.Client.N2C.Types (
 
     -- * Connection-loss signal
     ConnectionLost (..),
+    LocalStateQueryTimeout (..),
 ) where
 
-import Control.Concurrent.STM (TBQueue, TMVar)
+import Control.Concurrent.STM (TBQueue, TMVar, TVar)
 import Control.Exception (Exception)
 
 import Cardano.Node.Client.Types (Block)
@@ -66,8 +67,9 @@ data AcquiredLSQRequest where
         AcquiredLSQRequest
 
 -- | Internal handle for an acquired LSQ session.
-newtype AcquiredLSQ = AcquiredLSQ
+data AcquiredLSQ = AcquiredLSQ
     { acquiredLSQRequests :: TBQueue AcquiredLSQRequest
+    , acquiredLSQChannel :: !LSQChannel
     }
 
 {- | Requests accepted by the idle LSQ client.
@@ -93,8 +95,10 @@ block on the embedded query 'TMVar'. Acquired-session
 callers wait for the acquire acknowledgement, then
 send commands to the acquired-session queue.
 -}
-newtype LSQChannel = LSQChannel
+data LSQChannel = LSQChannel
     { lsqRequests :: TBQueue LSQRequest
+    , lsqResponseTimeoutMicroseconds :: !Int
+    , lsqLivenessGeneration :: !(TVar Int)
     }
 
 {- | A transaction submission request bundled with
@@ -136,3 +140,15 @@ data ConnectionLost = ConnectionLost
     deriving stock (Eq, Show)
 
 instance Exception ConnectionLost
+
+{- | Synchronous exception raised when a
+LocalStateQuery response does not arrive before the
+configured deadline. The value is the deadline in
+microseconds.
+-}
+newtype LocalStateQueryTimeout = LocalStateQueryTimeout
+    { localStateQueryTimeoutMicroseconds :: Int
+    }
+    deriving stock (Eq, Show)
+
+instance Exception LocalStateQueryTimeout
