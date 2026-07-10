@@ -11,7 +11,7 @@ module Cardano.Node.Client.N2C.LocalStateQuerySpec (spec) where
 import Cardano.Node.Client.N2C.Connection (newLSQChannelWithTimeout)
 import Cardano.Node.Client.N2C.LocalStateQuery (
     mkLocalStateQueryClient,
-    monitorLocalStateQueryPeer,
+    monitorLocalStateQueryConnection,
     queryAcquiredLSQ,
     queryLSQ,
     withAcquiredLSQ,
@@ -20,7 +20,7 @@ import Cardano.Node.Client.N2C.Types (
     ConnectionLost (..),
     LocalStateQueryTimeout (..),
  )
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (myThreadId, threadDelay)
 import Control.Concurrent.Async (Async, waitCatch, withAsync)
 import Control.Concurrent.STM (
     TMVar,
@@ -34,6 +34,7 @@ import Control.Exception (
     Exception,
     SomeException,
     displayException,
+    finally,
     fromException,
  )
 import Control.Monad (void)
@@ -60,11 +61,19 @@ spec = describe "Cardano.Node.Client.N2C.LocalStateQuery" $
 stalledQueryScenario :: IO ()
 stalledQueryScenario = do
     ch <- newLSQChannelWithTimeout 2 responseTimeout
-    peerStarted <- newEmptyTMVarIO
+    monitorThread <- newEmptyTMVarIO
+    actionThread <- newEmptyTMVarIO
+    connectionStarted <- newEmptyTMVarIO
+    connectionStopped <- newEmptyTMVarIO
     queryAccepted <- newEmptyTMVarIO
-    let peer =
-            monitorLocalStateQueryPeer ch $
-                atomically (putTMVar peerStarted ())
+    let connection = do
+            caller <- myThreadId
+            atomically $ putTMVar monitorThread caller
+            monitorLocalStateQueryConnection ch $
+                ( do
+                    running <- myThreadId
+                    atomically $ putTMVar actionThread running
+                    atomically (putTMVar connectionStarted ())
                     >> void
                         ( Stateful.connect
                             StateIdle
@@ -75,8 +84,13 @@ stalledQueryScenario = do
                                 stalledServer queryAccepted
                             )
                         )
-    withAsync peer $ \peerThread -> do
-        atomically $ void $ takeTMVar peerStarted
+                )
+                    `finally` atomically (putTMVar connectionStopped ())
+    withAsync connection $ \connectionThread -> do
+        atomically $ void $ takeTMVar connectionStarted
+        expectedThread <- atomically $ takeTMVar monitorThread
+        actualThread <- atomically $ takeTMVar actionThread
+        actualThread `shouldBe` expectedThread
         withAsync
             ( withAcquiredLSQ ch $ \acquired ->
                 queryAcquiredLSQ acquired GetChainPoint
@@ -99,11 +113,21 @@ stalledQueryScenario = do
                         "sibling"
                         ConnectionLost
                         siblingException
-                    peerException <- waitException "peer" peerThread
+                    connectionException <-
+                        waitException "connection" connectionThread
                     expectTypedException
-                        "peer"
+                        "connection"
                         (LocalStateQueryTimeout responseTimeout)
-                        peerException
+                        connectionException
+                    stopped <-
+                        timeout 500_000 $
+                            atomically $
+                                takeTMVar connectionStopped
+                    stopped `shouldBe` Just ()
+                    recovered <-
+                        monitorLocalStateQueryConnection ch $
+                            pure ()
+                    recovered `shouldBe` ()
 
 responseTimeout :: Int
 responseTimeout = 600_000

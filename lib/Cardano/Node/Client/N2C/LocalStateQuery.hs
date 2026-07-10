@@ -14,7 +14,7 @@ always begin from their own acquire.
 module Cardano.Node.Client.N2C.LocalStateQuery (
     -- * Client construction
     mkLocalStateQueryClient,
-    monitorLocalStateQueryPeer,
+    monitorLocalStateQueryConnection,
 
     -- * Query helpers
     queryLSQ,
@@ -35,7 +35,8 @@ import Cardano.Node.Client.Types (
     Block,
     BlockPoint,
  )
-import Control.Concurrent.Async (race)
+import Control.Concurrent (myThreadId, throwTo)
+import Control.Concurrent.Async (withAsync)
 import Control.Concurrent.STM (
     TMVar,
     TVar,
@@ -105,27 +106,29 @@ mkLocalStateQueryClient ::
 mkLocalStateQueryClient ch =
     LocalStateQueryClient $ waitAndAcquire ch
 
-{- | Run a LocalStateQuery peer until it completes or
-the channel's liveness generation changes. A generation
-change cancels the peer action and raises
-'LocalStateQueryTimeout'. Each invocation snapshots the
-current generation, so an earlier timeout does not
-invalidate a newly started peer.
+{- | Run a node connection on the calling thread until it
+completes or the LocalStateQuery channel's liveness generation
+changes. A child watcher interrupts the calling thread with
+'LocalStateQueryTimeout' on a generation change. Each invocation
+snapshots the current generation, so an earlier timeout does not
+invalidate a newly started connection.
 -}
-monitorLocalStateQueryPeer ::
+monitorLocalStateQueryConnection ::
     LSQChannel ->
     IO a ->
     IO a
-monitorLocalStateQueryPeer ch peerAction = do
-    generation <-
+monitorLocalStateQueryConnection ch connectionAction = do
+    initialGeneration <-
         readTVarIO $ lsqLivenessGeneration ch
-    raceResult <- race peerAction (waitForGenerationChange ch generation)
-    case raceResult of
-        Left result -> pure result
-        Right () ->
-            throwIO $
-                LocalStateQueryTimeout $
-                    lsqResponseTimeoutMicroseconds ch
+    caller <- myThreadId
+    withAsync (interruptOnGenerationChange caller initialGeneration) $
+        const connectionAction
+  where
+    interruptOnGenerationChange caller watchedGeneration = do
+        waitForGenerationChange ch watchedGeneration
+        throwTo caller $
+            LocalStateQueryTimeout $
+                lsqResponseTimeoutMicroseconds ch
 
 waitForGenerationChange :: LSQChannel -> Int -> IO ()
 waitForGenerationChange ch generation =

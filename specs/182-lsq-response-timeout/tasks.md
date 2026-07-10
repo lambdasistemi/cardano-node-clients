@@ -11,9 +11,9 @@
 
 ## Slice 2: live connection regression correction
 
-- [ ] T182 Capture the live-node failure where the readiness client reconnects
+- [X] T182 Capture the live-node failure where the readiness client reconnects
   every five seconds while a healthy node forges continuously.
-- [ ] T182 Move LSQ generation monitoring to the enclosing N2C connection so
-  the standard mini-protocol callback remains able to drive the live peer.
-- [ ] T183 Verify RED→GREEN against the real devnet E2E suite and run the exact
-  aggregate Nix build used by GitHub CI with a finite outer deadline.
+- [X] T182 Monitor the enclosing N2C connection without moving it off its
+  calling thread, preserving the original manual stateful LSQ callback.
+- [X] T183 Enable threaded E2E deadlines, verify live RED→GREEN, and run the
+  exact aggregate Nix build used by GitHub CI with a finite outer deadline.
