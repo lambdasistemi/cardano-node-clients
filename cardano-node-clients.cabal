@@ -275,12 +275,14 @@ test-suite unit-tests
   hs-source-dirs:   test
   main-is:          unit-main.hs
   default-language: GHC2021
+  ghc-options:      -threaded
   other-modules:
     Cardano.Node.Client.AddressSpec
     Cardano.Node.Client.Adversary.ChainPointsSpec
     Cardano.Node.Client.Adversary.ServerSpec
     Cardano.Node.Client.BlockIndexer.HandlerSpec
     Cardano.Node.Client.ConwayFixtures
+    Cardano.Node.Client.N2C.LocalStateQuerySpec
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
     Cardano.Node.Client.TxHistoryIndexer.HistoryRollbackSpec
@@ -335,6 +337,7 @@ test-suite unit-tests
     , ouroboros-consensus
     , ouroboros-consensus:cardano
     , ouroboros-network:api
+    , ouroboros-network:protocols
     , plutus-core
     , QuickCheck
     , random
@@ -346,6 +349,7 @@ test-suite unit-tests
     , temporary
     , text
     , time
+    , typed-protocols:stateful
 
 test-suite e2e-tests
   import:           warnings
