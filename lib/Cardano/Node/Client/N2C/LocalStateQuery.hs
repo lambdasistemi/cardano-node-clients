@@ -59,12 +59,13 @@ import Control.Exception (
     BlockedIndefinitelyOnSTM,
     SomeException,
     catch,
+    fromException,
     handle,
     mask,
-    onException,
     throwIO,
+    try,
  )
-import Control.Monad (void)
+import Control.Monad (unless, void, when)
 import Numeric.Natural (Natural)
 import Ouroboros.Consensus.Ledger.Query (Query)
 import Ouroboros.Network.Protocol.LocalStateQuery.Client (
@@ -111,24 +112,43 @@ completes or the LocalStateQuery channel's liveness generation
 changes. A child watcher interrupts the calling thread with
 'LocalStateQueryTimeout' on a generation change. Each invocation
 snapshots the current generation, so an earlier timeout does not
-invalidate a newly started connection.
+invalidate a newly started connection. When the connection action
+terminates independently, its watcher is stopped before the current
+generation is advanced and the original result or exception is preserved.
 -}
 monitorLocalStateQueryConnection ::
     LSQChannel ->
     IO a ->
     IO a
-monitorLocalStateQueryConnection ch connectionAction = do
-    initialGeneration <-
-        readTVarIO $ lsqLivenessGeneration ch
-    caller <- myThreadId
-    withAsync (interruptOnGenerationChange caller initialGeneration) $
-        const connectionAction
+monitorLocalStateQueryConnection ch connectionAction =
+    mask $ \restore -> do
+        initialGeneration <-
+            readTVarIO $ lsqLivenessGeneration ch
+        caller <- myThreadId
+        result <-
+            try @SomeException
+                $ withAsync
+                    ( interruptOnGenerationChange
+                        caller
+                        initialGeneration
+                    )
+                $ const
+                $ restore connectionAction
+        signalConnectionTermination initialGeneration
+        either throwIO pure result
   where
     interruptOnGenerationChange caller watchedGeneration = do
         waitForGenerationChange ch watchedGeneration
         throwTo caller $
             LocalStateQueryTimeout $
                 lsqResponseTimeoutMicroseconds ch
+    signalConnectionTermination watchedGeneration =
+        atomically $ do
+            current <- readTVar $ lsqLivenessGeneration ch
+            when (current == watchedGeneration) $
+                writeTVar
+                    (lsqLivenessGeneration ch)
+                    (current + 1)
 
 waitForGenerationChange :: LSQChannel -> Int -> IO ()
 waitForGenerationChange ch generation =
@@ -327,11 +347,16 @@ withAcquiredLSQ ch action =
                     LSQAcquire acquired acquiredVar
                 pure current
         takeTMVarOrConnectionLost ch generation deadline acquiredVar
-        result <-
-            restore (action acquired)
-                `onException` releaseAcquiredLSQBestEffort acquired
-        releaseAcquiredLSQ acquired
-        pure result
+        actionResult <-
+            try @SomeException $ restore $ action acquired
+        case actionResult of
+            Left exception -> do
+                unless (connectionInvalidated exception) $
+                    releaseAcquiredLSQBestEffort acquired
+                throwIO exception
+            Right result -> do
+                releaseAcquiredLSQ acquired
+                pure result
 
 {- | Submit a query through an acquired session and
 block until the result is available.
@@ -376,6 +401,15 @@ releaseAcquiredLSQBestEffort ::
 releaseAcquiredLSQBestEffort acquired =
     void (timeout 1000000 (releaseAcquiredLSQ acquired))
         `catch` \(_ :: SomeException) -> pure ()
+
+connectionInvalidated :: SomeException -> Bool
+connectionInvalidated exception =
+    case fromException exception of
+        Just ConnectionLost -> True
+        Nothing ->
+            case fromException exception of
+                Just (LocalStateQueryTimeout _) -> True
+                Nothing -> False
 
 data LSQWaitResult a
     = LSQResult a
