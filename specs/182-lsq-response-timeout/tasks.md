@@ -1,5 +1,10 @@
 # Tasks: bounded LocalStateQuery responses
 
+## Reopened bootstrap
+
+- [X] T000 Create the follow-up worktree, verification gate, and draft PR
+  #185 from released main.
+
 ## Slice 1: regression and liveness fix
 
 - [X] T183 Add the node-free typed-protocol regression and capture the expected
@@ -17,3 +22,17 @@
   calling thread, preserving the original manual stateful LSQ callback.
 - [X] T183 Enable threaded E2E deadlines, verify live RED→GREEN, and run the
   exact aggregate Nix build used by GitHub CI with a finite outer deadline.
+
+## Slice 3: reopened live connection-loss follow-up
+
+- [ ] T182-S3 Add and observe RED for a connection terminating while an LSQ
+  result wait still has a live deadline.
+- [ ] T182-S3 Signal connection termination to pending callers while preserving
+  the underlying connection exception.
+- [ ] T182-S3 Diagnose the exact acquired evaluation query that terminates on
+  the current mainnet node and implement only the proven minimal recovery.
+- [ ] T182-S3 Verify focused GREEN, revert/restore RED→GREEN, and the full
+  `./gate.sh`; commit with `Tasks: T182-S3`.
+- [ ] T182-LIVE Parent follow-up: pin an Amaru candidate and produce unsigned
+  CBOR for the exact colleague request five out of five times, with no
+  witness/sign/submit artifacts.
