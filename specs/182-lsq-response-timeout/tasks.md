@@ -25,14 +25,14 @@
 
 ## Slice 3: reopened live connection-loss follow-up
 
-- [ ] T182-S3 Add and observe RED for a connection terminating while an LSQ
+- [X] T182-S3 Add and observe RED for a connection terminating while an LSQ
   result wait still has a live deadline.
-- [ ] T182-S3 Signal connection termination to pending callers while preserving
+- [X] T182-S3 Signal connection termination to pending callers while preserving
   the underlying connection exception.
-- [ ] T182-S3 Diagnose the exact acquired evaluation query that terminates on
+- [X] T182-S3 Diagnose the exact acquired evaluation query that terminates on
   the current mainnet node and implement only the proven minimal recovery.
-- [ ] T182-S3 Verify focused GREEN, revert/restore RED→GREEN, and the full
+- [X] T182-S3 Verify focused GREEN, revert/restore RED→GREEN, and the full
   `./gate.sh`; commit with `Tasks: T182-S3`.
-- [ ] T182-LIVE Parent follow-up: pin an Amaru candidate and produce unsigned
+- [X] T182-LIVE Parent follow-up: pin an Amaru candidate and produce unsigned
   CBOR for the exact colleague request five out of five times, with no
   witness/sign/submit artifacts.
