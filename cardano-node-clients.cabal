@@ -1,6 +1,6 @@
 cabal-version:   3.4
 name:            cardano-node-clients
-version:         0.1.4.0
+version:         0.1.4.1
 synopsis:        Haskell clients for Cardano node mini-protocols
 description:
   Channel-driven Haskell clients for Cardano node Ouroboros

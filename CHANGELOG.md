@@ -9,6 +9,12 @@
 
 ## Unreleased
 
+## [0.1.4.1](https://github.com/lambdasistemi/cardano-node-clients/compare/v0.1.4.0...v0.1.4.1) (2026-07-11)
+
+### Bug Fixes
+
+* **n2c:** recover LSQ callers from connection loss ([2726c00](https://github.com/lambdasistemi/cardano-node-clients/commit/2726c00029007b749da61d2ec585d22af4ee0c7b))
+
 ## [0.1.4.0](https://github.com/lambdasistemi/cardano-node-clients/compare/v0.1.3.0...v0.1.4.0) (2026-07-10)
 
 ### Features
