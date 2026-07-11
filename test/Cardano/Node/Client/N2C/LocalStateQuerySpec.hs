@@ -18,6 +18,7 @@ import Cardano.Node.Client.N2C.LocalStateQuery (
  )
 import Cardano.Node.Client.N2C.Types (
     ConnectionLost (..),
+    LSQChannel (..),
     LocalStateQueryTimeout (..),
  )
 import Control.Concurrent (myThreadId, threadDelay)
@@ -27,6 +28,7 @@ import Control.Concurrent.STM (
     atomically,
     newEmptyTMVarIO,
     putTMVar,
+    readTVarIO,
     retry,
     takeTMVar,
  )
@@ -36,6 +38,7 @@ import Control.Exception (
     displayException,
     finally,
     fromException,
+    throwIO,
  )
 import Control.Monad (void)
 import Network.TypedProtocol.Stateful.Proofs qualified as Stateful
@@ -53,10 +56,13 @@ import System.Timeout (timeout)
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe)
 
 spec :: Spec
-spec = describe "Cardano.Node.Client.N2C.LocalStateQuery" $
+spec = describe "Cardano.Node.Client.N2C.LocalStateQuery" $ do
     it "bounds a stalled acquired query" $ do
         result <- timeout 2_000_000 stalledQueryScenario
         result `shouldBe` Just ()
+    it
+        "wakes a pending query when its connection terminates"
+        terminatingConnectionScenario
 
 stalledQueryScenario :: IO ()
 stalledQueryScenario = do
@@ -132,9 +138,58 @@ stalledQueryScenario = do
 responseTimeout :: Int
 responseTimeout = 600_000
 
+terminatingConnectionScenario :: IO ()
+terminatingConnectionScenario = do
+    ch <- newLSQChannelWithTimeout 1 responseTimeout
+    queryAccepted <- newEmptyTMVarIO
+    let peer =
+            void $
+                Stateful.connect
+                    StateIdle
+                    ( Client.localStateQueryClientPeer $
+                        mkLocalStateQueryClient ch
+                    )
+                    ( localStateQueryServerPeer $
+                        liveStalledServer queryAccepted
+                    )
+        connection =
+            monitorLocalStateQueryConnection ch $ do
+                atomically $ void $ takeTMVar queryAccepted
+                throwIO PeerTerminated
+    withAsync peer $ \_ ->
+        withAsync connection $ \connectionThread ->
+            withAsync
+                ( withAcquiredLSQ ch $ \acquired ->
+                    queryAcquiredLSQ acquired GetChainPoint
+                )
+                $ \queryThread -> do
+                    connectionException <-
+                        waitException "connection" connectionThread
+                    expectTypedException
+                        "connection"
+                        PeerTerminated
+                        connectionException
+                    generation <-
+                        readTVarIO $ lsqLivenessGeneration ch
+                    generation `shouldBe` 1
+                    queryException <-
+                        waitExceptionWithin 500_000 "query" queryThread
+                    expectTypedException
+                        "query"
+                        ConnectionLost
+                        queryException
+
+data PeerTerminated = PeerTerminated
+    deriving stock (Eq, Show)
+
+instance Exception PeerTerminated
+
 waitException :: String -> Async a -> IO SomeException
-waitException label thread = do
-    timedResult <- timeout 1_500_000 $ waitCatch thread
+waitException = waitExceptionWithin 1_500_000
+
+waitExceptionWithin :: Int -> String -> Async a -> IO SomeException
+waitExceptionWithin timeoutMicroseconds label thread = do
+    timedResult <- timeout timeoutMicroseconds $ waitCatch thread
     case timedResult of
         Nothing -> fail $ label <> " did not terminate"
         Just result -> fromAsyncResult result
@@ -171,6 +226,26 @@ stalledServer queryAccepted = LocalStateQueryServer $ pure idle
             { recvMsgQuery = \_ -> do
                 atomically $ putTMVar queryAccepted ()
                 atomically retry
+            , recvMsgReAcquire = \_ -> pure $ SendMsgAcquired acquired
+            , recvMsgRelease = pure idle
+            }
+
+liveStalledServer ::
+    TMVar () -> LocalStateQueryServer block point query IO ()
+liveStalledServer queryAccepted =
+    LocalStateQueryServer $ pure idle
+  where
+    idle =
+        ServerStIdle
+            { recvMsgAcquire = \_ -> pure $ SendMsgAcquired acquired
+            , recvMsgDone = pure ()
+            }
+    acquired =
+        ServerStAcquired
+            { recvMsgQuery = \_ -> do
+                atomically $ putTMVar queryAccepted ()
+                threadDelay 5_000_000
+                fail "query unexpectedly unblocked"
             , recvMsgReAcquire = \_ -> pure $ SendMsgAcquired acquired
             , recvMsgRelease = pure idle
             }
