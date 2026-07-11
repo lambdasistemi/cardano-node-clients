@@ -84,3 +84,52 @@ constructor is additive. The principal risk is a false timeout for unusually
 slow ledger evaluation; the 60-second default matches the downstream mitigation
 that exposed the bug, while the additive constructor permits an explicit
 application budget.
+
+## Reopened follow-up plan
+
+### Diagnostic question
+
+What external boundary does the existing unit suite bypass? It does not cover
+an independently terminated connection while a deadline `TVar` is still live,
+nor the four-query acquired sequence used by `evaluateTx` against the current
+mainnet node. Both boundaries require explicit proof before merge.
+
+### Slice 3: connection termination and evaluation recovery
+
+One bisect-safe RED/GREEN commit:
+
+1. Add a node-free regression whose connection/peer terminates after accepting
+   a query but before filling the result `TMVar`; capture v0.1.4.0 RED where the
+   caller waits until the deadline or reports the wrong exception.
+2. Make connection termination signal the watched generation without
+   overwriting a generation already invalidated by a timeout. Preserve the
+   original connection result/exception for the supervisor.
+3. Instrument the live evaluation sequence only as needed to identify the
+   exact terminating query and exception. Compare the working
+   interpreter/chain-point sequence with the failing UTxO/pparams/system-start/
+   interpreter sequence before choosing a recovery design.
+4. Apply the minimal correction at the proven boundary. Any LSQ read retry is
+   finite and starts on a fresh acquired generation; transaction submission is
+   excluded.
+5. Run focused GREEN, explicit revert/restore RED→GREEN, and `./gate.sh`.
+
+### Live-boundary operator follow-up
+
+The mainnet socket and treasury metadata are operator-only inputs, so the
+five-run disburse smoke is not placed in general CI. PR #185 remains draft
+until the parent orchestrator builds an Amaru candidate pinned to the PR head
+and the exact request produces five non-empty unsigned CBOR files. The smoke
+must also prove zero witness/sign/submit artifacts.
+
+### Slice 3 owned implementation files
+
+- `lib/Cardano/Node/Client/N2C/Connection.hs`
+- `lib/Cardano/Node/Client/N2C/LocalStateQuery.hs`
+- `lib/Cardano/Node/Client/N2C/Types.hs` only if the proven design requires it
+- `lib/Cardano/Node/Client/N2C/Provider.hs` only if diagnosis proves the
+  evaluation sequence itself is defective
+- `test/Cardano/Node/Client/N2C/LocalStateQuerySpec.hs`
+- focused E2E test files only when required by the diagnosis
+
+The package version, release notes, downstream pin, specs, gate, and PR
+metadata remain parent-owned.
