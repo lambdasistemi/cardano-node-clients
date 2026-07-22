@@ -1,9 +1,9 @@
 # Tasks — Issue 187: Devnet PV11 & Full PlutusV3 Cost Model
 
 ## Slice A — Provenance Fixture & Configuration Options
-- [ ] T187-SA1 Create provenance-stamped fixture `e2e-test/fixtures/pparams-pv11-mainnet.json` containing 350-entry PlutusV3 cost model and PV11 parameters.
-- [ ] T187-SA2 Add `DevnetConfig`, `TargetPV`, and `withDevnetConfig` to `Cardano.Node.Client.E2E.Setup`.
-- [ ] T187-SA3 Verify builds and slice A commit.
+- [X] T187-SA1 Create provenance-stamped fixture `e2e-test/fixtures/pparams-pv11-mainnet.json` containing 350-entry PlutusV3 cost model and PV11 parameters.
+- [X] T187-SA2 Add `DevnetConfig`, `TargetPV`, and `withDevnetConfig` to `Cardano.Node.Client.E2E.Setup`.
+- [X] T187-SA3 Verify builds and slice A commit.
 
 ## Slice B — Governance Transition Mechanism
 - [ ] T187-SB1 Configure genesis governance keys (CC and SPO) and patch genesis start/epoch parameters in `Devnet.hs`.

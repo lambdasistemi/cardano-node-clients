@@ -282,6 +282,7 @@ test-suite unit-tests
     Cardano.Node.Client.Adversary.ServerSpec
     Cardano.Node.Client.BlockIndexer.HandlerSpec
     Cardano.Node.Client.ConwayFixtures
+    Cardano.Node.Client.E2E.SetupSpec
     Cardano.Node.Client.N2C.LocalStateQuerySpec
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
@@ -320,6 +321,7 @@ test-suite unit-tests
     , cardano-ledger-mary
     , cardano-node-clients
     , cardano-node-clients:block-indexer
+    , cardano-node-clients:devnet
     , cardano-node-clients:tx-history-indexer-lib
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting

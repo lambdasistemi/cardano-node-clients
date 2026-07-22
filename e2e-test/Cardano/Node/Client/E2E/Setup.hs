@@ -12,6 +12,11 @@ module Cardano.Node.Client.E2E.Setup (
     devnetMagic,
     genesisDir,
 
+    -- * Devnet configuration
+    TargetPV (..),
+    DevnetConfig (..),
+    defaultDevnetConfig,
+
     -- * Genesis key
     genesisSignKey,
     genesisAddr,
@@ -50,6 +55,7 @@ module Cardano.Node.Client.E2E.Setup (
 
     -- * Devnet bracket
     withDevnet,
+    withDevnetConfig,
     withDevnetFromGenesis,
 ) where
 
@@ -200,15 +206,51 @@ mkWitVKey (TxId hash) sk =
   where
     vk = VKey (deriveVerKeyDSIGN sk)
 
+{- | Target protocol version for devnet execution.
+-}
+data TargetPV = PV10 | PV11
+    deriving stock (Eq, Show, Enum, Bounded)
+
+{- | Configuration parameters for devnet setup.
+-}
+data DevnetConfig = DevnetConfig
+    { devnetTargetPV :: TargetPV
+    , devnetGenesisDir :: Maybe FilePath
+    }
+    deriving stock (Eq, Show)
+
+{- | Default devnet configuration (PV10 target, default genesis directory).
+-}
+defaultDevnetConfig :: DevnetConfig
+defaultDevnetConfig =
+    DevnetConfig
+        { devnetTargetPV = PV10
+        , devnetGenesisDir = Nothing
+        }
+
+{- | Start a cardano-node devnet with the given configuration, connect via N2C,
+run an action, and tear down.
+-}
+withDevnetConfig ::
+    DevnetConfig ->
+    (LSQChannel -> LTxSChannel -> IO a) ->
+    IO a
+withDevnetConfig cfg action = case devnetTargetPV cfg of
+    PV10 -> do
+        gDir <- case devnetGenesisDir cfg of
+            Just d -> pure d
+            Nothing -> genesisDir
+        withDevnetFromGenesis gDir action
+    PV11 ->
+        error "PV11 devnet not yet implemented — see Slice B"
+
 {- | Start a cardano-node devnet, connect via N2C,
 run an action, and tear down.
 -}
 withDevnet ::
     (LSQChannel -> LTxSChannel -> IO a) ->
     IO a
-withDevnet action = do
-    gDir <- genesisDir
-    withDevnetFromGenesis gDir action
+withDevnet = withDevnetConfig defaultDevnetConfig
 
 {- | Start a cardano-node devnet from a specific
 genesis directory, connect via N2C, run an action,
