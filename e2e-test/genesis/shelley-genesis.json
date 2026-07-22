@@ -1,6 +1,6 @@
 {
     "activeSlotsCoeff": 1.0,
-    "epochLength": 500,
+    "epochLength": 100,
     "genDelegs": {
         "de4e4ff5d20f04a6d75cb2edfcc08cb7077dce4aa5d17ee59202a4e0": {
             "delegate": "b2897e99bcc6e8644d254ef659eff3ce9af53d55f25d88908d065d64",
@@ -54,6 +54,22 @@
                 "rewardAccount": {
                     "credential": {
                         "keyHash": "061fd2cd05c2e7298a6904552c7638d639dd51832d15efa6257c0d9a"
+                    },
+                    "network": "Testnet"
+                },
+                "vrf": "cbff9b30ec4ee8b90712a79bf3c176e8833ad0c8078a73cea0a265eb352e9927"
+            },
+            "f92331d882d35e05978c558352a66c61f476838e1e2fd1c4ae7fc0d6": {
+                "cost": 0,
+                "margin": 0,
+                "metadata": null,
+                "owners": [],
+                "pledge": 0,
+                "publicKey": "f92331d882d35e05978c558352a66c61f476838e1e2fd1c4ae7fc0d6",
+                "relays": [],
+                "rewardAccount": {
+                    "credential": {
+                        "keyHash": "f92331d882d35e05978c558352a66c61f476838e1e2fd1c4ae7fc0d6"
                     },
                     "network": "Testnet"
                 },

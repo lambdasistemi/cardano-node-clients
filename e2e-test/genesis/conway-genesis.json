@@ -1,24 +1,24 @@
 {
   "poolVotingThresholds": {
-    "committeeNormal": 0.60,
+    "committeeNormal": 0.51,
     "committeeNoConfidence": 0.51,
     "hardForkInitiation": 0.51,
-    "motionNoConfidence": 0.60,
-    "ppSecurityGroup": 0.60
+    "motionNoConfidence": 0.51,
+    "ppSecurityGroup": 0.51
   },
   "dRepVotingThresholds": {
-    "motionNoConfidence": 0.67,
-    "committeeNormal": 0.67,
-    "committeeNoConfidence": 0.60,
-    "updateToConstitution": 0.75,
-    "hardForkInitiation": 0.60,
-    "ppNetworkGroup": 0.67,
-    "ppEconomicGroup": 0.67,
-    "ppTechnicalGroup": 0.67,
-    "ppGovGroup": 0.75,
-    "treasuryWithdrawal": 0.67
+    "motionNoConfidence": 0.51,
+    "committeeNormal": 0.51,
+    "committeeNoConfidence": 0.51,
+    "updateToConstitution": 0.51,
+    "hardForkInitiation": 0.51,
+    "ppNetworkGroup": 0.51,
+    "ppEconomicGroup": 0.51,
+    "ppTechnicalGroup": 0.51,
+    "ppGovGroup": 0.51,
+    "treasuryWithdrawal": 0.51
   },
-  "committeeMinSize": 7,
+  "committeeMinSize": 1,
   "committeeMaxTermLength": 73,
   "govActionLifetime": 6,
   "govActionDeposit": 50000000000,
@@ -33,8 +33,9 @@
   },
   "committee": {
     "members": {
+      "keyHash-f92331d882d35e05978c558352a66c61f476838e1e2fd1c4ae7fc0d6": 1000
     },
-    "threshold": 0.67
+    "threshold": 0.51
   },
   "plutusV3CostModel": [
     100788,

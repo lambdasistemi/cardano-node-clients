@@ -61,9 +61,8 @@ module Cardano.Node.Client.E2E.Setup (
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, cancel, poll)
-import Data.ByteString (ByteString)
 import Data.Maybe (fromMaybe)
-import Data.Set qualified as Set
+import Ouroboros.Network.Magic (NetworkMagic (..))
 import System.Environment (lookupEnv)
 
 import Cardano.Crypto.DSIGN (
@@ -72,7 +71,6 @@ import Cardano.Crypto.DSIGN (
     SignKeyDSIGN,
     VerKeyDSIGN,
     deriveVerKeyDSIGN,
-    genKeyDSIGN,
     rawDeserialiseSigDSIGN,
     rawDeserialiseSignKeyDSIGN,
     rawDeserialiseVerKeyDSIGN,
@@ -82,36 +80,18 @@ import Cardano.Crypto.DSIGN (
     signDSIGN,
     verifyDSIGN,
  )
-import Cardano.Crypto.Seed (mkSeedFromBytes)
-import Cardano.Ledger.Address (Addr (..))
-import Cardano.Ledger.Api.Tx (
-    addrTxWitsL,
-    txIdTx,
-    witsTxL,
- )
-import Cardano.Ledger.Api.Tx.In (TxId (..))
-import Cardano.Ledger.BaseTypes (Network (..))
-import Cardano.Ledger.Core (extractHash)
-import Cardano.Ledger.Credential (
-    Credential (..),
-    StakeReference (..),
- )
-import Cardano.Ledger.Keys (
-    KeyHash,
-    KeyRole (..),
-    VKey (..),
-    WitVKey (..),
-    asWitness,
-    hashKey,
-    signedDSIGN,
- )
-import Lens.Micro ((%~), (&))
-import Ouroboros.Network.Magic (NetworkMagic (..))
-
 import Cardano.Node.Client.E2E.Devnet (
+    addKeyWitness,
+    enterpriseAddr,
+    genesisAddr,
+    genesisSignKey,
+    keyHashFromSignKey,
+    mkSignKey,
     withCardanoNode,
  )
-import Cardano.Node.Client.Ledger (ConwayTx)
+import Cardano.Node.Client.E2E.Governance (
+    enactPV11Transition,
+ )
 import Cardano.Node.Client.N2C.Connection (
     newLSQChannel,
     newLTxSChannel,
@@ -137,90 +117,18 @@ genesisDir = do
             "e2e-test/genesis"
             mPath
 
-{- | Genesis UTxO signing key. Matches the address
-in @shelley-genesis.json@ @initialFunds@.
-Seed must be exactly 32 bytes.
--}
-genesisSignKey :: SignKeyDSIGN Ed25519DSIGN
-genesisSignKey =
-    mkSignKey
-        "e2e-genesis-utxo-key-seed-000001"
-
-{- | Enterprise testnet address for the genesis
-UTxO key.
--}
-genesisAddr :: Addr
-genesisAddr =
-    enterpriseAddr
-        (keyHashFromSignKey genesisSignKey)
-
-{- | Derive an Ed25519 signing key from a 32-byte
-seed. The seed must be exactly 32 bytes.
--}
-mkSignKey ::
-    ByteString -> SignKeyDSIGN Ed25519DSIGN
-mkSignKey seed =
-    genKeyDSIGN (mkSeedFromBytes seed)
-
-{- | Derive the payment key hash from a signing
-key via 'VKey' + 'hashKey'.
--}
-keyHashFromSignKey ::
-    SignKeyDSIGN Ed25519DSIGN ->
-    KeyHash Payment
-keyHashFromSignKey sk =
-    hashKey (VKey (deriveVerKeyDSIGN sk))
-
-{- | Enterprise testnet address from a payment
-key hash.
--}
-enterpriseAddr :: KeyHash Payment -> Addr
-enterpriseAddr kh =
-    Addr Testnet (KeyHashObj kh) StakeRefNull
-
-{- | Add a key witness to a transaction.
-Construct 'WitVKey' from 'VKey' + 'SignedDSIGN',
-then union into @witsTxL . addrTxWitsL@.
--}
-addKeyWitness ::
-    SignKeyDSIGN Ed25519DSIGN ->
-    ConwayTx ->
-    ConwayTx
-addKeyWitness sk tx =
-    tx & witsTxL . addrTxWitsL %~ Set.union wits
-  where
-    wits =
-        Set.singleton (mkWitVKey (txIdTx tx) sk)
-
-{- | Create a 'WitVKey' from a 'TxId' and signing
-key.
--}
-mkWitVKey ::
-    TxId ->
-    SignKeyDSIGN Ed25519DSIGN ->
-    WitVKey Witness
-mkWitVKey (TxId hash) sk =
-    WitVKey
-        (asWitness vk)
-        (signedDSIGN sk (extractHash hash))
-  where
-    vk = VKey (deriveVerKeyDSIGN sk)
-
-{- | Target protocol version for devnet execution.
--}
+-- | Target protocol version for devnet execution.
 data TargetPV = PV10 | PV11
     deriving stock (Eq, Show, Enum, Bounded)
 
-{- | Configuration parameters for devnet setup.
--}
+-- | Configuration parameters for devnet setup.
 data DevnetConfig = DevnetConfig
     { devnetTargetPV :: TargetPV
     , devnetGenesisDir :: Maybe FilePath
     }
     deriving stock (Eq, Show)
 
-{- | Default devnet configuration (PV10 target, default genesis directory).
--}
+-- | Default devnet configuration (PV10 target, default genesis directory).
 defaultDevnetConfig :: DevnetConfig
 defaultDevnetConfig =
     DevnetConfig
@@ -237,12 +145,13 @@ withDevnetConfig ::
     IO a
 withDevnetConfig cfg action = case devnetTargetPV cfg of
     PV10 -> do
-        gDir <- case devnetGenesisDir cfg of
-            Just d -> pure d
-            Nothing -> genesisDir
+        gDir <- maybe genesisDir pure (devnetGenesisDir cfg)
         withDevnetFromGenesis gDir action
-    PV11 ->
-        error "PV11 devnet not yet implemented — see Slice B"
+    PV11 -> do
+        gDir <- maybe genesisDir pure (devnetGenesisDir cfg)
+        withDevnetFromGenesis gDir $ \lsq ltxs -> do
+            enactPV11Transition lsq ltxs
+            action lsq ltxs
 
 {- | Start a cardano-node devnet, connect via N2C,
 run an action, and tear down.
