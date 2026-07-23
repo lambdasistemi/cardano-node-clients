@@ -9,8 +9,64 @@ License     : Apache-2.0
 module Cardano.Node.Client.E2E.Devnet (
     withCardanoNode,
     withRestartableCardanoNode,
+
+    -- * Genesis key
+    genesisSignKey,
+    genesisAddr,
+
+    -- * Constitutional committee keys
+    ccColdSignKey,
+    ccHotSignKey,
+    ccColdKeyHash,
+    ccHotCredential,
+
+    -- * Runtime-registered harness pool key
+    harnessPoolColdSignKey,
+    harnessPoolKh,
+
+    -- * Key generation
+    mkSignKey,
+    keyHashFromSignKey,
+    enterpriseAddr,
+
+    -- * Signing
+    addKeyWitness,
 ) where
 
+import Cardano.Crypto.DSIGN (
+    Ed25519DSIGN,
+    SignKeyDSIGN,
+    deriveVerKeyDSIGN,
+    genKeyDSIGN,
+ )
+import Cardano.Crypto.Seed (mkSeedFromBytes)
+import Cardano.Ledger.Address (
+    Addr (..),
+ )
+import Cardano.Ledger.Api (
+    addrTxWitsL,
+    txIdTx,
+    witsTxL,
+ )
+import Cardano.Ledger.BaseTypes (
+    Network (..),
+ )
+import Cardano.Ledger.Core (
+    extractHash,
+ )
+import Cardano.Ledger.Credential (Credential (..), StakeReference (..))
+import Cardano.Ledger.Keys (
+    KeyHash (..),
+    KeyRole (..),
+    VKey (..),
+    WitVKey (..),
+    asWitness,
+    coerceKeyRole,
+    hashKey,
+    signedDSIGN,
+ )
+import Cardano.Ledger.TxIn (TxId (..))
+import Cardano.Node.Client.Ledger (ConwayTx)
 import Cardano.Node.Client.N2C.Probe (
     defaultProbeConfig,
     waitForNodeReady,
@@ -22,6 +78,7 @@ import Control.Exception (
     onException,
  )
 import Control.Monad (unless, void)
+import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.IORef (
@@ -30,6 +87,7 @@ import Data.IORef (
     readIORef,
     writeIORef,
  )
+import Data.Set qualified as Set
 import Data.Time.Clock (
     NominalDiffTime,
     UTCTime,
@@ -43,6 +101,7 @@ import Data.Time.Format (
     defaultTimeLocale,
     formatTime,
  )
+import Lens.Micro ((%~), (&))
 import Ouroboros.Network.Magic (NetworkMagic (..))
 import System.Directory (
     copyFile,
@@ -349,3 +408,126 @@ waitForSocket path n = do
     unless exists $ do
         threadDelay 100_000
         waitForSocket path (n - 1)
+
+{- | Genesis UTxO signing key. Matches the address
+in @shelley-genesis.json@ @initialFunds@.
+Seed must be exactly 32 bytes.
+-}
+genesisSignKey :: SignKeyDSIGN Ed25519DSIGN
+genesisSignKey =
+    mkSignKey
+        "e2e-genesis-utxo-key-seed-000001"
+
+{- | Enterprise testnet address for the genesis
+UTxO key.
+-}
+genesisAddr :: Addr
+genesisAddr =
+    enterpriseAddr
+        (keyHashFromSignKey genesisSignKey)
+
+{- | Stock constitutional-committee cold signing key.
+Its key hash is the sole member of
+@committee.members@ in @conway-genesis.json@.
+Seed must be exactly 32 bytes.
+-}
+ccColdSignKey :: SignKeyDSIGN Ed25519DSIGN
+ccColdSignKey =
+    mkSignKey
+        "e2e-cc-cold-key-seed-00000000001"
+
+{- | Stock constitutional-committee hot signing key.
+Authorized at runtime via a
+@ConwayAuthCommitteeHotKey@ certificate witnessed
+by 'ccColdSignKey'. Seed must be exactly 32 bytes.
+-}
+ccHotSignKey :: SignKeyDSIGN Ed25519DSIGN
+ccHotSignKey =
+    mkSignKey
+        "e2e-cc-hot-key-seed-000000000001"
+
+{- | Cold key hash of the stock committee member,
+matching @committee.members@ in
+@conway-genesis.json@.
+-}
+ccColdKeyHash :: KeyHash ColdCommitteeRole
+ccColdKeyHash =
+    coerceKeyRole (keyHashFromSignKey ccColdSignKey)
+
+{- | Hot credential of the stock committee member,
+for use in @ConwayAuthCommitteeHotKey@ and
+@CommitteeVoter@.
+-}
+ccHotCredential :: Credential HotCommitteeRole
+ccHotCredential =
+    KeyHashObj
+        (coerceKeyRole (keyHashFromSignKey ccHotSignKey))
+
+{- | Cold signing key for a harness-controlled stake
+pool registered at runtime (not the stock genesis
+pool @e797e39f…@). Seed must be exactly 32 bytes.
+-}
+harnessPoolColdSignKey :: SignKeyDSIGN Ed25519DSIGN
+harnessPoolColdSignKey =
+    mkSignKey
+        "e2e-harness-pool-cold-key-seed-01"
+
+{- | Key hash of the runtime-registered harness
+stake pool, for @RegPool@ / @DelegStakeVote@ /
+@StakePoolVoter@.
+-}
+harnessPoolKh :: KeyHash StakePool
+harnessPoolKh =
+    coerceKeyRole (keyHashFromSignKey harnessPoolColdSignKey)
+
+{- | Derive an Ed25519 signing key from a 32-byte
+seed. The seed must be exactly 32 bytes.
+-}
+mkSignKey ::
+    ByteString -> SignKeyDSIGN Ed25519DSIGN
+mkSignKey seed =
+    genKeyDSIGN (mkSeedFromBytes seed)
+
+{- | Derive the payment key hash from a signing
+key via 'VKey' + 'hashKey'.
+-}
+keyHashFromSignKey ::
+    SignKeyDSIGN Ed25519DSIGN ->
+    KeyHash Payment
+keyHashFromSignKey sk =
+    hashKey (VKey (deriveVerKeyDSIGN sk))
+
+{- | Enterprise testnet address from a payment
+key hash.
+-}
+enterpriseAddr :: KeyHash Payment -> Addr
+enterpriseAddr kh =
+    Addr Testnet (KeyHashObj kh) StakeRefNull
+
+{- | Add a key witness to a transaction.
+Construct 'WitVKey' from 'VKey' + 'SignedDSIGN',
+then union into @witsTxL . addrTxWitsL@.
+-}
+addKeyWitness ::
+    SignKeyDSIGN Ed25519DSIGN ->
+    ConwayTx ->
+    ConwayTx
+addKeyWitness sk tx =
+    tx & witsTxL . addrTxWitsL %~ Set.union wits
+  where
+    wits =
+        Set.singleton (mkWitVKey (txIdTx tx) sk)
+
+{- | Create a 'WitVKey' from a 'TxId' and signing
+key.
+-}
+mkWitVKey ::
+    TxId ->
+    SignKeyDSIGN Ed25519DSIGN ->
+    WitVKey Witness
+mkWitVKey (TxId hash) sk =
+    WitVKey
+        (asWitness vk)
+        (signedDSIGN sk (extractHash hash))
+  where
+    vk = VKey (deriveVerKeyDSIGN sk)

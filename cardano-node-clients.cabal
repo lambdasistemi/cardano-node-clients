@@ -146,29 +146,39 @@ library devnet
     Cardano.Node.Client.E2E.ChainPopulator
     Cardano.Node.Client.E2E.CrashRecovery
     Cardano.Node.Client.E2E.Devnet
+    Cardano.Node.Client.E2E.Governance
+    Cardano.Node.Client.E2E.PlominScript
     Cardano.Node.Client.E2E.Setup
 
   build-depends:
+    , aeson
     , async
     , base
     , bytestring
     , cardano-crypto-class
+    , cardano-data
     , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-node-clients
+    , cardano-slotting
+    , cardano-strict-containers
     , chain-follower
     , containers
     , contra-tracer
     , directory
     , filepath
     , microlens
+    , ouroboros-consensus
     , ouroboros-network
     , ouroboros-network:api
+    , plutus-core
+    , plutus-ledger-api
     , process
     , stm
+    , text
     , time
     , unix
 
@@ -282,6 +292,7 @@ test-suite unit-tests
     Cardano.Node.Client.Adversary.ServerSpec
     Cardano.Node.Client.BlockIndexer.HandlerSpec
     Cardano.Node.Client.ConwayFixtures
+    Cardano.Node.Client.E2E.SetupSpec
     Cardano.Node.Client.N2C.LocalStateQuerySpec
     Cardano.Node.Client.N2C.ProbeSpec
     Cardano.Node.Client.N2C.TraceSpec
@@ -320,6 +331,7 @@ test-suite unit-tests
     , cardano-ledger-mary
     , cardano-node-clients
     , cardano-node-clients:block-indexer
+    , cardano-node-clients:devnet
     , cardano-node-clients:tx-history-indexer-lib
     , cardano-node-clients:utxo-indexer-lib
     , cardano-slotting
@@ -366,6 +378,7 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.Issue97ReproSpec
     Cardano.Node.Client.E2E.N2CFullSpec
     Cardano.Node.Client.E2E.ProviderSpec
+    Cardano.Node.Client.E2E.PV11GovernanceSpec
     Cardano.Node.Client.E2E.UTxOIndexerReconnectSpec
 
   build-depends:

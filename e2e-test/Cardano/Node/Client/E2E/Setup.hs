@@ -12,6 +12,11 @@ module Cardano.Node.Client.E2E.Setup (
     devnetMagic,
     genesisDir,
 
+    -- * Devnet configuration
+    TargetPV (..),
+    DevnetConfig (..),
+    defaultDevnetConfig,
+
     -- * Genesis key
     genesisSignKey,
     genesisAddr,
@@ -21,6 +26,10 @@ module Cardano.Node.Client.E2E.Setup (
     ccHotSignKey,
     ccColdKeyHash,
     ccHotCredential,
+
+    -- * Runtime-registered harness pool key
+    harnessPoolColdSignKey,
+    harnessPoolKh,
 
     -- * Key generation
     mkSignKey,
@@ -55,15 +64,16 @@ module Cardano.Node.Client.E2E.Setup (
     rawSerialiseSigDSIGN,
 
     -- * Devnet bracket
+    assertPV11Enacted,
     withDevnet,
+    withDevnetConfig,
     withDevnetFromGenesis,
 ) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, cancel, poll)
-import Data.ByteString (ByteString)
 import Data.Maybe (fromMaybe)
-import Data.Set qualified as Set
+import Ouroboros.Network.Magic (NetworkMagic (..))
 import System.Environment (lookupEnv)
 
 import Cardano.Crypto.DSIGN (
@@ -72,7 +82,6 @@ import Cardano.Crypto.DSIGN (
     SignKeyDSIGN,
     VerKeyDSIGN,
     deriveVerKeyDSIGN,
-    genKeyDSIGN,
     rawDeserialiseSigDSIGN,
     rawDeserialiseSignKeyDSIGN,
     rawDeserialiseVerKeyDSIGN,
@@ -82,42 +91,31 @@ import Cardano.Crypto.DSIGN (
     signDSIGN,
     verifyDSIGN,
  )
-import Cardano.Crypto.Seed (mkSeedFromBytes)
-import Cardano.Ledger.Address (Addr (..))
-import Cardano.Ledger.Api.Tx (
-    addrTxWitsL,
-    txIdTx,
-    witsTxL,
- )
-import Cardano.Ledger.Api.Tx.In (TxId (..))
-import Cardano.Ledger.BaseTypes (Network (..))
-import Cardano.Ledger.Core (extractHash)
-import Cardano.Ledger.Credential (
-    Credential (..),
-    StakeReference (..),
- )
-import Cardano.Ledger.Keys (
-    KeyHash,
-    KeyRole (..),
-    VKey (..),
-    WitVKey (..),
-    asWitness,
-    coerceKeyRole,
-    hashKey,
-    signedDSIGN,
- )
-import Lens.Micro ((%~), (&))
-import Ouroboros.Network.Magic (NetworkMagic (..))
-
 import Cardano.Node.Client.E2E.Devnet (
+    addKeyWitness,
+    ccColdKeyHash,
+    ccColdSignKey,
+    ccHotCredential,
+    ccHotSignKey,
+    enterpriseAddr,
+    genesisAddr,
+    genesisSignKey,
+    harnessPoolColdSignKey,
+    harnessPoolKh,
+    keyHashFromSignKey,
+    mkSignKey,
     withCardanoNode,
  )
-import Cardano.Node.Client.Ledger (ConwayTx)
+import Cardano.Node.Client.E2E.Governance (
+    assertPV11Enacted,
+    enactPV11Transition,
+ )
 import Cardano.Node.Client.N2C.Connection (
     newLSQChannel,
     newLTxSChannel,
     runNodeClient,
  )
+import Cardano.Node.Client.N2C.Provider (mkN2CProvider)
 import Cardano.Node.Client.N2C.Types (
     LSQChannel,
     LTxSChannel,
@@ -138,111 +136,43 @@ genesisDir = do
             "e2e-test/genesis"
             mPath
 
-{- | Genesis UTxO signing key. Matches the address
-in @shelley-genesis.json@ @initialFunds@.
-Seed must be exactly 32 bytes.
--}
-genesisSignKey :: SignKeyDSIGN Ed25519DSIGN
-genesisSignKey =
-    mkSignKey
-        "e2e-genesis-utxo-key-seed-000001"
+-- | Target protocol version for devnet execution.
+data TargetPV = PV10 | PV11
+    deriving stock (Eq, Show, Enum, Bounded)
 
-{- | Enterprise testnet address for the genesis
-UTxO key.
--}
-genesisAddr :: Addr
-genesisAddr =
-    enterpriseAddr
-        (keyHashFromSignKey genesisSignKey)
+-- | Configuration parameters for devnet setup.
+data DevnetConfig = DevnetConfig
+    { devnetTargetPV :: TargetPV
+    , devnetGenesisDir :: Maybe FilePath
+    }
+    deriving stock (Eq, Show)
 
-{- | Stock constitutional-committee cold signing key.
-Its key hash is the sole member of
-@committee.members@ in @conway-genesis.json@.
-Seed must be exactly 32 bytes.
--}
-ccColdSignKey :: SignKeyDSIGN Ed25519DSIGN
-ccColdSignKey =
-    mkSignKey
-        "e2e-cc-cold-key-seed-00000000001"
+-- | Default devnet configuration (PV10 target, default genesis directory).
+defaultDevnetConfig :: DevnetConfig
+defaultDevnetConfig =
+    DevnetConfig
+        { devnetTargetPV = PV10
+        , devnetGenesisDir = Nothing
+        }
 
-{- | Stock constitutional-committee hot signing key.
-Authorized at runtime via a
-@ConwayAuthCommitteeHotKey@ certificate witnessed
-by 'ccColdSignKey'. Seed must be exactly 32 bytes.
+{- | Start a cardano-node devnet with the given configuration, connect via N2C,
+run an action, and tear down.
 -}
-ccHotSignKey :: SignKeyDSIGN Ed25519DSIGN
-ccHotSignKey =
-    mkSignKey
-        "e2e-cc-hot-key-seed-000000000001"
-
-{- | Cold key hash of the stock committee member,
-matching @committee.members@ in
-@conway-genesis.json@.
--}
-ccColdKeyHash :: KeyHash ColdCommitteeRole
-ccColdKeyHash =
-    coerceKeyRole (keyHashFromSignKey ccColdSignKey)
-
-{- | Hot credential of the stock committee member,
-for use in @ConwayAuthCommitteeHotKey@ and
-@CommitteeVoter@.
--}
-ccHotCredential :: Credential HotCommitteeRole
-ccHotCredential =
-    KeyHashObj
-        (coerceKeyRole (keyHashFromSignKey ccHotSignKey))
-
-{- | Derive an Ed25519 signing key from a 32-byte
-seed. The seed must be exactly 32 bytes.
--}
-mkSignKey ::
-    ByteString -> SignKeyDSIGN Ed25519DSIGN
-mkSignKey seed =
-    genKeyDSIGN (mkSeedFromBytes seed)
-
-{- | Derive the payment key hash from a signing
-key via 'VKey' + 'hashKey'.
--}
-keyHashFromSignKey ::
-    SignKeyDSIGN Ed25519DSIGN ->
-    KeyHash Payment
-keyHashFromSignKey sk =
-    hashKey (VKey (deriveVerKeyDSIGN sk))
-
-{- | Enterprise testnet address from a payment
-key hash.
--}
-enterpriseAddr :: KeyHash Payment -> Addr
-enterpriseAddr kh =
-    Addr Testnet (KeyHashObj kh) StakeRefNull
-
-{- | Add a key witness to a transaction.
-Construct 'WitVKey' from 'VKey' + 'SignedDSIGN',
-then union into @witsTxL . addrTxWitsL@.
--}
-addKeyWitness ::
-    SignKeyDSIGN Ed25519DSIGN ->
-    ConwayTx ->
-    ConwayTx
-addKeyWitness sk tx =
-    tx & witsTxL . addrTxWitsL %~ Set.union wits
-  where
-    wits =
-        Set.singleton (mkWitVKey (txIdTx tx) sk)
-
-{- | Create a 'WitVKey' from a 'TxId' and signing
-key.
--}
-mkWitVKey ::
-    TxId ->
-    SignKeyDSIGN Ed25519DSIGN ->
-    WitVKey Witness
-mkWitVKey (TxId hash) sk =
-    WitVKey
-        (asWitness vk)
-        (signedDSIGN sk (extractHash hash))
-  where
-    vk = VKey (deriveVerKeyDSIGN sk)
+withDevnetConfig ::
+    DevnetConfig ->
+    (LSQChannel -> LTxSChannel -> IO a) ->
+    IO a
+withDevnetConfig cfg action = case devnetTargetPV cfg of
+    PV10 -> do
+        gDir <- maybe genesisDir pure (devnetGenesisDir cfg)
+        withDevnetFromGenesis gDir action
+    PV11 -> do
+        gDir <- maybe genesisDir pure (devnetGenesisDir cfg)
+        withDevnetFromGenesis gDir $ \lsq ltxs -> do
+            enactPV11Transition lsq ltxs
+            let provider = mkN2CProvider lsq
+            assertPV11Enacted provider
+            action lsq ltxs
 
 {- | Start a cardano-node devnet, connect via N2C,
 run an action, and tear down.
@@ -250,9 +180,7 @@ run an action, and tear down.
 withDevnet ::
     (LSQChannel -> LTxSChannel -> IO a) ->
     IO a
-withDevnet action = do
-    gDir <- genesisDir
-    withDevnetFromGenesis gDir action
+withDevnet = withDevnetConfig defaultDevnetConfig
 
 {- | Start a cardano-node devnet from a specific
 genesis directory, connect via N2C, run an action,
