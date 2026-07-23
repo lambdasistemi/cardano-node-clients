@@ -19,8 +19,8 @@ import Data.Maybe.Strict (StrictMaybe (..))
 import Data.OSet.Strict qualified as OSet
 import Data.Sequence.Strict qualified as StrictSeq
 import Data.Set qualified as Set
-import Numeric.Natural (Natural)
 import Lens.Micro ((&), (.~), (^.))
+import Numeric.Natural (Natural)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Cardano.Ledger.Address (
