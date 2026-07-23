@@ -14,6 +14,16 @@ module Cardano.Node.Client.E2E.Devnet (
     genesisSignKey,
     genesisAddr,
 
+    -- * Constitutional committee keys
+    ccColdSignKey,
+    ccHotSignKey,
+    ccColdKeyHash,
+    ccHotCredential,
+
+    -- * Runtime-registered harness pool key
+    harnessPoolColdSignKey,
+    harnessPoolKh,
+
     -- * Key generation
     mkSignKey,
     keyHashFromSignKey,
@@ -51,6 +61,7 @@ import Cardano.Ledger.Keys (
     VKey (..),
     WitVKey (..),
     asWitness,
+    coerceKeyRole,
     hashKey,
     signedDSIGN,
  )
@@ -414,6 +425,60 @@ genesisAddr :: Addr
 genesisAddr =
     enterpriseAddr
         (keyHashFromSignKey genesisSignKey)
+
+{- | Stock constitutional-committee cold signing key.
+Its key hash is the sole member of
+@committee.members@ in @conway-genesis.json@.
+Seed must be exactly 32 bytes.
+-}
+ccColdSignKey :: SignKeyDSIGN Ed25519DSIGN
+ccColdSignKey =
+    mkSignKey
+        "e2e-cc-cold-key-seed-00000000001"
+
+{- | Stock constitutional-committee hot signing key.
+Authorized at runtime via a
+@ConwayAuthCommitteeHotKey@ certificate witnessed
+by 'ccColdSignKey'. Seed must be exactly 32 bytes.
+-}
+ccHotSignKey :: SignKeyDSIGN Ed25519DSIGN
+ccHotSignKey =
+    mkSignKey
+        "e2e-cc-hot-key-seed-000000000001"
+
+{- | Cold key hash of the stock committee member,
+matching @committee.members@ in
+@conway-genesis.json@.
+-}
+ccColdKeyHash :: KeyHash ColdCommitteeRole
+ccColdKeyHash =
+    coerceKeyRole (keyHashFromSignKey ccColdSignKey)
+
+{- | Hot credential of the stock committee member,
+for use in @ConwayAuthCommitteeHotKey@ and
+@CommitteeVoter@.
+-}
+ccHotCredential :: Credential HotCommitteeRole
+ccHotCredential =
+    KeyHashObj
+        (coerceKeyRole (keyHashFromSignKey ccHotSignKey))
+
+{- | Cold signing key for a harness-controlled stake
+pool registered at runtime (not the stock genesis
+pool @e797e39f…@). Seed must be exactly 32 bytes.
+-}
+harnessPoolColdSignKey :: SignKeyDSIGN Ed25519DSIGN
+harnessPoolColdSignKey =
+    mkSignKey
+        "e2e-harness-pool-cold-key-seed-01"
+
+{- | Key hash of the runtime-registered harness
+stake pool, for @RegPool@ / @DelegStakeVote@ /
+@StakePoolVoter@.
+-}
+harnessPoolKh :: KeyHash StakePool
+harnessPoolKh =
+    coerceKeyRole (keyHashFromSignKey harnessPoolColdSignKey)
 
 {- | Derive an Ed25519 signing key from a 32-byte
 seed. The seed must be exactly 32 bytes.

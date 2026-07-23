@@ -72,6 +72,7 @@ import Cardano.Ledger.BaseTypes (
     Network (..),
     ProtVer (..),
     TxIx (..),
+    boundRational,
     natVersion,
     textToUrl,
  )
@@ -86,12 +87,15 @@ import Cardano.Ledger.Conway.TxCert (
  )
 import Cardano.Ledger.Core (
     hashAnnotated,
+    pattern RegPoolTxCert,
  )
 import Cardano.Ledger.Credential (Credential (..))
 import Cardano.Ledger.DRep (DRep (..))
+import Cardano.Ledger.Hashes (VRFVerKeyHash (..))
 import Cardano.Ledger.Keys (
     KeyHash (..),
     KeyRole (..),
+    KeyRoleVRF (..),
  )
 import Cardano.Ledger.Plutus (
     Language (PlutusV3),
@@ -100,14 +104,21 @@ import Cardano.Ledger.Plutus (
     mkCostModel,
     mkCostModels,
  )
+import Cardano.Ledger.State (StakePoolParams (..))
 import Cardano.Ledger.TxIn (TxIn (..))
 import Cardano.Ledger.Val (inject)
 import Lens.Micro ((&), (.~), (^.))
 
 import Cardano.Node.Client.E2E.Devnet (
     addKeyWitness,
+    ccColdKeyHash,
+    ccColdSignKey,
+    ccHotCredential,
+    ccHotSignKey,
     genesisAddr,
     genesisSignKey,
+    harnessPoolColdSignKey,
+    harnessPoolKh,
     keyHashFromSignKey,
  )
 import Cardano.Node.Client.Ledger (ConwayTx)
@@ -122,11 +133,15 @@ import Cardano.Node.Client.Provider (
  )
 import Cardano.Node.Client.Submitter (SubmitResult (..), submitTx)
 
-ccHotSignKey :: SignKeyDSIGN Ed25519DSIGN
-ccHotSignKey = genesisSignKey
-
-genesisPoolKh :: KeyHash StakePool
-genesisPoolKh = KeyHash (coerce (keyHashFromSignKey genesisSignKey))
+{- | Dummy VRF verification-key hash for the
+runtime-registered harness pool. Distinct from the
+stock genesis pool VRF; only uniqueness is required
+for @RegPool@ (the pool does not forge blocks).
+-}
+harnessPoolVrfHash :: VRFVerKeyHash StakePoolVRF
+harnessPoolVrfHash =
+    VRFVerKeyHash
+        "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"
 
 addKeyWitnesses :: [SignKeyDSIGN Ed25519DSIGN] -> ConwayTx -> ConwayTx
 addKeyWitnesses sks tx = foldr addKeyWitness tx sks
@@ -143,11 +158,12 @@ enactPV11Transition lsqCh ltxsCh = do
     let provider = mkN2CProvider lsqCh
         submitter = mkN2CSubmitter ltxsCh
         genesisKh = keyHashFromSignKey genesisSignKey
-        ccHotKh = keyHashFromSignKey ccHotSignKey
         khCred :: forall r. Credential r
         khCred = KeyHashObj (coerce genesisKh)
+        ccColdCred :: Credential ColdCommitteeRole
+        ccColdCred = KeyHashObj ccColdKeyHash
         ccHotCred :: Credential HotCommitteeRole
-        ccHotCred = KeyHashObj (coerce ccHotKh)
+        ccHotCred = ccHotCredential
 
     -- 1. Query initial UTxO from genesis address
     putStrLn "enactPV11Transition: querying initial UTxOs from genesisAddr..."
@@ -163,6 +179,8 @@ enactPV11Transition lsqCh ltxsCh = do
                 fee = Coin 10_000_000
                 drepDeposit = Coin 500_000_000
                 stakeDeposit = Coin 400_000
+                -- Stock genesis @poolDeposit@ is 0.
+                rewardAcnt = AccountAddress Testnet (AccountId khCred)
 
                 stakeRegCert =
                     ConwayTxCertDeleg $
@@ -172,15 +190,36 @@ enactPV11Transition lsqCh ltxsCh = do
                     ConwayTxCertGov $
                         ConwayRegDRep khCred drepDeposit SNothing
 
+                -- Register a NEW harness-controlled pool on-chain (A-002).
+                -- Stock genesis pool e797e39f… is left untouched; we do not
+                -- rekey it and we do not lower SPO thresholds.
+                poolParams =
+                    StakePoolParams
+                        { sppId = harnessPoolKh
+                        , sppVrf = harnessPoolVrfHash
+                        , sppPledge = Coin 0
+                        , sppCost = Coin 0
+                        , sppMargin =
+                            fromMaybe (error "boundRational 0") $
+                                boundRational 0
+                        , sppAccountAddress = rewardAcnt
+                        , sppOwners = Set.empty
+                        , sppRelays = StrictSeq.empty
+                        , sppMetadata = SNothing
+                        }
+                poolRegCert = RegPoolTxCert poolParams
+
+                -- Delegate stake + DRep vote to the newly registered pool so
+                -- it holds the genesis-funded active stake for SPO voting.
                 delegCert =
                     ConwayTxCertDeleg $
                         ConwayDelegCert
                             khCred
-                            (DelegStakeVote genesisPoolKh (DRepCredential khCred))
+                            (DelegStakeVote harnessPoolKh (DRepCredential khCred))
 
                 ccAuthCert =
                     ConwayTxCertGov $
-                        ConwayAuthCommitteeHotKey khCred ccHotCred
+                        ConwayAuthCommitteeHotKey ccColdCred ccHotCred
 
                 change1Coin = Coin (unCoin initCoin - unCoin fee - unCoin drepDeposit - unCoin stakeDeposit)
 
@@ -189,9 +228,24 @@ enactPV11Transition lsqCh ltxsCh = do
                         & inputsTxBodyL .~ Set.singleton initTxIn
                         & outputsTxBodyL .~ StrictSeq.singleton (mkBasicTxOut genesisAddr (inject change1Coin))
                         & feeTxBodyL .~ fee
-                        & certsTxBodyL .~ StrictSeq.fromList [stakeRegCert, drepCert, delegCert, ccAuthCert]
+                        & certsTxBodyL
+                            .~ StrictSeq.fromList
+                                [ stakeRegCert
+                                , drepCert
+                                , poolRegCert
+                                , delegCert
+                                , ccAuthCert
+                                ]
 
-                tx1 = addKeyWitnesses [genesisSignKey] (mkBasicTx txBody1)
+                -- Genesis key: stake/drep; CC cold: hot-key auth;
+                -- harness pool cold: RegPool.
+                tx1 =
+                    addKeyWitnesses
+                        [ genesisSignKey
+                        , ccColdSignKey
+                        , harnessPoolColdSignKey
+                        ]
+                        (mkBasicTx txBody1)
 
             putStrLn "enactPV11Transition: submitting Tx 1 (Registration)..."
             hFlush stdout
@@ -217,7 +271,6 @@ enactPV11Transition lsqCh ltxsCh = do
                         & ppuMaxTxExUnitsL .~ SJust (pv11MaxTxExUnits fixture)
 
                 propDeposit = Coin 50_000_000_000
-                rewardAcnt = AccountAddress Testnet (AccountId khCred)
                 dummyUrl = fromMaybe (error "textToUrl failed") $ textToUrl 128 "https://example.com"
                 dummyAnchor = Anchor dummyUrl (hashAnnotated (AnchorData "dummy"))
 
@@ -247,7 +300,9 @@ enactPV11Transition lsqCh ltxsCh = do
             -- Wait 2 seconds for proposal block inclusion
             threadDelay 2_000_000
 
-            -- 3. Build and submit Tx 3: Governance Votes (SPO, DRep, and CC voters)
+            -- 3. Build and submit Tx 3: Governance Votes (DRep + CC + SPO).
+            -- SPO Yes is cast by the runtime-registered harness pool
+            -- (harnessPoolKh), not stock e797e39f… which has no cold key.
             let tx3In = TxIn (txIdTx tx2) (TxIx 0)
                 change3Coin = Coin (unCoin change2Coin - unCoin fee)
                 tx2Id = txIdTxBody txBody2
@@ -256,7 +311,7 @@ enactPV11Transition lsqCh ltxsCh = do
 
                 drepVoter = DRepVoter khCred
                 ccVoter = CommitteeVoter ccHotCred
-                spoVoter = StakePoolVoter genesisPoolKh
+                spoVoter = StakePoolVoter harnessPoolKh
                 voteYes = VotingProcedure VoteYes SNothing
 
                 voterMap =
@@ -274,7 +329,14 @@ enactPV11Transition lsqCh ltxsCh = do
                         & feeTxBodyL .~ fee
                         & votingProceduresTxBodyL .~ votingProcedures
 
-                tx3 = addKeyWitnesses [genesisSignKey] (mkBasicTx txBody3)
+                -- Hot CC: committee vote; harness pool cold: SPO vote.
+                tx3 =
+                    addKeyWitnesses
+                        [ genesisSignKey
+                        , ccHotSignKey
+                        , harnessPoolColdSignKey
+                        ]
+                        (mkBasicTx txBody3)
 
             putStrLn "enactPV11Transition: submitting Tx 3 (Votes)..."
             hFlush stdout
@@ -287,7 +349,7 @@ enactPV11Transition lsqCh ltxsCh = do
             -- 4. Poll until PV11 and 350 PlutusV3 cost models are enacted
             putStrLn "enactPV11Transition: entering waitForPV11..."
             hFlush stdout
-            waitForPV11 provider 60
+            waitForPV11 provider 90
 
 data PV11Fixture = PV11Fixture
     { pv11CostModel :: [Int64]

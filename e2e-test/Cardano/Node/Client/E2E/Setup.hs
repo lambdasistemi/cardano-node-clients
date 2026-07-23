@@ -21,6 +21,16 @@ module Cardano.Node.Client.E2E.Setup (
     genesisSignKey,
     genesisAddr,
 
+    -- * Constitutional committee keys
+    ccColdSignKey,
+    ccHotSignKey,
+    ccColdKeyHash,
+    ccHotCredential,
+
+    -- * Runtime-registered harness pool key
+    harnessPoolColdSignKey,
+    harnessPoolKh,
+
     -- * Key generation
     mkSignKey,
     keyHashFromSignKey,
@@ -83,9 +93,15 @@ import Cardano.Crypto.DSIGN (
  )
 import Cardano.Node.Client.E2E.Devnet (
     addKeyWitness,
+    ccColdKeyHash,
+    ccColdSignKey,
+    ccHotCredential,
+    ccHotSignKey,
     enterpriseAddr,
     genesisAddr,
     genesisSignKey,
+    harnessPoolColdSignKey,
+    harnessPoolKh,
     keyHashFromSignKey,
     mkSignKey,
     withCardanoNode,
