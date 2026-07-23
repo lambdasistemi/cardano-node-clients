@@ -130,5 +130,4 @@ mkPlominSpendTx scriptTxIn collateralTxIn pp scriptCoin changeAddr =
             mkBasicTxWits
                 & scriptTxWitsL .~ Map.singleton plominScriptHash plominScript
                 & rdmrsTxWitsL .~ redeemers
-
      in mkBasicTx txBody & witsTxL .~ wits

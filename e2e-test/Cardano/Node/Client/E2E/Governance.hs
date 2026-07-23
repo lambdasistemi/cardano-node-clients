@@ -364,6 +364,8 @@ assertPV11Enacted provider = do
             Just cm -> length (getCostModelParams cm)
             Nothing -> 0
     unless (major == natVersion @11) $
-        error $ "assertPV11Enacted: expected major protocol version 11, got " <> show major
+        error $
+            "assertPV11Enacted: expected major protocol version 11, got " <> show major
     unless (v3Len == 350) $
-        error $ "assertPV11Enacted: expected 350 PlutusV3 cost model parameters, got " <> show v3Len
+        error $
+            "assertPV11Enacted: expected 350 PlutusV3 cost model parameters, got " <> show v3Len

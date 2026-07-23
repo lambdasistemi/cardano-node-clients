@@ -6,12 +6,12 @@ import Cardano.Node.Client.AddressSpec qualified as AddressSpec
 import Cardano.Node.Client.Adversary.ChainPointsSpec qualified as AdversaryChainPointsSpec
 import Cardano.Node.Client.Adversary.ServerSpec qualified as AdversaryServerSpec
 import Cardano.Node.Client.BlockIndexer.HandlerSpec qualified as BlockIndexerHandlerSpec
+import Cardano.Node.Client.E2E.SetupSpec qualified as SetupSpec
 import Cardano.Node.Client.N2C.LocalStateQuerySpec qualified as N2CLocalStateQuerySpec
 import Cardano.Node.Client.N2C.ProbeSpec qualified as N2CProbeSpec
 import Cardano.Node.Client.N2C.TraceSpec qualified as N2CTraceSpec
 import Cardano.Node.Client.TxHistoryIndexer.HistoryRollbackSpec qualified as TxHistoryRollbackSpec
 import Cardano.Node.Client.TxHistoryIndexer.IndexerSpec qualified as TxHistoryIndexerSpec
-import Cardano.Node.Client.E2E.SetupSpec qualified as SetupSpec
 import Cardano.Node.Client.UTxOIndexer.BlockExtractSpec qualified as UTxOIndexerBlockExtractSpec
 import Cardano.Node.Client.UTxOIndexer.DaemonSpec qualified as UTxOIndexerDaemonSpec
 import Cardano.Node.Client.UTxOIndexer.FollowerSpec qualified as UTxOIndexerFollowerSpec
