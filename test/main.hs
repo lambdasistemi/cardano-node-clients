@@ -3,6 +3,7 @@ module Main (main) where
 import Test.Hspec (hspec)
 
 import Cardano.Node.Client.E2E.ChainSyncSpec qualified as ChainSyncSpec
+import Cardano.Node.Client.E2E.GovernanceEnactmentSpec qualified as GovernanceEnactmentSpec
 import Cardano.Node.Client.E2E.HorizonSpec qualified as HorizonSpec
 import Cardano.Node.Client.E2E.Issue97ReproSpec qualified as Issue97ReproSpec
 import Cardano.Node.Client.E2E.N2CFullSpec qualified as N2CFullSpec
@@ -17,3 +18,4 @@ main = hspec $ do
     UTxOIndexerReconnectSpec.spec
     HorizonSpec.spec
     Issue97ReproSpec.spec
+    GovernanceEnactmentSpec.spec

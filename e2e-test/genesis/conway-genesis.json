@@ -18,7 +18,7 @@
     "ppGovGroup": 0.75,
     "treasuryWithdrawal": 0.67
   },
-  "committeeMinSize": 7,
+  "committeeMinSize": 1,
   "committeeMaxTermLength": 73,
   "govActionLifetime": 6,
   "govActionDeposit": 50000000000,
@@ -33,6 +33,7 @@
   },
   "committee": {
     "members": {
+      "keyHash-c297a7ed0ea787d621057f2ba9f80b37077e932c46a2d6203cd12201": 1000
     },
     "threshold": 0.67
   },

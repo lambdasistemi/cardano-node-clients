@@ -361,6 +361,7 @@ test-suite e2e-tests
   other-modules:
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.E2E.ChainSyncSpec
+    Cardano.Node.Client.E2E.GovernanceEnactmentSpec
     Cardano.Node.Client.E2E.HorizonSpec
     Cardano.Node.Client.E2E.Issue97ReproSpec
     Cardano.Node.Client.E2E.N2CFullSpec
@@ -373,6 +374,8 @@ test-suite e2e-tests
     , base
     , bytestring
     , cardano-crypto-class
+    , cardano-data
+    , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
@@ -380,6 +383,7 @@ test-suite e2e-tests
     , cardano-node-clients
     , cardano-node-clients:devnet
     , cardano-slotting
+    , cardano-strict-containers
     , chain-follower
     , containers
     , contra-tracer
