@@ -147,6 +147,7 @@ library devnet
     Cardano.Node.Client.E2E.CrashRecovery
     Cardano.Node.Client.E2E.Devnet
     Cardano.Node.Client.E2E.Governance
+    Cardano.Node.Client.E2E.PlominScript
     Cardano.Node.Client.E2E.Setup
 
   build-depends:
@@ -173,6 +174,8 @@ library devnet
     , ouroboros-consensus
     , ouroboros-network
     , ouroboros-network:api
+    , plutus-core
+    , plutus-ledger-api
     , process
     , stm
     , text

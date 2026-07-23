@@ -10,12 +10,13 @@ License     : Apache-2.0
 -}
 module Cardano.Node.Client.E2E.Governance (
     enactPV11Transition,
+    assertPV11Enacted,
 ) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (withAsync)
 import Control.Exception (SomeException, try)
-import Control.Monad (forever)
+import Control.Monad (forever, unless)
 import Data.Aeson (Value (..), decodeFileStrict)
 import Data.Aeson.KeyMap qualified as KM
 import Data.Coerce (coerce)
@@ -350,3 +351,19 @@ waitForPV11 provider attempts =
                 putStrLn $ "waitForPV11 poll error [" <> show (attempts - atts + 1) <> "]: " <> show err
                 hFlush stdout
                 pollLoop (atts - 1)
+
+{- | Assert that protocol version 11 and 350 PlutusV3 cost models are currently enacted.
+Queries protocol parameters once. Throws an error naming the condition that failed if not.
+-}
+assertPV11Enacted :: Provider IO -> IO ()
+assertPV11Enacted provider = do
+    pp <- queryProtocolParams provider
+    let ProtVer major _minor = pp ^. ppProtocolVersionL
+        cms = pp ^. ppCostModelsL
+        v3Len = case Map.lookup PlutusV3 (costModelsValid cms) of
+            Just cm -> length (getCostModelParams cm)
+            Nothing -> 0
+    unless (major == natVersion @11) $
+        error $ "assertPV11Enacted: expected major protocol version 11, got " <> show major
+    unless (v3Len == 350) $
+        error $ "assertPV11Enacted: expected 350 PlutusV3 cost model parameters, got " <> show v3Len

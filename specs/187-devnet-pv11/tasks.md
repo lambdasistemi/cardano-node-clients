@@ -11,6 +11,6 @@
 - [X] T187-SB3 Verify governance enactment during harness init and slice B commit.
 
 ## Slice C — Verification & E2E Test Suite
-- [ ] T187-SC1 Implement post-init assertions (`protocolVersion.major == 11` and `length PlutusV3 == 350`) in `Setup.hs`.
-- [ ] T187-SC2 Add E2E tests for PV11 devnet setup and Plomin-era builtin script execution.
-- [ ] T187-SC3 Verify entire test suite (`just ci` / `cabal test`) and slice C commit.
+- [X] T187-SC1 Implement post-init assertions (`protocolVersion.major == 11` and `length PlutusV3 == 350`) in `Setup.hs`.
+- [X] T187-SC2 Add E2E tests for PV11 devnet setup and Plomin-era builtin script execution.
+- [X] T187-SC3 Verify entire test suite (`just ci` / `cabal test`) and slice C commit.

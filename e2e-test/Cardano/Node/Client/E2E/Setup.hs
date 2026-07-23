@@ -54,6 +54,7 @@ module Cardano.Node.Client.E2E.Setup (
     rawSerialiseSigDSIGN,
 
     -- * Devnet bracket
+    assertPV11Enacted,
     withDevnet,
     withDevnetConfig,
     withDevnetFromGenesis,
@@ -90,6 +91,7 @@ import Cardano.Node.Client.E2E.Devnet (
     withCardanoNode,
  )
 import Cardano.Node.Client.E2E.Governance (
+    assertPV11Enacted,
     enactPV11Transition,
  )
 import Cardano.Node.Client.N2C.Connection (
@@ -97,6 +99,7 @@ import Cardano.Node.Client.N2C.Connection (
     newLTxSChannel,
     runNodeClient,
  )
+import Cardano.Node.Client.N2C.Provider (mkN2CProvider)
 import Cardano.Node.Client.N2C.Types (
     LSQChannel,
     LTxSChannel,
@@ -151,6 +154,8 @@ withDevnetConfig cfg action = case devnetTargetPV cfg of
         gDir <- maybe genesisDir pure (devnetGenesisDir cfg)
         withDevnetFromGenesis gDir $ \lsq ltxs -> do
             enactPV11Transition lsq ltxs
+            let provider = mkN2CProvider lsq
+            assertPV11Enacted provider
             action lsq ltxs
 
 {- | Start a cardano-node devnet, connect via N2C,
