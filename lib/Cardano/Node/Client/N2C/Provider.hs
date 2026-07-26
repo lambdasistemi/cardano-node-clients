@@ -17,8 +17,10 @@ in Conway) results in a runtime error.
 module Cardano.Node.Client.N2C.Provider (
     -- * Construction
     mkN2CProvider,
+    withAcquiredN2CProviderAndGlobals,
 ) where
 
+import Control.Monad (unless)
 import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Coerce (coerce)
@@ -40,6 +42,7 @@ import Control.Monad.Trans.Except (runExcept)
 import Lens.Micro ((^.))
 
 import Cardano.Ledger.Address (AccountAddress, Addr)
+import Cardano.Ledger.Allegra (AllegraEra)
 import Cardano.Ledger.Alonzo.Plutus.Evaluate (
     evalTxExUnits,
  )
@@ -49,11 +52,13 @@ import Cardano.Ledger.Api.Tx.Body (
     referenceInputsTxBodyL,
  )
 import Cardano.Ledger.Api.Tx.Out (TxOut, addrTxOutL)
+import Cardano.Ledger.BaseTypes (Globals, systemStart)
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams, bodyTxL)
 import Cardano.Ledger.Credential (Credential)
 import Cardano.Ledger.DRep (DRep)
+import Cardano.Ledger.Genesis (NoGenesis (..))
 import Cardano.Ledger.Keys (KeyRole (Staking))
 import Cardano.Ledger.State (
     ChainAccountState,
@@ -95,6 +100,13 @@ import Ouroboros.Consensus.HardFork.History.Qry (
 import Ouroboros.Consensus.Ledger.Query (
     Query (BlockQuery, GetChainPoint, GetSystemStart),
  )
+import Ouroboros.Consensus.Shelley.Ledger.Config (
+    getCompactGenesis,
+ )
+import Ouroboros.Consensus.Shelley.Ledger.Ledger (
+    ShelleyLedgerConfig (shelleyLedgerGlobals),
+    mkShelleyLedgerConfig,
+ )
 import Ouroboros.Consensus.Shelley.Ledger.Query (
     pattern GetAccountState,
     pattern GetCBOR,
@@ -102,6 +114,7 @@ import Ouroboros.Consensus.Shelley.Ledger.Query (
     pattern GetEpochNo,
     pattern GetFilteredDelegationsAndRewardAccounts,
     pattern GetFilteredVoteDelegatees,
+    pattern GetGenesisConfig,
     pattern GetGovState,
     pattern GetUTxOByAddress,
     pattern GetUTxOByTxIn,
@@ -148,56 +161,143 @@ mkN2CProvider ::
     LSQChannel ->
     Provider IO
 mkN2CProvider ch =
+    mkProviderOver $ \use ->
+        withAcquiredLSQ ch $ \acquired ->
+            use (queryAcquiredLSQ acquired)
+
+{- | Build a 'Provider IO' over one already acquired
+LSQ snapshot. Every field, including 'withAcquired'
+and 'queryUpperBoundSlot', reuses the given runner
+and never acquires again.
+-}
+mkAcquiredN2CProvider ::
+    (forall result. Query Block result -> IO result) ->
+    Provider IO
+mkAcquiredN2CProvider runQuery =
+    mkProviderOver $ \use -> use runQuery
+
+{- | Shared provider body. The argument decides how a
+query runner is obtained for each public operation:
+'mkN2CProvider' acquires per operation, while
+'mkAcquiredN2CProvider' reuses one acquired snapshot.
+-}
+mkProviderOver ::
+    ( forall a.
+      ((forall result. Query Block result -> IO result) -> IO a) ->
+      IO a
+    ) ->
+    Provider IO
+mkProviderOver withRunQuery =
     Provider
-        { withAcquired = withAcquiredN2C
+        { withAcquired = withHandle
         , queryProtocolParams =
-            withAcquiredN2C queryProtocolParamsH
+            withHandle queryProtocolParamsH
         , queryLedgerSnapshot =
-            withAcquiredN2C queryLedgerSnapshotH
+            withHandle queryLedgerSnapshotH
         , queryStakeRewards = \credentials ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 queryStakeRewardsH handle credentials
         , queryRewardAccounts = \accounts ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 queryRewardAccountsH handle accounts
         , queryVoteDelegatees = \credentials ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 queryVoteDelegateesH handle credentials
         , queryTreasury =
-            withAcquiredN2C queryTreasuryH
+            withHandle queryTreasuryH
         , queryGovernanceState =
-            withAcquiredN2C queryGovernanceStateH
+            withHandle queryGovernanceStateH
         , queryUTxOs = \addr ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 queryUTxOsH handle addr
         , queryUTxOByTxIn = \txins ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 queryUTxOByTxInH handle txins
         , evaluateTx = \tx ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 evaluateTxH handle tx
         , posixMsToSlot = \ms ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 posixMsToSlotH handle ms
         , posixMsCeilSlot = \ms ->
-            withAcquiredN2C $ \handle ->
+            withHandle $ \handle ->
                 posixMsCeilSlotH handle ms
         , queryUpperBoundSlot = \choice ->
-            withAcquiredLSQ ch $ \acquired ->
-                let runQuery :: forall result. Query Block result -> IO result
-                    runQuery = queryAcquiredLSQ acquired
-                 in queryUpperBoundSlotN2C runQuery choice
+            withRunQuery $ \runQuery ->
+                queryUpperBoundSlotN2C runQuery choice
         }
   where
-    withAcquiredN2C ::
+    withHandle ::
         forall a.
         (QueryHandle IO -> IO a) ->
         IO a
-    withAcquiredN2C callback =
-        withAcquiredLSQ ch $ \acquired ->
-            callback $
-                mkN2CQueryHandle $
-                    queryAcquiredLSQ acquired
+    withHandle callback =
+        withRunQuery $
+            callback . mkN2CQueryHandle
+
+{- | Acquire one LSQ snapshot, construct the ledger
+'Globals' from that same snapshot, and run a callback
+with both the 'Globals' and a 'Provider IO' bound to
+the snapshot.
+
+The node answers the current-Conway genesis
+configuration, the top-level system start, and the
+hard-fork interpreter inside one acquisition, so the
+builder inputs, time translation, and any ledger-native
+pre-flight share one provenance. Neither value is
+cached: a later operation asks for a new callback and
+coherently refreshes all of it.
+
+Both values are owned by the callback for its dynamic
+extent and must not escape it — holding them holds the
+LSQ acquisition. Submission and settlement belong
+outside the callback.
+
+Acquisition loss, query decoding failure, an era other
+than current Conway, a past-horizon translation, and a
+system start that disagrees with the queried genesis
+all stay visible; none is replaced by a synthetic value.
+-}
+withAcquiredN2CProviderAndGlobals ::
+    -- | LocalStateQuery channel to the Cardano node
+    LSQChannel ->
+    -- | Callback owning the snapshot 'Globals' and provider
+    (Globals -> Provider IO -> IO a) ->
+    IO a
+withAcquiredN2CProviderAndGlobals ch callback =
+    withAcquiredLSQ ch $ \acquired -> do
+        let runQuery :: forall result. Query Block result -> IO result
+            runQuery = queryAcquiredLSQ acquired
+        compactGenesisResult <-
+            runQuery $
+                BlockQuery $
+                    QueryIfCurrentConway
+                        GetGenesisConfig
+        compactGenesis <-
+            expectConway
+                "withAcquiredN2CProviderAndGlobals/genesis"
+                compactGenesisResult
+        queriedSystemStart <-
+            runQuery GetSystemStart
+        interpreter <-
+            runQuery $
+                BlockQuery $
+                    QueryHardFork GetInterpreter
+        let ledgerConfig :: ShelleyLedgerConfig AllegraEra
+            ledgerConfig =
+                mkShelleyLedgerConfig
+                    (getCompactGenesis compactGenesis)
+                    NoGenesis
+                    (interpreterToEpochInfo interpreter)
+            globals =
+                shelleyLedgerGlobals ledgerConfig
+            provider =
+                mkAcquiredN2CProvider runQuery
+        unless (systemStart globals == queriedSystemStart) $
+            error
+                "withAcquiredN2CProviderAndGlobals: queried \
+                \system start disagrees with genesis"
+        callback globals provider
 
 mkN2CQueryHandle ::
     (forall result. Query Block result -> IO result) ->

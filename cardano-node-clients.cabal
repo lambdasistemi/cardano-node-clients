@@ -388,11 +388,13 @@ test-suite e2e-tests
     , bytestring
     , cardano-crypto-class
     , cardano-data
+    , cardano-ledger-allegra
     , cardano-ledger-alonzo
     , cardano-ledger-api
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-shelley
     , cardano-node-clients
     , cardano-node-clients:devnet
     , cardano-slotting
@@ -406,6 +408,8 @@ test-suite e2e-tests
     , lens
     , microlens
     , network
+    , ouroboros-consensus
+    , ouroboros-consensus:cardano
     , ouroboros-network:api
     , rocksdb-kv-transactions:kv-transactions
     , stm
