@@ -9,6 +9,18 @@
 
 ## Unreleased
 
+## [0.1.5.0](https://github.com/lambdasistemi/cardano-node-clients/compare/v0.1.4.0...v0.1.5.0) (2026-07-27)
+
+### Features
+
+* **devnet:** support protocol version 11 and full PlutusV3 cost model (#188) ([a10cdb7](https://github.com/lambdasistemi/cardano-node-clients/commit/a10cdb73317a2b6d5375b216f72f40b71736e648))
+* acquire Globals with N2C provider snapshot ([bb01006](https://github.com/lambdasistemi/cardano-node-clients/commit/bb010066cb8e5181534d2e1d48e5a4e785493fc7))
+
+### Bug Fixes
+
+* **n2c:** recover LSQ callers from connection loss ([2726c00](https://github.com/lambdasistemi/cardano-node-clients/commit/2726c00029007b749da61d2ec585d22af4ee0c7b))
+* **devnet:** stock committee arrangement blocks all governance enactment (#191) ([7c7e3d7](https://github.com/lambdasistemi/cardano-node-clients/commit/7c7e3d76e9668cf43eb407390f4e7e03cfd39ea1))
+
 ## [0.1.4.0](https://github.com/lambdasistemi/cardano-node-clients/compare/v0.1.3.0...v0.1.4.0) (2026-07-10)
 
 ### Features
