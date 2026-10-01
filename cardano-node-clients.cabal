@@ -303,17 +303,21 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.AssetIndexSpec
     Cardano.Node.Client.UTxOIndexer.AssetProvenanceSpec
     Cardano.Node.Client.UTxOIndexer.AssetTypesSpec
+    Cardano.Node.Client.UTxOIndexer.AssetWireSpec
     Cardano.Node.Client.UTxOIndexer.BlockExtractSpec
     Cardano.Node.Client.UTxOIndexer.DaemonSpec
     Cardano.Node.Client.UTxOIndexer.FollowerSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
+    Cardano.Node.Client.UTxOIndexer.PreAssetServer
     Cardano.Node.Client.UTxOIndexer.ProviderSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
+    Cardano.Node.Client.UTxOIndexer.ServerStabilitySpec
     Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec
     Cardano.Node.Client.UTxOIndexer.TxOutViewSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
+    Cardano.Node.Client.UTxOIndexer.WireClient
     Cardano.Node.Client.ValiditySpec
     Data.List.SampleFibonacciSpec
 
@@ -378,6 +382,7 @@ test-suite e2e-tests
   ghc-options:      -threaded
   other-modules:
     Cardano.Node.Client.ConwayFixtures
+    Cardano.Node.Client.E2E.AssetQuerySpec
     Cardano.Node.Client.E2E.ChainSyncSpec
     Cardano.Node.Client.E2E.GovernanceEnactmentSpec
     Cardano.Node.Client.E2E.HorizonSpec
@@ -386,11 +391,13 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.ProviderSpec
     Cardano.Node.Client.E2E.PV11GovernanceSpec
     Cardano.Node.Client.E2E.UTxOIndexerReconnectSpec
+    Cardano.Node.Client.UTxOIndexer.WireClient
 
   build-depends:
     , aeson
     , async
     , base
+    , base16-bytestring
     , bytestring
     , cardano-crypto-class
     , cardano-data
@@ -400,6 +407,7 @@ test-suite e2e-tests
     , cardano-ledger-byron
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-mary
     , cardano-ledger-shelley
     , cardano-node-clients
     , cardano-node-clients:devnet

@@ -15,6 +15,7 @@ import Cardano.Node.Client.TxHistoryIndexer.IndexerSpec qualified as TxHistoryIn
 import Cardano.Node.Client.UTxOIndexer.AssetIndexSpec qualified as UTxOIndexerAssetIndexSpec
 import Cardano.Node.Client.UTxOIndexer.AssetProvenanceSpec qualified as UTxOIndexerAssetProvenanceSpec
 import Cardano.Node.Client.UTxOIndexer.AssetTypesSpec qualified as UTxOIndexerAssetTypesSpec
+import Cardano.Node.Client.UTxOIndexer.AssetWireSpec qualified as UTxOIndexerAssetWireSpec
 import Cardano.Node.Client.UTxOIndexer.BlockExtractSpec qualified as UTxOIndexerBlockExtractSpec
 import Cardano.Node.Client.UTxOIndexer.DaemonSpec qualified as UTxOIndexerDaemonSpec
 import Cardano.Node.Client.UTxOIndexer.FollowerSpec qualified as UTxOIndexerFollowerSpec
@@ -23,6 +24,7 @@ import Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec qualified as UTxOIndexer
 import Cardano.Node.Client.UTxOIndexer.PersistenceSpec qualified as UTxOIndexerPersistenceSpec
 import Cardano.Node.Client.UTxOIndexer.ProviderSpec qualified as UTxOIndexerProviderSpec
 import Cardano.Node.Client.UTxOIndexer.ServerSpec qualified as UTxOIndexerServerSpec
+import Cardano.Node.Client.UTxOIndexer.ServerStabilitySpec qualified as UTxOIndexerServerStabilitySpec
 import Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec qualified as UTxOIndexerSharedFollowerSpec
 import Cardano.Node.Client.UTxOIndexer.TxOutViewSpec qualified as UTxOIndexerTxOutViewSpec
 import Cardano.Node.Client.UTxOIndexer.TypesSpec qualified as UTxOIndexerTypesSpec
@@ -42,9 +44,11 @@ main = hspec $ do
     UTxOIndexerAssetIndexSpec.spec
     UTxOIndexerAssetProvenanceSpec.spec
     UTxOIndexerAssetTypesSpec.spec
+    UTxOIndexerAssetWireSpec.spec
     UTxOIndexerBlockExtractSpec.spec
     UTxOIndexerSpec.spec
     UTxOIndexerServerSpec.spec
+    UTxOIndexerServerStabilitySpec.spec
     UTxOIndexerPersistenceSpec.spec
     UTxOIndexerProviderSpec.spec
     UTxOIndexerDaemonSpec.spec
