@@ -76,8 +76,10 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (
     bracket,
     onException,
+    throwIO,
+    try,
  )
-import Control.Monad (unless, void)
+import Control.Monad (unless, void, (>=>))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
@@ -101,11 +103,13 @@ import Data.Time.Format (
     defaultTimeLocale,
     formatTime,
  )
+import GHC.Clock (getMonotonicTimeNSec)
 import Lens.Micro ((%~), (&))
+import Numeric (showHex)
 import Ouroboros.Network.Magic (NetworkMagic (..))
 import System.Directory (
     copyFile,
-    createDirectoryIfMissing,
+    createDirectory,
     doesFileExist,
     getTemporaryDirectory,
     removePathForcibly,
@@ -119,6 +123,7 @@ import System.IO (
     hSetBuffering,
     openFile,
  )
+import System.IO.Error (isAlreadyExistsError)
 import System.Posix.Files (ownerReadMode, setFileMode)
 import System.Process (
     CreateProcess (..),
@@ -134,8 +139,14 @@ import System.Process (
 genesis files from @srcGenesis@. The callback
 receives the node socket path and the system
 start time (POSIX ms) used in the genesis.
-The node and its temp directory are cleaned up
-on exit.
+
+Each run works in its own fresh directory
+@cardano-e2e-\<hex\>@ under the system temporary
+directory (@TMPDIR@ when set), so concurrent runs
+on one host do not interfere. On every exit path
+the node is terminated and then exactly that
+directory is removed; nothing that existed before
+the call is touched.
 -}
 withCardanoNode ::
     FilePath ->
@@ -162,42 +173,41 @@ withRestartableCardanoNode srcGenesis action = do
         startMs =
             floor (utcTimeToPOSIXSeconds startTime)
                 * 1000
-    tmpDir <- prepareTmpDir srcGenesis startTime
-    let logPath = tmpDir </> "node.log"
-        sock = tmpDir </> "node.sock"
-        spawnNode = do
-            logH <- openFile logPath AppendMode
-            hSetBuffering logH LineBuffering
-            ph <- launchNode tmpDir logH
-            pure (ph, logH)
-        cleanupNode (ph, logH) = do
-            terminateProcess ph
-            void (waitForProcess ph)
-            hClose logH
-    bracket
-        ( do
-            np <- spawnNode
-            newIORef np
-        )
-        ( \npRef -> do
-            np <- readIORef npRef
-            cleanupNode np
-            removePathForcibly tmpDir `onException` pure ()
-        )
-        $ \npRef -> do
-            waitForSocket sock 300
-            -- Block until cardano-node's LSQ server replies
-            -- with a non-Origin tip — i.e. ChainDB has finished
-            -- loading. Replaces the previous 1 s blind grace
-            -- with a real readiness check.
-            waitForNodeReady
-                nullN2CTracer
-                defaultProbeConfig
-                devnetNetworkMagic
-                sock
-            let restart = restartNode npRef sock spawnNode cleanupNode
-            action sock startMs restart
-                `onException` dumpNodeLog logPath
+    -- The outer bracket owns the run directory, the inner one
+    -- the node: the node is terminated before the directory is
+    -- removed, and a failure while preparing the directory or
+    -- spawning the node still removes it.
+    bracket allocateRunDir removePathForcibly $ \tmpDir -> do
+        prepareRunDir srcGenesis startTime tmpDir
+        let logPath = tmpDir </> "node.log"
+            sock = tmpDir </> "node.sock"
+            spawnNode = do
+                logH <- openFile logPath AppendMode
+                hSetBuffering logH LineBuffering
+                ph <- launchNode tmpDir logH `onException` hClose logH
+                pure (ph, logH)
+            cleanupNode (ph, logH) = do
+                terminateProcess ph
+                void (waitForProcess ph)
+                hClose logH
+        bracket
+            (spawnNode >>= newIORef)
+            (readIORef >=> cleanupNode)
+            $ \npRef -> do
+                waitForSocket sock 300
+                -- Block until cardano-node's LSQ server replies
+                -- with a non-Origin tip — i.e. ChainDB has finished
+                -- loading. Replaces the previous 1 s blind grace
+                -- with a real readiness check.
+                waitForNodeReady
+                    nullN2CTracer
+                    defaultProbeConfig
+                    devnetNetworkMagic
+                    sock
+                let restart =
+                        restartNode npRef sock spawnNode cleanupNode
+                action sock startMs restart
+                    `onException` dumpNodeLog logPath
 
 restartNode ::
     IORef (ProcessHandle, Handle) ->
@@ -223,28 +233,40 @@ restartNode npRef sock spawnNode cleanupNode = do
         sock
 
 {- | The devnet's network magic, hardcoded in the
-genesis files patched by 'prepareTmpDir'. Used by the
+genesis files patched by 'prepareRunDir'. Used by the
 LSQ readiness probe.
 -}
 devnetNetworkMagic :: NetworkMagic
 devnetNetworkMagic = NetworkMagic 42
 
-{- | Prepare a temporary directory with patched
-genesis files and delegate keys.
+{- | Create a fresh run directory
+@cardano-e2e-\<hex\>@ under 'getTemporaryDirectory'
+(which honours @TMPDIR@). Creation is a single
+@mkdir@, so an existing path is never reused: on a
+name collision another suffix is tried.
 -}
-prepareTmpDir ::
-    FilePath -> UTCTime -> IO FilePath
-prepareTmpDir srcGenesis startTime = do
+allocateRunDir :: IO FilePath
+allocateRunDir = do
     sysTmp <- getTemporaryDirectory
-    let tmpDir = sysTmp </> "cardano-e2e"
-    removePathForcibly tmpDir
-    createDirectoryIfMissing True tmpDir
-    createDirectoryIfMissing
-        True
-        (tmpDir </> "db")
-    createDirectoryIfMissing
-        True
-        (tmpDir </> "delegate-keys")
+    let attempt = do
+            suffix <- getMonotonicTimeNSec
+            let dir = sysTmp </> ("cardano-e2e-" <> showHex suffix "")
+            created <- try (createDirectory dir)
+            case created of
+                Right () -> pure dir
+                Left e
+                    | isAlreadyExistsError e -> attempt
+                    | otherwise -> throwIO e
+    attempt
+
+{- | Fill a freshly allocated run directory with
+patched genesis files and delegate keys.
+-}
+prepareRunDir ::
+    FilePath -> UTCTime -> FilePath -> IO ()
+prepareRunDir srcGenesis startTime tmpDir = do
+    createDirectory (tmpDir </> "db")
+    createDirectory (tmpDir </> "delegate-keys")
     -- Copy genesis files
     let cp name =
             copyFile
@@ -272,7 +294,6 @@ prepareTmpDir srcGenesis startTime = do
     copyKey "delegate1.kes.skey"
     copyKey "delegate1.vrf.skey"
     copyKey "delegate1.opcert"
-    pure tmpDir
 
 {- | Copy shelley-genesis.json, replacing
 @PLACEHOLDER@ with the current UTC time.

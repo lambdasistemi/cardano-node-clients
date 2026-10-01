@@ -4,6 +4,7 @@ import Test.Hspec (hspec)
 
 import Cardano.Node.Client.E2E.AssetQuerySpec qualified as AssetQuerySpec
 import Cardano.Node.Client.E2E.ChainSyncSpec qualified as ChainSyncSpec
+import Cardano.Node.Client.E2E.DevnetIsolationSpec qualified as DevnetIsolationSpec
 import Cardano.Node.Client.E2E.GovernanceEnactmentSpec qualified as GovernanceEnactmentSpec
 import Cardano.Node.Client.E2E.HorizonSpec qualified as HorizonSpec
 import Cardano.Node.Client.E2E.Issue97ReproSpec qualified as Issue97ReproSpec
@@ -23,3 +24,4 @@ main = hspec $ do
     Issue97ReproSpec.spec
     PV11GovernanceSpec.spec
     GovernanceEnactmentSpec.spec
+    DevnetIsolationSpec.spec
