@@ -43,6 +43,15 @@ module Cardano.Node.Client.UTxOIndexer.Types (
     SlotNo (..),
     BlockHash (..),
 
+    -- * Asset identity (multi-asset index)
+    PolicyId (..),
+    AssetName (..),
+    AssetKey (..),
+    mkPolicyId,
+    mkAssetName,
+    assetKeyToBytes,
+    assetKeyFromBytes,
+
     -- * Composite-key encoding (AddressIndex column)
     addrKeyToBytes,
     addrKeyFromBytes,
@@ -178,6 +187,91 @@ txInFromBytes bs
     | otherwise =
         let (tid, ixBs) = BS.splitAt 32 bs
          in TxIn tid <$> word16FromBE ixBs
+
+-- Asset identity ---------------------------------------------------
+
+{- | A native-asset policy id: exactly 28 raw bytes (the script
+hash). Construction from any other length is rejected.
+-}
+newtype PolicyId = PolicyId {unPolicyId :: ByteString}
+    deriving newtype (Eq, Ord, Show)
+
+{- | A native-asset name: 0 to 32 raw bytes with no text
+interpretation. Empty is valid and distinct from every non-empty
+name.
+-}
+newtype AssetName = AssetName {unAssetName :: ByteString}
+    deriving newtype (Eq, Ord, Show)
+
+{- | Composite key under which live outputs are indexed per asset:
+the asset identity plus the 'TxIn' of the holding output.
+
+The on-disk byte form is @policyId(28) || nameLen(1) || name ||
+txIn(34)@; see 'assetKeyToBytes' for the prefix-scan rationale.
+-}
+data AssetKey = AssetKey
+    { assetKeyPolicy :: !PolicyId
+    -- ^ The 28-byte policy id.
+    , assetKeyName :: !AssetName
+    -- ^ The 0..32-byte asset name.
+    , assetKeyTxIn :: !TxIn
+    -- ^ The holding output's reference.
+    }
+    deriving stock (Eq, Ord, Show)
+
+{- | Construct a 'PolicyId' from raw bytes. 'Just' only when the
+input is exactly 28 bytes.
+-}
+mkPolicyId :: ByteString -> Maybe PolicyId
+mkPolicyId bs
+    | BS.length bs == 28 = Just (PolicyId bs)
+    | otherwise = Nothing
+
+-- | Maximum asset name length in bytes (the CDDL bound).
+maxAssetNameLength :: Int
+maxAssetNameLength = 32
+
+{- | Construct an 'AssetName' from raw bytes. 'Just' only when the
+input is at most 32 bytes; empty is valid.
+-}
+mkAssetName :: ByteString -> Maybe AssetName
+mkAssetName bs
+    | BS.length bs <= maxAssetNameLength = Just (AssetName bs)
+    | otherwise = Nothing
+
+{- | Serialise an 'AssetKey' to its composite-key byte form:
+@policyId(28) || nameLen(1) || name || txIn(34)@. Total:
+@63 + nameLen@ bytes.
+
+The length byte makes @policyId || nameLen || name@ an exact
+prefix for one asset: a cursor seek there never yields a
+different policy, a longer name, or a shorter name.
+
+Inverse of 'assetKeyFromBytes'.
+-}
+assetKeyToBytes :: AssetKey -> ByteString
+assetKeyToBytes (AssetKey (PolicyId p) (AssetName n) t) =
+    p <> BS.cons (fromIntegral (BS.length n)) n <> txInToBytes t
+
+{- | Parse the inverse of 'assetKeyFromBytes'. Returns 'Nothing' if the
+byte string is not exactly one encoded key: policy id not 28 bytes,
+name length above 32, name length not matching the remaining bytes,
+wrong total length, or trailing garbage.
+-}
+assetKeyFromBytes :: ByteString -> Maybe AssetKey
+assetKeyFromBytes bs0 = do
+    (p, rest0) <- splitAtOrNothing 28 bs0
+    (lenByte, rest1) <- BS.uncons rest0
+    let nameLen = fromIntegral lenByte :: Int
+    (n, rest2) <- splitAtOrNothing nameLen rest1
+    t <- txInFromBytes rest2
+    if nameLen > maxAssetNameLength
+        then Nothing
+        else Just (AssetKey (PolicyId p) (AssetName n) t)
+  where
+    splitAtOrNothing k bs
+        | BS.length bs < k = Nothing
+        | otherwise = Just (BS.splitAt k bs)
 
 -- Slot encoding ------------------------------------------------------
 

@@ -444,16 +444,20 @@ spec =
                             state3
 
                     history <- getRollbackHistory idx
+                    -- The spend inverse carries the creating block's
+                    -- provenance (slot 8 / blk3) since the restore op.
                     fmap (rpInverses . snd) history
                         `shouldBe` [
                                        [ [UtxoSpend txInC]
                                        ]
                                    ,
                                        [
-                                           [ UtxoCreate
+                                           [ UtxoRestore
                                                 txInC
                                                 addrC
                                                 outC
+                                                (SlotNo 8)
+                                                blk3
                                            ]
                                        ]
                                    ]

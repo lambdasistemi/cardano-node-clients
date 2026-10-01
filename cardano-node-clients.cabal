@@ -210,6 +210,7 @@ library utxo-indexer-lib
     Cardano.Node.Client.UTxOIndexer.Columns
     Cardano.Node.Client.UTxOIndexer.Indexer
     Cardano.Node.Client.UTxOIndexer.IndexerOp
+    Cardano.Node.Client.UTxOIndexer.TxOutView
     Cardano.Node.Client.UTxOIndexer.Types
     Data.List.SampleFibonacci
 
@@ -218,6 +219,7 @@ library utxo-indexer-lib
     , base
     , bytestring
     , cardano-node-clients:block-indexer
+    , cborg
     , chain-follower
     , containers
     , contra-tracer
@@ -298,6 +300,9 @@ test-suite unit-tests
     Cardano.Node.Client.N2C.TraceSpec
     Cardano.Node.Client.TxHistoryIndexer.HistoryRollbackSpec
     Cardano.Node.Client.TxHistoryIndexer.IndexerSpec
+    Cardano.Node.Client.UTxOIndexer.AssetIndexSpec
+    Cardano.Node.Client.UTxOIndexer.AssetProvenanceSpec
+    Cardano.Node.Client.UTxOIndexer.AssetTypesSpec
     Cardano.Node.Client.UTxOIndexer.BlockExtractSpec
     Cardano.Node.Client.UTxOIndexer.DaemonSpec
     Cardano.Node.Client.UTxOIndexer.FollowerSpec
@@ -307,6 +312,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.ProviderSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec
+    Cardano.Node.Client.UTxOIndexer.TxOutViewSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
     Cardano.Node.Client.ValiditySpec
     Data.List.SampleFibonacciSpec
