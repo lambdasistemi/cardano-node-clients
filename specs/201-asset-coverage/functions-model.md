@@ -13,10 +13,13 @@ document. Internal helpers are the commit owner's choice.
 
 ## N2 Server
 
-- `ReadyStatus` gains `rsLastProgress :: UTCTime` (DD6).
+- `ReadyStatus` (defined in N1, re-exported here) gains `rsLastProgress :: UTCTime` (DD6).
 - `runServer :: (socketPath :: FilePath) -> (indexer :: IndexerHandle) -> (disclosure :: Disclosure) -> (getReady :: IO ReadyStatus) -> IO ()`
 
 ## N3 Daemon
 
 - `DaemonConfig` gains `dcStaleAfterSeconds :: Word64`.
 - G4 `followerCoverage :: (config :: ChainSyncConfig) -> Coverage`
+- G5 `parseDaemonArgs :: (args :: [String]) -> Either String DaemonConfig`
+  — the daemon's complete CLI parser; `Left` names the offending flag.
+  `Main` keeps the usage text and exit; existing flags parse as before.

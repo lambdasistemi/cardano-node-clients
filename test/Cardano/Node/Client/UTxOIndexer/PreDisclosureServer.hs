@@ -32,16 +32,7 @@ RESP: {"point": {"slot":<int>, "blockHash":"<hex>"},
                   "created": {"slot":<int>, "blockHash":"<hex>"},
                   "datum": {"kind":"none"}
                          | {"kind":"hash", "hash":"<hex>"}
-                         | {"kind":"inline", "cbor":"<hex>"}}, ...],
-       "network": {"magic":<int>},
-       "coverage": {"start": "origin" | {"slot":<int>, "blockHash":"<hex>"},
-                    "addresses": "all" | "filtered"},
-       "freshness": {"status": "synced" | "catching_up"
-                             | "disconnected" | "stale",
-                     "tipSlot":<int|null>, "slotsBehind":<int|null>,
-                     "secondsSinceProgress":<int>},
-       "limits": ["address_filter" | "partial_history"
-                 | "catching_up" | "disconnected" | "stale", ...]}
+                         | {"kind":"inline", "cbor":"<hex>"}}, ...]}
     | {"error": "invalid_asset_query", "detail": "<text>"}
     | {"error": "asset_index_unavailable",
        "reason": "absent" | "no_indexed_point" | "inconsistent"}
@@ -51,17 +42,12 @@ Each connection is a single request → single response →
 EOF. A line no request accepts is answered with
 @{"error": "malformed json"}@.
 
-A successful asset answer states the 'Disclosure' the server was
-given and a freshness sampled after its storage read and measured
-from its own @point@ (see "Cardano.Node.Client.UTxOIndexer.Disclosure").
-The two error answers carry no disclosure.
-
 Address bytes are sent on the wire as hex. Bech32
 parsing lives in the consumer (consumers either already
 have raw bytes from the ledger or hex-encode them
 explicitly before calling).
 -}
-module Cardano.Node.Client.UTxOIndexer.Server (
+module Cardano.Node.Client.UTxOIndexer.PreDisclosureServer (
     -- * Server
     runServer,
 
@@ -69,17 +55,9 @@ module Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
 ) where
 
-import Cardano.Node.Client.UTxOIndexer.Disclosure (
-    AddressCoverage (..),
-    Coverage (..),
-    CoverageStart (..),
-    Disclosure (..),
-    Freshness (..),
-    FreshnessStatus (..),
-    Limit (..),
-    ReadyStatus (..),
-    answerLimits,
-    assessFreshness,
+import Cardano.Node.Client.N2C.Reconnect (
+    DisconnectInfo (..),
+    UpstreamStatus (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     AssetMatch (..),
@@ -129,7 +107,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
-import Data.Time.Clock (getCurrentTime)
+import Data.Word (Word64)
 import Network.Socket (
     Family (AF_UNIX),
     SockAddr (SockAddrUnix),
@@ -145,6 +123,68 @@ import Network.Socket.ByteString qualified as Net
 import System.Directory (removeFile)
 import System.IO.Error (isDoesNotExistError)
 
+{- | Sync-readiness snapshot used for the @ready@
+endpoint. Mirrors @cardano-utxo-csmt@'s @ReadyResponse@
+field shape (@ready@/@tipSlot@/@processedSlot@/
+@slotsBehind@) so consumers wired against either
+daemon get the same JSON.
+
+The 'rsUpstream' field surfaces the reconnect supervisor's
+view of the upstream chain-sync session. Invariant:
+'rsUpstream' = 'UpstreamDisconnected' implies
+'rsReady' is 'False'. The 'ToJSON' encoder enforces this
+defensively on the wire — 'rsReady' is set to 'False'
+whenever 'rsUpstream' is in the disconnected state, even
+if the producer's 'TVar' lags. Encoding stays
+backwards-compatible: the @upstream@ field is omitted
+entirely when the supervisor reports
+'UpstreamConnected'. See
+@specs\/035-indexer-n2c-reconnect\/contracts\/control-wire.md@.
+-}
+data ReadyStatus = ReadyStatus
+    { rsReady :: !Bool
+    , rsTipSlot :: !(Maybe SlotNo)
+    , rsProcessedSlot :: !(Maybe SlotNo)
+    , rsSlotsBehind :: !(Maybe Word64)
+    , rsUpstream :: !UpstreamStatus
+    }
+    deriving stock (Eq, Show)
+
+instance ToJSON ReadyStatus where
+    toJSON
+        ReadyStatus
+            { rsReady
+            , rsTipSlot
+            , rsProcessedSlot
+            , rsSlotsBehind
+            , rsUpstream
+            } =
+            object (baseFields <> upstreamField)
+          where
+            -- Defensively force ready=False whenever the
+            -- supervisor reports a disconnected upstream.
+            ready = case rsUpstream of
+                UpstreamConnected -> rsReady
+                UpstreamDisconnected _ -> False
+            unSlotNo (SlotNo s) = s
+            baseFields =
+                [ "ready" .= ready
+                , "tipSlot" .= fmap unSlotNo rsTipSlot
+                , "processedSlot" .= fmap unSlotNo rsProcessedSlot
+                , "slotsBehind" .= rsSlotsBehind
+                ]
+            upstreamField = case rsUpstream of
+                UpstreamConnected -> []
+                UpstreamDisconnected di ->
+                    [ "upstream"
+                        .= object
+                            [ "status" .= ("disconnected" :: Text)
+                            , "reason" .= diReason di
+                            , "attempt" .= diAttempt di
+                            , "elapsedMs" .= diSinceMs di
+                            ]
+                    ]
+
 {- | Run the NDJSON server on @socketPath@ until killed
 (by exception). Removes any stale socket file at
 @socketPath@ first.
@@ -156,15 +196,14 @@ one response line, closes.
 runServer ::
     FilePath ->
     IndexerHandle ->
-    Disclosure ->
     IO ReadyStatus ->
     IO ()
-runServer socketPath idx disclosure getReady =
+runServer socketPath idx getReady =
     bracket (openListenSocket socketPath) close $ \sock -> do
         listen sock 16
         let acceptLoop = do
                 (conn, _) <- accept sock
-                _ <- forkIO (handleConn idx disclosure getReady conn)
+                _ <- forkIO (handleConn idx getReady conn)
                 acceptLoop
         acceptLoop
 
@@ -188,11 +227,10 @@ removeIfPresent p = do
 
 handleConn ::
     IndexerHandle ->
-    Disclosure ->
     IO ReadyStatus ->
     Socket ->
     IO ()
-handleConn idx disclosure getReady conn = (`finally` close conn) $ do
+handleConn idx getReady conn = (`finally` close conn) $ do
     line <- recvLine conn
     case decodeStrict' line :: Maybe Request of
         Nothing ->
@@ -207,18 +245,8 @@ handleConn idx disclosure getReady conn = (`finally` close conn) $ do
             mObs <- awaitTxIn idx txIn mTimeout
             sendLine conn (encode (AwaitResponse mObs))
         Just (UtxosWithAsset policy name) -> do
-            answer <- assetAnswer <$> assetUtxos idx policy name
-            case answer of
-                AssetRefused refusal -> sendLine conn (encode refusal)
-                AssetFound point members -> do
-                    -- Freshness is sampled after the storage read and
-                    -- measured against that read's own point.
-                    ready <- getReady
-                    now <- getCurrentTime
-                    let freshness = assessFreshness disclosure now ready point
-                    sendLine conn $
-                        encode $
-                            object (members <> disclosureMembers disclosure freshness)
+            result <- assetUtxos idx policy name
+            sendLine conn (encode (assetAnswer result))
         Just (InvalidAssetQuery detail) ->
             sendLine conn (encode (invalidAssetQuery detail))
 
@@ -411,19 +439,12 @@ invalidAssetQuery detail =
         , "detail" .= detail
         ]
 
-{- | An asset answer before its disclosure: the v1 members of a
-success with the snapshot's point, or a refusal sent as it is.
--}
-data AssetAnswer
-    = AssetFound !SlotNo ![Aeson.Pair]
-    | AssetRefused !Value
-
 {- | The answer to an asset query: the indexed point and every
 holder, or @asset_index_unavailable@ naming why the store cannot
 answer. A holder whose stored bytes no longer decode makes the
 answer @inconsistent@: its datum is never made up.
 -}
-assetAnswer :: Either AssetQueryUnavailable AssetSnapshot -> AssetAnswer
+assetAnswer :: Either AssetQueryUnavailable AssetSnapshot -> Value
 assetAnswer = \case
     Left AssetIndexAbsent -> unavailable "absent"
     Left NoIndexedPoint -> unavailable "no_indexed_point"
@@ -432,72 +453,17 @@ assetAnswer = \case
         case traverse matchValue asMatches of
             Nothing -> unavailable "inconsistent"
             Just matches ->
-                AssetFound
-                    (fst asPoint)
+                object
                     [ "point" .= pointValue asPoint
                     , "utxos" .= matches
                     ]
   where
-    unavailable :: Text -> AssetAnswer
+    unavailable :: Text -> Value
     unavailable reason =
-        AssetRefused $
-            object
-                [ "error" .= ("asset_index_unavailable" :: Text)
-                , "reason" .= reason
-                ]
-
-{- | The four members every successful asset answer carries beside
-its point and holders: @network@, @coverage@, @freshness@ and
-@limits@.
--}
-disclosureMembers :: Disclosure -> Freshness -> [Aeson.Pair]
-disclosureMembers Disclosure{dsNetworkMagic, dsCoverage} freshness =
-    [ "network" .= object ["magic" .= dsNetworkMagic]
-    , "coverage" .= coverageValue dsCoverage
-    , "freshness" .= freshnessValue freshness
-    , "limits" .= map limitText (answerLimits dsCoverage freshness)
-    ]
-
-coverageValue :: Coverage -> Value
-coverageValue Coverage{covStart, covAddresses} =
-    object
-        [ "start" .= case covStart of
-            FromOrigin -> Aeson.String "origin"
-            FromPoint slot hash -> pointValue (slot, hash)
-        , "addresses" .= case covAddresses of
-            AllAddresses -> "all" :: Text
-            FilteredAddresses -> "filtered"
-        ]
-
-freshnessValue :: Freshness -> Value
-freshnessValue
-    Freshness
-        { frStatus
-        , frTipSlot
-        , frSlotsBehind
-        , frSecondsSinceProgress
-        } =
         object
-            [ "status" .= statusText frStatus
-            , "tipSlot" .= fmap (\(SlotNo s) -> s) frTipSlot
-            , "slotsBehind" .= frSlotsBehind
-            , "secondsSinceProgress" .= frSecondsSinceProgress
+            [ "error" .= ("asset_index_unavailable" :: Text)
+            , "reason" .= reason
             ]
-
-statusText :: FreshnessStatus -> Text
-statusText = \case
-    Synced -> "synced"
-    CatchingUp -> "catching_up"
-    Disconnected -> "disconnected"
-    Stale -> "stale"
-
-limitText :: Limit -> Text
-limitText = \case
-    AddressFilterLimit -> "address_filter"
-    PartialHistoryLimit -> "partial_history"
-    CatchingUpLimit -> "catching_up"
-    DisconnectedLimit -> "disconnected"
-    StaleLimit -> "stale"
 
 {- | One holder: its reference, its stored output bytes, quantity,
 creation point, and the datum read from those same bytes. 'Nothing'

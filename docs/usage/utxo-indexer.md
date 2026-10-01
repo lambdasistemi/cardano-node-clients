@@ -21,7 +21,8 @@ utxo-indexer \
   [--reconnect-initial-ms          1000] \
   [--reconnect-max-ms              30000] \
   [--reconnect-reset-threshold-ms  30000] \
-  [--node-ready-timeout-ms         <ms>]
+  [--node-ready-timeout-ms         <ms>] \
+  [--stale-after-seconds           600]
 ```
 
 | Flag | Default | Purpose |
@@ -37,8 +38,10 @@ utxo-indexer \
 | `--reconnect-max-ms` | `30000` | Cap of the supervisor's backoff window. |
 | `--reconnect-reset-threshold-ms` | `30000` | Healthy-run duration that resets the supervisor's failure counter. |
 | `--node-ready-timeout-ms` | unset | Total cap on the LSQ tip probe. **Unset = wait forever** for the upstream node's ChainDB to load. Set explicitly for CI scenarios that want to fail fast. |
+| `--stale-after-seconds` | `600` | Seconds without follower progress after which a connected upstream makes asset answers `stale` (see [Network, coverage and freshness](#network-coverage-and-freshness)). A positive whole number; anything else is a usage error. |
 
-All flags are parsed in `app/utxo-indexer/Main.hs`; required flags are
+All flags are parsed by `parseDaemonArgs` in
+`Cardano.Node.Client.UTxOIndexer.Daemon`; required flags are
 `--relay-socket`, `--listen`, `--network-magic`, and
 `--byron-epoch-slots`.
 
@@ -89,7 +92,8 @@ sequenceDiagram
     else request readable
         D->>S: one read: indexed point, holders, their bytes and creation points
         S-->>D: snapshot, or why the store cannot answer
-        D-->>C: {"point":...,"utxos":[...]} or {"error":"asset_index_unavailable",...}
+        D->>D: sample upstream freshness after the read
+        D-->>C: {"point","utxos","network","coverage","freshness","limits"} or {"error":"asset_index_unavailable",...}
     end
     D-->>C: EOF
 ```
@@ -126,6 +130,20 @@ answer is one line; piped through `jq .` it reads:
 
 ```json
 {
+  "coverage": {
+    "addresses": "all",
+    "start": "origin"
+  },
+  "freshness": {
+    "secondsSinceProgress": 3,
+    "slotsBehind": 4,
+    "status": "synced",
+    "tipSlot": 1294
+  },
+  "limits": [],
+  "network": {
+    "magic": 42
+  },
   "point": {
     "blockHash": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
     "slot": 1290
@@ -174,7 +192,10 @@ answer is one line; piped through `jq .` it reads:
 ```
 
 When no live output holds the asset the answer is still a full answer,
-with an empty list: `{"point":{...},"utxos":[]}`.
+with an empty list: `{"point":{...},"utxos":[],...}` and the same
+`network`, `coverage`, `freshness` and `limits`. Whether that empty list
+is the chain's answer is what `limits` says: see
+[Network, coverage and freshness](#network-coverage-and-freshness).
 
 ### Fields
 
@@ -187,6 +208,10 @@ with an empty list: `{"point":{...},"utxos":[]}`.
 | `utxos[].quantity` | How much of the asset the output holds, as a decimal string: quantities reach 2^64−1, beyond what JSON numbers carry exactly in many consumers. |
 | `utxos[].created.slot`, `utxos[].created.blockHash` | The block that created the output — the same point `await` reports for that `txin`. |
 | `utxos[].datum` | The datum, read from the `txout` bytes themselves (next section). |
+| `network.magic` | The network magic the daemon's follower connects with (`--network-magic`). |
+| `coverage` | What this index covers: `start` (`"origin"` or the `{"slot","blockHash"}` it started from) and `addresses` (`"all"` or `"filtered"`). |
+| `freshness` | How current the answer is: `status`, the last observed upstream `tipSlot`, how many slots `point` is `slotsBehind` that tip, and `secondsSinceProgress` of the follower. |
+| `limits` | Every reason this answer may differ from the chain-wide answer at `point`. `[]` is the only form that claims the chain's answer. |
 
 ### Datum availability
 
@@ -228,6 +253,120 @@ flowchart TD
 | `absent` | The store has no complete asset index: it was created by an earlier version of the daemon, or it met an output it could not read. Such a store keeps answering `utxos_at`, `ready` and `await`. | Start the daemon on a new `--db-path`; a store created from empty indexes assets from its first block. |
 | `no_indexed_point` | The store has no point to answer at yet: no block applied, or the daemon is still in its initial catch-up from genesis, which records no rollback points. | Retry once `ready` is `true`. |
 | `inconsistent` | An index entry has no matching live output, or an output's bytes cannot be read. | Report it; the store needs rebuilding. |
+
+## Network, coverage and freshness
+
+An empty or short `utxos` list can mean two things: the chain holds no
+more outputs of the asset at `point`, or this index cannot see them.
+Every successful asset answer says which, in the same line:
+
+```json
+"network":   {"magic": 42},
+"coverage":  {"start": "origin", "addresses": "all"},
+"freshness": {"status": "synced", "tipSlot": 1294, "slotsBehind": 4, "secondsSinceProgress": 3},
+"limits":    []
+```
+
+Read `limits` first. **An empty `limits` is the only answer that claims
+to be the chain's answer at `point`.** Every other answer names each
+reason it may differ, whether `utxos` is empty or not.
+
+| `limits` entry | Present when | What it means for `utxos` |
+|----------------|--------------|---------------------------|
+| `address_filter` | `coverage.addresses` is `"filtered"` | Outputs at addresses outside the follower's address set were never indexed: holders there are missing. |
+| `partial_history` | `coverage.start` is a point, not `"origin"` | Outputs created before the start point were never indexed: holders created earlier are missing. |
+| `catching_up` | `freshness.status` is `catching_up` | `point` is behind the upstream tip: later creations and spends are not reflected yet. |
+| `disconnected` | `freshness.status` is `disconnected` | The upstream node is unreachable: the answer comes from the cached store, and how far the chain has moved since is unknown. |
+| `stale` | `freshness.status` is `stale` | The upstream is connected but the follower has made no progress for longer than `--stale-after-seconds`. |
+
+Entries appear in that order, each at most once. The two error answers
+(`invalid_asset_query`, `asset_index_unavailable`) carry none of these
+members and are unchanged.
+
+### Network
+
+`network.magic` is the network magic the daemon's follower connects
+with, the `--network-magic` it was started with. The follower's
+handshake with the node fails on any other magic, so a daemon that is
+following a node is on that node's network.
+
+### Coverage
+
+`coverage` describes the follower configuration of the serving process:
+
+| Member | Values | From |
+|--------|--------|------|
+| `start` | `"origin"`, or `{"slot": <int>, "blockHash": "<hex>"}` | the follower's start point; none means origin |
+| `addresses` | `"all"` or `"filtered"` | the follower's interest set: every address, or an address set |
+
+The bundled `utxo-indexer` binary always follows from origin over every
+address, so it always answers `{"start":"origin","addresses":"all"}`.
+The other values come from in-process followers built with a start
+point or an address set (see [Embedded use](#embedded-use)).
+
+Coverage is the configuration of the **running process**, not a record
+kept in the store:
+
+- A start point is used only when the store is empty (cold boot). A
+  store that already holds blocks resumes from its own rollback points
+  whatever the configuration says, so a start point disclosed for a
+  store that was created under a different configuration does not
+  describe that store.
+- Changing the interest set over an existing store does not re-index
+  the outputs it skipped or drop the ones it kept.
+
+The disclosure is exact for a store the process created itself; keep
+one configuration per store.
+
+### Freshness
+
+`freshness` is sampled once per answer, **after** the store read that
+produced `point` and `utxos`, and measured against that `point`:
+
+| Member | Meaning |
+|--------|---------|
+| `status` | `synced`, `catching_up`, `disconnected` or `stale` (rules below). |
+| `tipSlot` | The last upstream tip slot the follower observed; `null` before the first block. |
+| `slotsBehind` | `tipSlot − point.slot`, clamped at 0; `null` when `tipSlot` is `null`. It is computed from this answer's `point`, not from the follower's latest processed slot, so it says how far *this answer* is behind. |
+| `secondsSinceProgress` | Whole seconds since the follower last made progress: applied a block, or saw its upstream connect or disconnect. |
+
+The status is the first rule that holds:
+
+```mermaid
+flowchart TD
+    S[sample after the store read] --> D{upstream reported down?}
+    D -->|yes| DIS[disconnected]
+    D -->|no| ST{secondsSinceProgress > --stale-after-seconds?}
+    ST -->|yes| STALE[stale]
+    ST -->|no| T{tipSlot known?}
+    T -->|no| CU[catching_up]
+    T -->|yes| B{slotsBehind > --ready-threshold-slots?}
+    B -->|yes| CU
+    B -->|no| SY[synced]
+```
+
+- `disconnected` beats everything: the reconnect supervisor reports the
+  upstream down, the same state `ready` shows as its `upstream` object.
+- `stale` uses wall-clock time since the last progress, not slot
+  arithmetic, so it needs no genesis parameters. A chain that produces
+  no block for longer than the bound also reads as `stale`; choose the
+  bound well above the network's longest normal block gap.
+- `catching_up` uses the same threshold as `ready`
+  (`--ready-threshold-slots`): an answer at most that many slots behind
+  the tip is `synced`.
+- A daemon started with no node behind its relay socket answers
+  `catching_up` (no tip yet) until the stale bound passes, then `stale`.
+
+### Rollbacks
+
+`limits: []` means the answer is the chain's answer **at `point`**, not
+that `point` is final. A block within the last `k` blocks
+(`--security-param-k`) can still be rolled back; after a rollback the
+same query may answer at an earlier `point` with different holders, and
+`created` points of outputs brought back follow
+[`await` after a rollback](#await-after-a-rollback). A client that
+needs settled holders compares `point.slot` with how deep it requires
+the block to be.
 
 ## `await` after a rollback
 

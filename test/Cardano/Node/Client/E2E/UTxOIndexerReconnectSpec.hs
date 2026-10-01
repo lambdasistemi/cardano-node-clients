@@ -128,6 +128,7 @@ runReconnectE2E = do
                         , dcDbPath = Just (tmp </> "db")
                         , dcReconnectPolicy = defaultReconnectPolicy
                         , dcProbeConfig = defaultProbeConfig
+                        , dcStaleAfterSeconds = 600
                         }
             withAsync (runDaemon captureTracer cfg) $ \daemonThread -> do
                 waitForFile daemonSock 600

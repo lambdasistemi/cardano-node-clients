@@ -9,8 +9,9 @@ License     : Apache-2.0
 The client side of the @utxo-indexer@ socket as the wire tests speak
 it: one request line per connection, the answer read to EOF under a
 timeout (a held connection fails the test instead of hanging it),
-request builders, and a strict reader for the v1 @utxos_with_asset@
-success answer that rejects any field the schema does not name.
+request builders, and a strict reader for the @utxos_with_asset@
+success answer that rejects any field the schema does not name: the
+v1 members plus the four disclosure members of #201.
 -}
 module Cardano.Node.Client.UTxOIndexer.WireClient (
     -- * Transport
@@ -44,7 +45,7 @@ module Cardano.Node.Client.UTxOIndexer.WireClient (
 ) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
-import Control.Exception (bracket)
+import Control.Exception (IOException, bracket, try)
 import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
@@ -73,8 +74,8 @@ import System.Timeout (timeout)
 -- * Transport
 
 {- | Run @serve@ on a fresh socket path in a background thread, wait
-until the socket exists, run the client action with that path, then
-stop the server.
+until the server answers on it, run the client action with that path,
+then stop the server.
 -}
 withSocketServer :: (FilePath -> IO ()) -> (FilePath -> IO a) -> IO a
 withSocketServer serve action =
@@ -84,14 +85,25 @@ withSocketServer serve action =
             waitForSocket path
             action path
 
--- | Poll up to 5 s for the server to bind its socket.
+{- | Poll up to 5 s until the server answers a line on its socket. The
+socket file appears when the server binds, before it listens; a
+connection in between is refused, so the file alone is not readiness.
+The probe is a line no request accepts, which every server answers at
+once without touching its store or readiness.
+-}
 waitForSocket :: FilePath -> IO ()
 waitForSocket path = go (500 :: Int)
   where
-    go 0 = fail ("socket never appeared at " <> path)
+    go 0 = fail ("socket never answered at " <> path)
     go n = do
         present <- doesPathExist path
-        if present then pure () else threadDelay 10_000 >> go (n - 1)
+        answered <-
+            if present
+                then either (const False) (const True) <$> probe
+                else pure False
+        if answered then pure () else threadDelay 10_000 >> go (n - 1)
+    probe :: IO (Either IOException ByteString)
+    probe = try (requestLine path "not json")
 
 {- | Send one request line (the newline is appended) and read the
 answer to EOF. Fails after 150 s, which bounds the longest @await@
@@ -184,13 +196,18 @@ data Match = Match
 holderOf :: Match -> (Text, Text)
 holderOf m = (mTxIn m, mQuantity m)
 
-{- | Read a success answer, requiring exactly the v1 fields: @point@
-and @utxos@; per match @txin@, @txout@, @quantity@ (a string),
-@created@ and @datum@ (@kind@ plus @hash@ or @cbor@ by kind).
+{- | Read a success answer, requiring exactly the v1 fields @point@
+and @utxos@ beside the disclosure members @network@, @coverage@,
+@freshness@ and @limits@ (read by the disclosure specs); per match
+@txin@, @txout@, @quantity@ (a string), @created@ and @datum@
+(@kind@ plus @hash@ or @cbor@ by kind).
 -}
 successAnswer :: ByteString -> Either String Answer
 successAnswer resp = do
-    top <- objectWithKeys ["point", "utxos"] =<< decoded resp
+    top <-
+        objectWithKeys
+            ["coverage", "freshness", "limits", "network", "point", "utxos"]
+            =<< decoded resp
     point <- slotAndHash =<< field "point" top
     entries <- case KM.lookup "utxos" top of
         Just (Aeson.Array xs) -> Right (foldr (:) [] xs)

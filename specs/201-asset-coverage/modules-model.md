@@ -5,8 +5,8 @@ Dependency direction unchanged: `lib` → `utxo-indexer-lib` →
 
 | ID | Module | Change | Responsibility |
 |---|---|---|---|
-| N1 | `Cardano.Node.Client.UTxOIndexer.Disclosure` | new, `lib` | coverage, freshness and limits types; the pure freshness/limits classifier (DD1–DD5, G1–G3) |
-| N2 | `Cardano.Node.Client.UTxOIndexer.Server` | extend | `ReadyStatus` last-progress field (encoding unchanged); disclosure argument; success-answer fields (spec wire additions) |
+| N1 | `Cardano.Node.Client.UTxOIndexer.Disclosure` | new, `lib` | coverage, freshness and limits types; the pure freshness/limits classifier (DD1–DD5, G1–G3); defines `ReadyStatus` with its last-progress field and its unchanged `ready` encoding |
+| N2 | `Cardano.Node.Client.UTxOIndexer.Server` | extend | re-exports `ReadyStatus (..)`; disclosure argument; success-answer fields (spec wire additions). Imports N1, never the reverse |
 | N3 | `Cardano.Node.Client.UTxOIndexer.Daemon` | extend | stale bound in `DaemonConfig`; coverage derived from the follower configuration; disclosure and last progress handed to the server (G4) |
 | N4 | `app/utxo-indexer/Main.hs` | extend | `--stale-after-seconds` flag and usage line (J8) |
 | N5 | `docs/usage/utxo-indexer.md` | extend | coverage, freshness and limits section (R8) |

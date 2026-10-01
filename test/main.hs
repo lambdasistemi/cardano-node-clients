@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Hspec (hspec)
 
+import Cardano.Node.Client.E2E.AssetDisclosureSpec qualified as AssetDisclosureSpec
 import Cardano.Node.Client.E2E.AssetQuerySpec qualified as AssetQuerySpec
 import Cardano.Node.Client.E2E.ChainSyncSpec qualified as ChainSyncSpec
 import Cardano.Node.Client.E2E.DevnetIsolationSpec qualified as DevnetIsolationSpec
@@ -20,6 +21,7 @@ main = hspec $ do
     N2CFullSpec.spec
     UTxOIndexerReconnectSpec.spec
     AssetQuerySpec.spec
+    AssetDisclosureSpec.spec
     HorizonSpec.spec
     Issue97ReproSpec.spec
     PV11GovernanceSpec.spec
