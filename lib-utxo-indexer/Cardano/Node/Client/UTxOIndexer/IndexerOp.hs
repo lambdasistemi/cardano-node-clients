@@ -18,6 +18,8 @@ module Cardano.Node.Client.UTxOIndexer.IndexerOp (
 
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address,
+    BlockHash,
+    SlotNo,
     TxIn,
     TxOut,
  )
@@ -34,4 +36,17 @@ data UtxoOp
       -- via 'TxInCol', delete from both columns. No-op if
       -- the TxIn is not in the index.
       UtxoSpend !TxIn
+    | -- | Restore a previously-spent (or overwritten) UTxO
+      -- with its original creation provenance: re-insert
+      -- the output exactly as 'UtxoCreate' would, but record
+      -- the given @(slot, blockHash)@ as the observation.
+      -- Produced only as the inverse of a spend (or of a
+      -- re-create over a live 'TxIn'); block extraction never
+      -- produces it.
+      UtxoRestore
+        !TxIn
+        !Address
+        !TxOut
+        !SlotNo
+        !BlockHash
     deriving stock (Eq, Show)

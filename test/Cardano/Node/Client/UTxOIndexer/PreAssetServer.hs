@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.Server
 Description : NDJSON Unix-socket server for the indexer
@@ -18,36 +16,18 @@ RESP: {"utxos": [{"txin": "<txid>#<ix>",
 REQ:  {"ready": null}
 RESP: {"ready":<bool>, "tipSlot":<int|null>,
        "processedSlot":<int|null>, "slotsBehind":<int|null>}
-
-REQ:  {"await": "<txid>#<ix>", "timeout_seconds": <int>}
-RESP: {"slot":<int>, "blockHash":"<hex>", "txout":"<base16-cbor>"}
-    | {"timeout": true}
-
-REQ:  {"utxos_with_asset": {"policy_id": "<56 hex>",
-                            "asset_name": "<0..64 hex>"}}
-RESP: {"point": {"slot":<int>, "blockHash":"<hex>"},
-       "utxos": [{"txin": "<txid>#<ix>",
-                  "txout": "<base16-cbor>",
-                  "quantity": "<decimal>",
-                  "created": {"slot":<int>, "blockHash":"<hex>"},
-                  "datum": {"kind":"none"}
-                         | {"kind":"hash", "hash":"<hex>"}
-                         | {"kind":"inline", "cbor":"<hex>"}}, ...]}
-    | {"error": "invalid_asset_query", "detail": "<text>"}
-    | {"error": "asset_index_unavailable",
-       "reason": "absent" | "no_indexed_point" | "inconsistent"}
 @
 
 Each connection is a single request → single response →
-EOF. A line no request accepts is answered with
-@{"error": "malformed json"}@.
+EOF; the @await@ streaming primitive lands in a separate
+patch.
 
 Address bytes are sent on the wire as hex. Bech32
 parsing lives in the consumer (consumers either already
 have raw bytes from the ledger or hex-encode them
 explicitly before calling).
 -}
-module Cardano.Node.Client.UTxOIndexer.Server (
+module Cardano.Node.Client.UTxOIndexer.PreAssetServer (
     -- * Server
     runServer,
 
@@ -60,27 +40,15 @@ import Cardano.Node.Client.N2C.Reconnect (
     UpstreamStatus (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
-    AssetMatch (..),
-    AssetQueryUnavailable (..),
-    AssetSnapshot (..),
     AwaitObservation (..),
     IndexerHandle (..),
  )
-import Cardano.Node.Client.UTxOIndexer.TxOutView (
-    DatumView (..),
-    TxOutView (..),
-    decodeTxOutView,
- )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
-    AssetName,
     BlockHash (..),
-    PolicyId,
     SlotNo (..),
     TxIn (..),
     TxOut (..),
-    mkAssetName,
-    mkPolicyId,
  )
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
@@ -95,8 +63,6 @@ import Data.Aeson (
     (.:),
     (.=),
  )
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -244,11 +210,6 @@ handleConn idx getReady conn = (`finally` close conn) $ do
         Just (Await txIn mTimeout) -> do
             mObs <- awaitTxIn idx txIn mTimeout
             sendLine conn (encode (AwaitResponse mObs))
-        Just (UtxosWithAsset policy name) -> do
-            result <- assetUtxos idx policy name
-            sendLine conn (encode (assetAnswer result))
-        Just (InvalidAssetQuery detail) ->
-            sendLine conn (encode (invalidAssetQuery detail))
 
 {- | Read up to and including the first @\n@. The line
 itself is returned without the trailing newline.
@@ -287,17 +248,8 @@ data Request
     = UtxosAt !Address
     | Ready
     | Await !TxIn !(Maybe Int)
-    | UtxosWithAsset !PolicyId !AssetName
-    | -- | A @utxos_with_asset@ request that cannot be read, with
-      -- the reason.
-      InvalidAssetQuery !Text
     deriving stock (Eq, Show)
 
-{- | The three original requests are tried first, so every line they
-accept is answered exactly as before; a line carrying
-@utxos_with_asset@ that none of them accepts is an asset query,
-well-formed or not.
--}
 instance FromJSON Request where
     parseJSON =
         Aeson.withObject "Request" $ \o ->
@@ -313,10 +265,6 @@ instance FromJSON Request where
                             o Aeson..:? "timeout_seconds" ::
                                 Aeson.Parser (Maybe Int)
                         pure (Await txIn mt)
-                    )
-                <|> ( either InvalidAssetQuery (uncurry UtxosWithAsset)
-                        . parseAssetQuery
-                        <$> o .: "utxos_with_asset"
                     )
       where
         parseHexAddress :: Text -> Aeson.Parser Address
@@ -341,51 +289,6 @@ parseTxInWire s =
                         "await: ix must be a non-negative integer ≤ 65535"
             pure (TxIn tid ix)
         _ -> fail "await: expected \"<txid_hex>#<ix>\""
-
-{- | Read the @utxos_with_asset@ value: an object with exactly
-@policy_id@ (28 bytes) and @asset_name@ (0 to 32 bytes), both hex
-in any case. 'Left' carries the detail of the
-@invalid_asset_query@ answer.
--}
-parseAssetQuery :: Value -> Either Text (PolicyId, AssetName)
-parseAssetQuery = \case
-    Aeson.Object q -> do
-        case filter (`notElem` ["policy_id", "asset_name"]) (KeyMap.keys q) of
-            [] -> Right ()
-            unknown : _ ->
-                Left ("unknown field " <> Key.toText unknown <> " in utxos_with_asset")
-        policyBytes <- hexField "policy_id" q
-        nameBytes <- hexField "asset_name" q
-        policy <-
-            maybe
-                ( Left
-                    ( "policy_id must be 28 bytes (56 hex digits), got "
-                        <> byteCount policyBytes
-                    )
-                )
-                Right
-                (mkPolicyId policyBytes)
-        name <-
-            maybe
-                ( Left
-                    ( "asset_name must be at most 32 bytes (64 hex digits), got "
-                        <> byteCount nameBytes
-                    )
-                )
-                Right
-                (mkAssetName nameBytes)
-        Right (policy, name)
-    _ ->
-        Left "utxos_with_asset must be an object with policy_id and asset_name"
-  where
-    hexField k q = case KeyMap.lookup k q of
-        Nothing -> Left ("missing field " <> Key.toText k)
-        Just (Aeson.String t) -> case Base16.decode (Text.encodeUtf8 t) of
-            Right bytes -> Right bytes
-            Left err ->
-                Left (Key.toText k <> " is not valid hex: " <> Text.pack err)
-        Just _ -> Left (Key.toText k <> " must be a hex string")
-    byteCount bytes = Text.pack (show (BS.length bytes)) <> " bytes"
 
 newtype UtxosResponse = UtxosResponse [(TxIn, TxOut)]
 
@@ -430,85 +333,3 @@ instance ToJSON AwaitResponse where
                 , "blockHash" .= Text.decodeUtf8 (Base16.encode bh)
                 , "txout" .= Text.decodeUtf8 (Base16.encode (unTxOut txOut))
                 ]
-
--- | The answer to a @utxos_with_asset@ request that cannot be read.
-invalidAssetQuery :: Text -> Value
-invalidAssetQuery detail =
-    object
-        [ "error" .= ("invalid_asset_query" :: Text)
-        , "detail" .= detail
-        ]
-
-{- | The answer to an asset query: the indexed point and every
-holder, or @asset_index_unavailable@ naming why the store cannot
-answer. A holder whose stored bytes no longer decode makes the
-answer @inconsistent@: its datum is never made up.
--}
-assetAnswer :: Either AssetQueryUnavailable AssetSnapshot -> Value
-assetAnswer = \case
-    Left AssetIndexAbsent -> unavailable "absent"
-    Left NoIndexedPoint -> unavailable "no_indexed_point"
-    Left (AssetIndexInconsistent _) -> unavailable "inconsistent"
-    Right AssetSnapshot{asPoint, asMatches} ->
-        case traverse matchValue asMatches of
-            Nothing -> unavailable "inconsistent"
-            Just matches ->
-                object
-                    [ "point" .= pointValue asPoint
-                    , "utxos" .= matches
-                    ]
-  where
-    unavailable :: Text -> Value
-    unavailable reason =
-        object
-            [ "error" .= ("asset_index_unavailable" :: Text)
-            , "reason" .= reason
-            ]
-
-{- | One holder: its reference, its stored output bytes, quantity,
-creation point, and the datum read from those same bytes. 'Nothing'
-when the bytes do not decode.
--}
-matchValue :: AssetMatch -> Maybe Value
-matchValue
-    AssetMatch
-        { amTxIn
-        , amTxOut
-        , amQuantity
-        , amCreatedSlot
-        , amCreatedBlockHash
-        } =
-        case decodeTxOutView amTxOut of
-            Left _ -> Nothing
-            Right TxOutView{tovDatum} ->
-                Just $
-                    object
-                        [ "txin" .= txInWire amTxIn
-                        , "txout"
-                            .= Text.decodeUtf8 (Base16.encode (unTxOut amTxOut))
-                        , "quantity" .= Text.pack (show amQuantity)
-                        , "created"
-                            .= pointValue (amCreatedSlot, amCreatedBlockHash)
-                        , "datum" .= datumValue tovDatum
-                        ]
-
-datumValue :: DatumView -> Value
-datumValue = \case
-    NoDatum -> object ["kind" .= ("none" :: Text)]
-    DatumHash h ->
-        object
-            [ "kind" .= ("hash" :: Text)
-            , "hash" .= Text.decodeUtf8 (Base16.encode h)
-            ]
-    InlineDatum cbor ->
-        object
-            [ "kind" .= ("inline" :: Text)
-            , "cbor" .= Text.decodeUtf8 (Base16.encode cbor)
-            ]
-
-pointValue :: (SlotNo, BlockHash) -> Value
-pointValue (SlotNo slot, BlockHash bh) =
-    object
-        [ "slot" .= slot
-        , "blockHash" .= Text.decodeUtf8 (Base16.encode bh)
-        ]

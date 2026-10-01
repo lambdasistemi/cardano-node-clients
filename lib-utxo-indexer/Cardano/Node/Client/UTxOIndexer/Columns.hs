@@ -45,6 +45,8 @@ module Cardano.Node.Client.UTxOIndexer.Columns (
     addressIndexCodecs,
     observationColCodecs,
     rollbackCodecs,
+    assetIndexCodecs,
+    metaCodecs,
 
     -- * Inverse-op list encoding
     encodeOps,
@@ -55,12 +57,15 @@ import Cardano.Node.Client.UTxOIndexer.IndexerOp (UtxoOp (..))
 import Cardano.Node.Client.UTxOIndexer.Types (
     AddrKey,
     Address (..),
+    AssetKey,
     BlockHash (..),
     SlotNo,
     TxIn,
     TxOut (..),
     addrKeyFromBytes,
     addrKeyToBytes,
+    assetKeyFromBytes,
+    assetKeyToBytes,
     slotFromBytes,
     slotToBytes,
     txInFromBytes,
@@ -77,7 +82,7 @@ import Data.GADT.Compare (
     GOrdering (..),
  )
 import Data.Type.Equality (type (:~:) (Refl))
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Database.KV.Transaction (Codecs (..), KV)
 
 -- | The indexer database's column families.
@@ -109,12 +114,24 @@ data Cols c where
     -- column persists, so the fast path reconstructs
     -- the observation from on-disk state.
     ObservationCol :: Cols (KV TxIn (SlotNo, BlockHash))
+    -- | Asset index: one row per (policy id, asset name,
+    -- holding 'TxIn') with the positive quantity. Written and
+    -- deleted by re-extracting the live output's stored bytes,
+    -- so the rows are always exactly the multi-asset entries of
+    -- the live outputs.
+    AssetIndex :: Cols (KV AssetKey Word64)
+    -- | Store metadata. v1 holds the single key
+    -- @asset-index@ marking a store whose asset index is
+    -- complete since creation.
+    MetaCol :: Cols (KV ByteString ByteString)
 
 instance GEq Cols where
     geq TxInCol TxInCol = Just Refl
     geq AddressIndex AddressIndex = Just Refl
     geq RollbackCol RollbackCol = Just Refl
     geq ObservationCol ObservationCol = Just Refl
+    geq AssetIndex AssetIndex = Just Refl
+    geq MetaCol MetaCol = Just Refl
     geq _ _ = Nothing
 
 instance GCompare Cols where
@@ -126,8 +143,20 @@ instance GCompare Cols where
     gcompare _ AddressIndex = GGT
     gcompare ObservationCol ObservationCol = GEQ
     gcompare ObservationCol RollbackCol = GLT
+    gcompare ObservationCol AssetIndex = GLT
+    gcompare ObservationCol MetaCol = GLT
     gcompare RollbackCol ObservationCol = GGT
     gcompare RollbackCol RollbackCol = GEQ
+    gcompare RollbackCol AssetIndex = GLT
+    gcompare RollbackCol MetaCol = GLT
+    gcompare AssetIndex ObservationCol = GGT
+    gcompare AssetIndex RollbackCol = GGT
+    gcompare AssetIndex AssetIndex = GEQ
+    gcompare AssetIndex MetaCol = GLT
+    gcompare MetaCol ObservationCol = GGT
+    gcompare MetaCol RollbackCol = GGT
+    gcompare MetaCol AssetIndex = GGT
+    gcompare MetaCol MetaCol = GEQ
 
 -- | Codecs for 'TxInCol'.
 txInColCodecs :: Codecs (KV TxIn Address)
@@ -172,6 +201,25 @@ rollbackCodecs =
         , valueCodec = rollbackEntryPrism
         }
 
+{- | Codecs for the asset index. Keys are the composite asset
+key (see 'assetKeyToBytes'); values are 8-byte big-endian
+quantities.
+-}
+assetIndexCodecs :: Codecs (KV AssetKey Word64)
+assetIndexCodecs =
+    Codecs
+        { keyCodec = assetKeyPrism
+        , valueCodec = quantityPrism
+        }
+
+-- | Codecs for the metadata column: raw bytes both ways.
+metaCodecs :: Codecs (KV ByteString ByteString)
+metaCodecs =
+    Codecs
+        { keyCodec = prism' id Just
+        , valueCodec = prism' id Just
+        }
+
 -- Internal --------------------------------------------------------
 
 txInPrism :: Prism' ByteString TxIn
@@ -201,6 +249,12 @@ txOutPrism = prism' unTxOut (Just . TxOut)
 
 slotPrism :: Prism' ByteString SlotNo
 slotPrism = prism' slotToBytes slotFromBytes
+
+assetKeyPrism :: Prism' ByteString AssetKey
+assetKeyPrism = prism' assetKeyToBytes assetKeyFromBytes
+
+quantityPrism :: Prism' ByteString Word64
+quantityPrism = prism' word64BE word64FromBE
 
 {- | Codec for the rollback entry. On-disk shape stays
 @blockHashLen(4 BE) || blockHash || encodeOps@ for normal
@@ -290,6 +344,13 @@ encodeOp (UtxoCreate txIn (Address addr) (TxOut txOut)) =
         <> lenPrefixed txOut
 encodeOp (UtxoSpend txIn) =
     BS.singleton 1 <> txInToBytes txIn
+encodeOp (UtxoRestore txIn (Address addr) (TxOut txOut) slot (BlockHash bh)) =
+    BS.singleton 2
+        <> txInToBytes txIn
+        <> lenPrefixed addr
+        <> lenPrefixed txOut
+        <> slotToBytes slot
+        <> lenPrefixed bh
 
 lenPrefixed :: ByteString -> ByteString
 lenPrefixed bs = word32BE (fromIntegral (BS.length bs)) <> bs
@@ -325,6 +386,23 @@ decodeOp bs0 = do
             (txInBs, rest1) <- splitFixed 34 rest0
             txIn <- txInFromBytes txInBs
             Just (UtxoSpend txIn, rest1)
+        2 -> do
+            (txInBs, rest1) <- splitFixed 34 rest0
+            txIn <- txInFromBytes txInBs
+            (addrBs, rest2) <- readLenPrefixed rest1
+            (txOutBs, rest3) <- readLenPrefixed rest2
+            (slotBs, rest4) <- splitFixed 8 rest3
+            slot <- slotFromBytes slotBs
+            (bhBs, rest5) <- readLenPrefixed rest4
+            Just
+                ( UtxoRestore
+                    txIn
+                    (Address addrBs)
+                    (TxOut txOutBs)
+                    slot
+                    (BlockHash bhBs)
+                , rest5
+                )
         _ -> Nothing
 
 splitFixed :: Int -> ByteString -> Maybe (ByteString, ByteString)
@@ -376,3 +454,24 @@ word32BE w =
         , fromIntegral (w `shiftR` 8) .&. 0xFF
         , fromIntegral w .&. 0xFF
         ]
+
+word64BE :: Word64 -> ByteString
+word64BE w =
+    BS.pack
+        [ fromIntegral (w `shiftR` n) .&. 0xFF
+        | n <- [56, 48, 40, 32, 24, 16, 8, 0]
+        ]
+
+word64FromBE :: ByteString -> Maybe Word64
+word64FromBE bs
+    | BS.length bs /= 8 = Nothing
+    | otherwise =
+        Just $
+            foldr
+                (.|.)
+                0
+                ( zipWith
+                    (\s b -> fromIntegral b `shiftL` s)
+                    [56, 48, 40, 32, 24, 16, 8, 0]
+                    (BS.unpack bs)
+                )

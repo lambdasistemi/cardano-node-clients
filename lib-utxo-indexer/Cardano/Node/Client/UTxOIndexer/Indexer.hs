@@ -85,6 +85,11 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
 
     -- * Await observations
     AwaitObservation (..),
+
+    -- * Typed asset read
+    AssetSnapshot (..),
+    AssetMatch (..),
+    AssetQueryUnavailable (..),
 ) where
 
 import Cardano.Node.Client.BlockIndexer.Engine qualified as Engine
@@ -97,15 +102,24 @@ import Cardano.Node.Client.BlockIndexer.Handler qualified as Handler
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols (..),
     addressIndexCodecs,
+    assetIndexCodecs,
+    metaCodecs,
     observationColCodecs,
     rollbackCodecs,
     txInColCodecs,
  )
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (UtxoOp (..))
+import Cardano.Node.Client.UTxOIndexer.TxOutView (
+    TxOutView (..),
+    decodeTxOutView,
+ )
 import Cardano.Node.Client.UTxOIndexer.Types (
     AddrKey (..),
     Address (..),
+    AssetKey (..),
+    AssetName (..),
     BlockHash (..),
+    PolicyId (..),
     SlotNo (..),
     TxIn (..),
     TxOut,
@@ -131,11 +145,12 @@ import Control.Concurrent.STM (
     readTVarIO,
     writeTVar,
  )
-import Control.Exception (Exception, throwIO)
+import Control.Exception (Exception, IOException, throwIO, try)
 import Control.Monad (when)
 import Data.ByteString qualified as BS
 import Data.Default.Class (def)
 import Data.Dependent.Map (DMap)
+import Data.Dependent.Map qualified as DMap
 import Data.Foldable (traverse_)
 import Data.IORef (
     IORef,
@@ -143,21 +158,26 @@ import Data.IORef (
     readIORef,
     writeIORef,
  )
+import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.SampleFibonacci (sampleAtFibonacciIntervals)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Typeable (Typeable, cast)
+import Data.Word (Word64)
 import Database.KV.Cursor (
     Cursor,
     Entry (..),
+    firstEntry,
+    lastEntry,
     nextEntry,
+    prevEntry,
     seekKey,
  )
-import Database.KV.Database (Codecs, KV, mkColumns)
+import Database.KV.Database (Codecs, Column (..), Database (..), KV, QueryIterator (..), mkColumns)
 import Database.KV.InMemory (mkInMemoryDatabase)
 import Database.KV.RocksDB (mkRocksDBDatabase)
 import Database.KV.Transaction (
@@ -172,7 +192,10 @@ import Database.KV.Transaction (
     query,
  )
 import Database.RocksDB (
+    BatchOp,
+    ColumnFamily,
     Config (..),
+    DB,
     columnFamilies,
     withDBCF,
  )
@@ -210,6 +233,50 @@ data AwaitObservation = AwaitObservation
     }
     deriving stock (Eq, Show)
 
+{- | One live holder of a queried asset, read in the same storage
+transaction as the snapshot's point.
+-}
+data AssetMatch = AssetMatch
+    { amTxIn :: !TxIn
+    -- ^ The holding output's reference.
+    , amTxOut :: !TxOut
+    -- ^ The stored output bytes, byte-identical to what
+    -- 'snapshotAt' returns for this 'TxIn'.
+    , amQuantity :: !Word64
+    -- ^ The quantity of the asset in that output.
+    , amCreatedSlot :: !SlotNo
+    -- ^ The slot of the block that created the output.
+    , amCreatedBlockHash :: !BlockHash
+    -- ^ The hash of the block that created the output.
+    }
+    deriving stock (Eq, Show)
+
+{- | A consistent read of every live holder of one asset, taken in
+a single storage transaction.
+-}
+data AssetSnapshot = AssetSnapshot
+    { asPoint :: !(SlotNo, BlockHash)
+    -- ^ The indexed point (newest applied block) the matches were
+    -- read at.
+    , asMatches :: [AssetMatch]
+    -- ^ Every live holder, in ascending 'TxIn' order.
+    }
+    deriving stock (Eq, Show)
+
+{- | Why an asset query cannot be answered. Stores without a
+complete asset index, or without an indexed point, answer with an
+explicit unavailability — never an empty or partial match list.
+-}
+data AssetQueryUnavailable
+    = -- | The store predates the asset index (or lost completeness).
+      AssetIndexAbsent
+    | -- | The store reflects no applied block with block-hash
+      -- metadata (empty, or restoration-only).
+      NoIndexedPoint
+    | -- | An asset row references a 'TxIn' with missing live data.
+      AssetIndexInconsistent !TxIn
+    deriving stock (Eq, Show)
+
 type IndexerTx cf op =
     Engine.EngineTx IO cf Cols op
 
@@ -245,6 +312,7 @@ filterBlockOps (IndexAddressSet s) = filter (inInterestSet s)
   where
     inInterestSet set op = case op of
         UtxoCreate _ addr _ -> addr `Set.member` set
+        UtxoRestore _ addr _ _ _ -> addr `Set.member` set
         UtxoSpend _ -> True
 
 {- | Opaque chain-follower phase state for the UTxO
@@ -268,6 +336,7 @@ data IndexerFollowerState where
         , ifsInterestSet :: !InterestSet
         , ifsWaiters :: !Waiters
         , ifsObserved :: !Observed
+        , ifsAssetColumns :: !AssetColumns
         } ->
         IndexerFollowerState
 
@@ -366,6 +435,13 @@ data IndexerHandle = IndexerHandle
     -- rows carry one inverse-operation batch and block hash
     -- metadata. Primarily intended for diagnostics and
     -- focused tests.
+    , assetUtxos ::
+        PolicyId ->
+        AssetName ->
+        IO (Either AssetQueryUnavailable AssetSnapshot)
+    -- ^ Read every live holder of the asset with the stored output
+    -- bytes, quantity and true creation point, plus the indexed
+    -- point — all from one storage transaction.
     }
 
 {- | Open an in-memory indexer, run the action with the
@@ -395,7 +471,7 @@ withInMemoryIndexerRunner ::
 withInMemoryIndexerRunner action = do
     db <- mkInMemoryDatabase (mkColumns [0 :: Int ..] indexerCodecs)
     runner <- newRunTransaction db
-    bootHandle runner $ \handle ->
+    bootHandle runner AssetColumnsOn $ \handle ->
         action handle runner
 
 {- | Open a RocksDB-backed indexer at @path@ (creating
@@ -434,38 +510,194 @@ withRocksDBIndexerRunner ::
     (forall cf op. IndexerHandle -> RunTransaction IO cf Cols op -> IO a) ->
     IO a
 withRocksDBIndexerRunner path action =
-    withDBCF
-        path
-        def{createIfMissing = True}
-        [ ("utxo-indexer.txin", def)
-        , ("utxo-indexer.address", def)
-        , ("utxo-indexer.observation", def)
-        , ("utxo-indexer.rollback", def)
+    openIndexerStore path $ \rdb assetColumns -> do
+        let base =
+                mkRocksDBDatabase
+                    rdb
+                    (mkColumns (columnFamilies rdb) (columnsFor assetColumns))
+        case assetColumns of
+            AssetColumnsOn -> do
+                runner <- newRunTransaction base
+                bootHandle runner assetColumns $ \handle ->
+                    action handle runner
+            AssetColumnsOff -> do
+                runner <- newRunTransaction (degradedDatabase base)
+                bootHandle runner assetColumns $ \handle ->
+                    action handle runner
+
+{- | Which typed columns a store opened with: everything, or only
+the four pre-change families (a pre-change directory whose full
+open failed on the missing asset/meta families).
+-}
+data AssetColumns = AssetColumnsOn | AssetColumnsOff
+    deriving stock (Eq)
+
+-- | The column codecs that exist for a store shape.
+columnsFor :: AssetColumns -> DMap Cols Codecs
+columnsFor AssetColumnsOn = indexerCodecs
+columnsFor AssetColumnsOff =
+    fromList
+        [ TxInCol :=> txInColCodecs
+        , AddressIndex :=> addressIndexCodecs
+        , ObservationCol :=> observationColCodecs
+        , RollbackCol :=> rollbackCodecs
         ]
-        $ \rdb -> do
-            let database =
-                    mkRocksDBDatabase
-                        rdb
-                        (mkColumns (columnFamilies rdb) indexerCodecs)
-            runner <- newRunTransaction database
-            bootHandle runner $ \handle ->
-                action handle runner
+
+fullFamilies :: [(String, Config)]
+fullFamilies =
+    [ ("utxo-indexer.txin", def)
+    , ("utxo-indexer.address", def)
+    , ("utxo-indexer.observation", def)
+    , ("utxo-indexer.rollback", def)
+    , ("utxo-indexer.asset", def)
+    , ("utxo-indexer.meta", def)
+    ]
+
+baseFamilies :: [(String, Config)]
+baseFamilies = take 4 fullFamilies
+
+{- | Open a RocksDB store with the full column-family list, falling
+back to the four pre-change families only when the full open fails
+with RocksDB's "Column family not found" — a directory written by a
+pre-change binary. Any other open failure propagates unchanged, and
+if the fallback open also fails, the original error is the one that
+escapes. A degraded store has no asset or metadata columns: asset
+and marker maintenance is skipped and the asset read answers
+'AssetIndexAbsent'; every other path behaves exactly as on base,
+including the provenance-carrying inverses.
+-}
+openIndexerStore ::
+    FilePath ->
+    (DB -> AssetColumns -> IO a) ->
+    IO a
+openIndexerStore path action = do
+    openedFull <- newIORef False
+    full <-
+        try @IOException $
+            withDBCF path def{createIfMissing = True} fullFamilies $ \rdb -> do
+                writeIORef openedFull True
+                action rdb AssetColumnsOn
+    case full of
+        Right a -> pure a
+        Left original -> do
+            fullOpened <- readIORef openedFull
+            if fullOpened || not (isColumnFamilyNotFound original)
+                then throwIO original
+                else do
+                    openedBase <- newIORef False
+                    degraded <-
+                        try @IOException $
+                            withDBCF path def{createIfMissing = True} baseFamilies $ \rdb -> do
+                                writeIORef openedBase True
+                                action rdb AssetColumnsOff
+                    case degraded of
+                        Right a -> pure a
+                        Left fallbackErr -> do
+                            baseOpened <- readIORef openedBase
+                            if baseOpened
+                                then throwIO fallbackErr
+                                else throwIO original
+
+-- | Whether an open failure is RocksDB's missing-family error.
+isColumnFamilyNotFound :: IOException -> Bool
+isColumnFamilyNotFound e =
+    "Column family not found" `isInfixOf` show e
+
+{- | A degraded store's column families: the four pre-change real
+families, plus an inert family standing in for the asset and
+metadata columns. Every operation on the inert family is a total
+no-op — reads see nothing, writes and iterations vanish — so any
+code path that touches those columns on a degraded store is
+harmless by construction, whatever built its handlers.
+-}
+data StoreCF = StoreCF !ColumnFamily | InertCF
+
+-- | Operations of a degraded store: real RocksDB ops plus no-ops.
+data StoreOp = StoreOp !BatchOp | InertOp
+
+{- | Wrap a real database so the asset and metadata columns exist in
+the typed surface but resolve to the inert family.
+-}
+degradedDatabase ::
+    Database IO ColumnFamily Cols BatchOp ->
+    Database IO StoreCF Cols StoreOp
+degradedDatabase real =
+    Database
+        { valueAt = \cf k -> case cf of
+            StoreCF f -> valueAt real f k
+            InertCF -> pure Nothing
+        , applyOps = \ops ->
+            applyOps real [o | StoreOp o <- ops]
+        , mkOperation = \cf k mv -> case cf of
+            StoreCF f -> StoreOp (mkOperation real f k mv)
+            InertCF -> InertOp
+        , newIterator = \case
+            StoreCF f -> newIterator real f
+            InertCF -> pure inertIterator
+        , columns =
+            DMap.insert MetaCol (Column InertCF metaCodecs) $
+                DMap.insert AssetIndex (Column InertCF assetIndexCodecs) $
+                    DMap.map
+                        (\c -> c{family = StoreCF (family c)})
+                        (columns real)
+        , withSnapshot = \f ->
+            withSnapshot real (f . degradedDatabase)
+        }
+
+-- | An iterator over the inert family: always exhausted.
+inertIterator :: QueryIterator IO
+inertIterator =
+    QueryIterator
+        { step = \_ -> pure ()
+        , isValid = pure False
+        , entry = pure Nothing
+        }
 
 {- | Final stage shared by both constructors: derive the
-initial rollback-log counter from the database, set up
+initial rollback-log counter from the database, seed the
+completeness marker when the store is opened empty, set up
 the await-state TVars, and hand the constructed handle
-to the caller's action.
+to the caller's action. The marker is written only for a
+store whose transaction and rollback columns are both
+empty — a pre-change store never gains it.
 -}
 bootHandle ::
     RunTransaction IO cf Cols op ->
+    AssetColumns ->
     (IndexerHandle -> IO a) ->
     IO a
-bootHandle runner@RunTransaction{runTransaction} action = do
-    initialCount <- runTransaction countRollbackEntries
+bootHandle runner@RunTransaction{runTransaction} assetColumns action = do
+    initialCount <- runTransaction seedOrCount
     waitersVar <- newTVarIO Map.empty
     observedVar <- newTVarIO Map.empty
     countVar <- newTVarIO initialCount
-    action (mkHandle runner waitersVar observedVar countVar)
+    action (mkHandle runner assetColumns waitersVar observedVar countVar)
+  where
+    seedOrCount = do
+        count <- countRollbackEntries
+        emptyTxIn <- isEmptyColumn TxInCol
+        when
+            (assetColumns == AssetColumnsOn && emptyTxIn && count == 0)
+            $ insert MetaCol assetIndexCompleteKey assetIndexCompleteValue
+        pure count
+
+{- | The metadata key marking a store whose asset index is complete
+since the store was created. Written only at open of an empty store;
+deleted in the same transaction as any apply or spend whose output
+bytes fail asset extraction.
+-}
+assetIndexCompleteKey :: BS.ByteString
+assetIndexCompleteKey = "asset-index"
+
+-- | The marker's v1 value.
+assetIndexCompleteValue :: BS.ByteString
+assetIndexCompleteValue = BS.singleton 1
+
+-- | Whether a column holds no entries.
+isEmptyColumn ::
+    Cols (KV k v) -> Transaction IO cf Cols op Bool
+isEmptyColumn col =
+    iterating col (isNothing <$> firstEntry)
 
 -- | Shared codec definitions for the indexer columns.
 indexerCodecs :: DMap Cols Codecs
@@ -475,6 +707,8 @@ indexerCodecs =
         , AddressIndex :=> addressIndexCodecs
         , ObservationCol :=> observationColCodecs
         , RollbackCol :=> rollbackCodecs
+        , AssetIndex :=> assetIndexCodecs
+        , MetaCol :=> metaCodecs
         ]
 
 {- | One-shot scan of 'RollbackCol' returning the entry
@@ -506,18 +740,20 @@ type Observed = TVar (Map TxIn AwaitObservation)
 mkHandle ::
     forall cf op.
     RunTransaction IO cf Cols op ->
+    AssetColumns ->
     Waiters ->
     Observed ->
     TVar Int ->
     IndexerHandle
 mkHandle
     RunTransaction{runTransaction}
+    assetColumns
     waitersVar
     observedVar
     countVar =
         IndexerHandle
             { applyAtSlot = \slot bh ops -> do
-                outcome <- runTransaction (applyAndLog slot bh ops)
+                outcome <- runTransaction (applyAndLog assetColumns slot bh ops)
                 case outcome of
                     Engine.ApplyLogApplied ->
                         atomically $ do
@@ -541,7 +777,7 @@ mkHandle
                     runTransaction $
                         Engine.rollbackLogAfter
                             RollbackCol
-                            applyRollbackEntry
+                            (applyRollbackEntry assetColumns)
                             slot
                 atomically $ do
                     modifyTVar' countVar (subtract deleted)
@@ -549,6 +785,7 @@ mkHandle
             , newFollowerState =
                 newIndexerFollowerState
                     runTransaction
+                    assetColumns
                     waitersVar
                     observedVar
                     countVar
@@ -587,6 +824,11 @@ mkHandle
             , getRollbackHistory =
                 runTransaction
                     (Rollbacks.queryHistory RollbackCol)
+            , assetUtxos = \policy name ->
+                case assetColumns of
+                    AssetColumnsOff -> pure (Left AssetIndexAbsent)
+                    AssetColumnsOn ->
+                        runTransaction (readAssetSnapshot policy name)
             }
 
 {- | Retarget an opaque follower state to a handler list.
@@ -617,6 +859,7 @@ withFollowerHandlers
         { ifsEngine = engine
         , ifsWaiters = waitersVar
         , ifsObserved = observedVar
+        , ifsAssetColumns = assetColumns
         } =
         IndexerFollowerState
             { ifsEngine =
@@ -626,6 +869,7 @@ withFollowerHandlers
             , ifsInterestSet = interestSet
             , ifsWaiters = waitersVar
             , ifsObserved = observedVar
+            , ifsAssetColumns = assetColumns
             }
 
 {- | Retarget an opaque follower state to a handler interest set.
@@ -638,8 +882,11 @@ withFollowerInterest ::
     InterestSet ->
     IndexerFollowerState ->
     IndexerFollowerState
-withFollowerInterest interestSet =
-    withFollowerHandlers interestSet (liveUtxoHandler interestSet :| [])
+withFollowerInterest interestSet st@IndexerFollowerState{ifsAssetColumns} =
+    withFollowerHandlers
+        interestSet
+        (liveUtxoHandlerMode ifsAssetColumns interestSet :| [])
+        st
 
 remapEngineHandlers ::
     NonEmpty (IndexerHandler Cols [UtxoOp]) ->
@@ -680,6 +927,7 @@ remapPhaseHandlers handlers = \case
 
 newIndexerFollowerState ::
     (forall a. IndexerTx cf op a -> IO a) ->
+    AssetColumns ->
     Waiters ->
     Observed ->
     TVar Int ->
@@ -688,6 +936,7 @@ newIndexerFollowerState ::
     IO IndexerFollowerState
 newIndexerFollowerState
     runTransaction
+    assetColumns
     waitersVar
     observedVar
     countVar
@@ -697,7 +946,7 @@ newIndexerFollowerState
         count <- readTVarIO countVar
         let hasFollowingRows =
                 any (isJust . rpMeta . snd) history
-            handlers = liveUtxoHandler interestSet :| []
+            handlers = liveUtxoHandlerMode assetColumns interestSet :| []
             restoring = Handler.composeHandlerRestoring handlers
             phase
                 | startRestoring && not hasFollowingRows =
@@ -718,6 +967,7 @@ newIndexerFollowerState
                 , ifsInterestSet = interestSet
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
+                , ifsAssetColumns = assetColumns
                 }
 
 processIndexerFollowerBlock ::
@@ -734,6 +984,7 @@ processIndexerFollowerBlock
         , ifsInterestSet = interestSet
         , ifsWaiters = waitersVar
         , ifsObserved = observedVar
+        , ifsAssetColumns = _assetColumns
         }
     securityParam
     withinStabilityWindow
@@ -768,6 +1019,7 @@ processIndexerFollowerBlock
                 , ifsInterestSet = interestSet
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
+                , ifsAssetColumns = _assetColumns
                 }
             , True
             )
@@ -782,12 +1034,13 @@ rollbackIndexerFollowerState
         , ifsInterestSet = interestSet
         , ifsWaiters = waitersVar
         , ifsObserved = observedVar
+        , ifsAssetColumns = assetColumns
         }
     slot = do
         (engine', _deleted) <-
             Engine.rollbackEngineState
                 RollbackCol
-                applyRollbackEntry
+                (applyRollbackEntry assetColumns)
                 slot
                 engine
         atomically $
@@ -798,15 +1051,17 @@ rollbackIndexerFollowerState
                 , ifsInterestSet = interestSet
                 , ifsWaiters = waitersVar
                 , ifsObserved = observedVar
+                , ifsAssetColumns = assetColumns
                 }
 
 applyOpsOnly ::
+    AssetColumns ->
     SlotNo ->
     BlockHash ->
     [UtxoOp] ->
     Transaction IO cf Cols op ()
-applyOpsOnly slot bh =
-    traverse_ (applyOne slot bh)
+applyOpsOnly assetColumns slot bh =
+    traverse_ (applyOne assetColumns slot bh)
 
 {- | Live UTxO storage handler for the generic block-indexer engine.
 
@@ -814,28 +1069,37 @@ The handler owns UTxO-specific mutation: interest-set filtering,
 inverse creation, applying creates/spends, and applying stored
 rollback inverses. The generic block-indexer engine owns only the
 rollback-log transaction boundary and phase bookkeeping.
+
+'liveUtxoHandler' keeps its historical signature and maintains the
+full column set; internally-constructed handlers carry the store's
+shape so a degraded (pre-change, four-family) store skips asset and
+marker maintenance.
 -}
 liveUtxoHandler :: InterestSet -> IndexerHandler Cols [UtxoOp]
-liveUtxoHandler interestSet =
+liveUtxoHandler = liveUtxoHandlerMode AssetColumnsOn
+
+-- | 'liveUtxoHandler' for a specific store shape.
+liveUtxoHandlerMode ::
+    AssetColumns -> InterestSet -> IndexerHandler Cols [UtxoOp]
+liveUtxoHandlerMode assetColumns interestSet =
     IndexerHandler
         { handlerRestore = \context ops -> do
             let (slot, bh) = utxoContextSlotHash context
-            applyOpsOnly slot bh (filterBlockOps interestSet ops)
+            applyOpsOnly assetColumns slot bh (filterBlockOps interestSet ops)
         , handlerFollow = \context ops -> do
             let (slot, bh) = utxoContextSlotHash context
+                followOne op = do
+                    inv <- inverseOf op
+                    applyOpsOnly assetColumns slot bh [op]
+                    pure inv
             reverse
                 <$> traverse
-                    (followOne slot bh)
+                    followOne
                     (filterBlockOps interestSet ops)
         , handlerRollback = \context ops -> do
             let (slot, bh) = utxoContextSlotHash context
-            applyOpsOnly slot bh ops
+            applyOpsOnly assetColumns slot bh ops
         }
-  where
-    followOne slot bh op = do
-        inv <- inverseOf op
-        applyOpsOnly slot bh [op]
-        pure inv
 
 utxoContextSlotHash ::
     (Typeable slot, Typeable meta) =>
@@ -889,11 +1153,12 @@ writes (read-your-writes), so once an op is applied,
 its inverse cannot be recovered from a later @query@.
 -}
 applyAndLog ::
+    AssetColumns ->
     SlotNo ->
     BlockHash ->
     [UtxoOp] ->
     Transaction IO cf Cols op (Engine.ApplyLogResult BlockHash)
-applyAndLog slot bh ops =
+applyAndLog assetColumns slot bh ops =
     Engine.applyWithRollbackLog
         RollbackCol
         slot
@@ -902,7 +1167,7 @@ applyAndLog slot bh ops =
   where
     applyFresh =
         Handler.followHandlers
-            (liveUtxoHandler IndexAll :| [])
+            (liveUtxoHandlerMode assetColumns IndexAll :| [])
             HandlerContext
                 { hcSlot = slot
                 , hcMeta = Just bh
@@ -930,11 +1195,17 @@ fireWaiters ::
     STM ()
 fireWaiters waitersVar observedVar slot bh = traverse_ go
   where
-    go (UtxoCreate txIn _addr txOut) = do
+    go (UtxoCreate txIn _addr txOut) =
+        observe txIn slot bh txOut
+    go (UtxoRestore txIn _addr txOut obsSlot obsBh) =
+        observe txIn obsSlot obsBh txOut
+    go (UtxoSpend txIn) =
+        modifyTVar' observedVar (Map.delete txIn)
+    observe txIn obsSlot obsBh txOut = do
         let obs =
                 AwaitObservation
-                    { aoSlot = slot
-                    , aoBlockHash = bh
+                    { aoSlot = obsSlot
+                    , aoBlockHash = obsBh
                     , aoTxOut = txOut
                     }
         modifyTVar' observedVar (Map.insert txIn obs)
@@ -944,8 +1215,6 @@ fireWaiters waitersVar observedVar slot bh = traverse_ go
             Just ws -> do
                 writeTVar waitersVar (Map.delete txIn waiters)
                 traverse_ (`putTMVar` obs) ws
-    go (UtxoSpend txIn) =
-        modifyTVar' observedVar (Map.delete txIn)
 
 {- | After a rollback, drop observations whose slot is
 @> target@. Observations at-or-below the target stay
@@ -1048,28 +1317,39 @@ is still correct, which is what consumers actually care
 about.
 -}
 applyRollbackEntry ::
+    AssetColumns ->
     SlotNo ->
     Maybe BlockHash ->
     [[UtxoOp]] ->
     Transaction IO cf Cols op ()
-applyRollbackEntry slot (Just bh) invBatches =
+applyRollbackEntry assetColumns slot (Just bh) invBatches =
     traverse_
         ( Handler.rollbackHandlers
-            (liveUtxoHandler IndexAll :| [])
+            (liveUtxoHandlerMode assetColumns IndexAll :| [])
             HandlerContext
                 { hcSlot = slot
                 , hcMeta = Just bh
                 }
         )
         invBatches
-applyRollbackEntry _slot Nothing [] =
+applyRollbackEntry _assetColumns _slot Nothing [] =
     pure ()
-applyRollbackEntry _slot Nothing (_ : _) =
+applyRollbackEntry _assetColumns _slot Nothing (_ : _) =
     error
         "applyRollbackEntry: sentinel RollbackPoint carries \
         \inverse operations — schema drift"
 
--- | Inverse of a single op against current state.
+{- | Inverse of a single op against current state.
+
+The inverse of a spend (or of a re-create over a live 'TxIn') is a
+'UtxoRestore' carrying the output's original creation point, read
+from 'ObservationCol' in the same transaction before the op is
+applied — so a rollback re-creates the output with its original
+provenance instead of the rollback slot. When no observation is
+recorded (a state the live-data invariant excludes) the inverse
+falls back to the pre-change 'UtxoCreate' shape, which applies with
+the applying block's point.
+-}
 inverseOf ::
     UtxoOp ->
     Transaction IO cf Cols op UtxoOp
@@ -1081,37 +1361,125 @@ inverseOf op = do
         Just addr -> do
             mTxOut <- query AddressIndex (AddrKey addr txIn)
             case mTxOut of
-                Just txOut -> pure (UtxoCreate txIn addr txOut)
+                Just txOut -> do
+                    mObs <- query ObservationCol txIn
+                    case mObs of
+                        Just (createdSlot, createdBh) ->
+                            pure
+                                ( UtxoRestore
+                                    txIn
+                                    addr
+                                    txOut
+                                    createdSlot
+                                    createdBh
+                                )
+                        Nothing -> pure (UtxoCreate txIn addr txOut)
                 Nothing -> pure (UtxoSpend txIn)
 
 opTxIn :: UtxoOp -> TxIn
 opTxIn (UtxoCreate t _ _) = t
 opTxIn (UtxoSpend t) = t
+opTxIn (UtxoRestore t _ _ _ _) = t
 
 {- | Apply one op against the column state. The
 @(slot, bh)@ pair is recorded into 'ObservationCol' on
 'UtxoCreate' so 'awaitTxIn' can answer the
 "already observed?" fast-path question across process
 restart; on 'UtxoSpend' the corresponding observation is
-removed.
+removed. 'UtxoRestore' re-creates a spent output recording
+its original creation point instead of the applying block's.
 -}
 applyOne ::
+    AssetColumns ->
     SlotNo ->
     BlockHash ->
     UtxoOp ->
     Transaction IO cf Cols op ()
-applyOne slot bh (UtxoCreate txIn addr txOut) = do
+applyOne assetColumns slot bh = \case
+    UtxoCreate txIn addr txOut ->
+        createTxIn assetColumns slot bh txIn addr txOut
+    UtxoRestore txIn addr txOut createdSlot createdBh ->
+        createTxIn assetColumns createdSlot createdBh txIn addr txOut
+    UtxoSpend txIn -> do
+        mAddr <- query TxInCol txIn
+        case mAddr of
+            Nothing -> pure ()
+            Just addr -> do
+                mTxOut <- query AddressIndex (AddrKey addr txIn)
+                delete AddressIndex (AddrKey addr txIn)
+                delete TxInCol txIn
+                delete ObservationCol txIn
+                maintainAssetsOnSpend assetColumns txIn mTxOut
+
+createTxIn ::
+    AssetColumns ->
+    SlotNo ->
+    BlockHash ->
+    TxIn ->
+    Address ->
+    TxOut ->
+    Transaction IO cf Cols op ()
+createTxIn assetColumns slot bh txIn addr txOut = do
+    -- A create over an already-live TxIn (or a restore of its
+    -- pre-image) replaces the stored output: reconcile the previous
+    -- output's asset rows away inside the same transaction, so the
+    -- rows always mirror the bytes that are actually live.
+    mOldAddr <- query TxInCol txIn
+    case mOldAddr of
+        Just oldAddr -> do
+            mOldOut <- query AddressIndex (AddrKey oldAddr txIn)
+            maintainAssetsOnSpend assetColumns txIn mOldOut
+        Nothing -> pure ()
     insert TxInCol txIn addr
     insert AddressIndex (AddrKey addr txIn) txOut
     insert ObservationCol txIn (slot, bh)
-applyOne _slot _bh (UtxoSpend txIn) = do
-    mAddr <- query TxInCol txIn
-    case mAddr of
+    maintainAssetsOnCreate assetColumns txIn txOut
+
+{- | Asset maintenance on create: write exactly the asset rows the
+stored output's bytes carry. An undecodable output deletes the
+completeness marker. Skipped entirely on a degraded store, whose
+columns do not exist.
+-}
+maintainAssetsOnCreate ::
+    AssetColumns ->
+    TxIn ->
+    TxOut ->
+    Transaction IO cf Cols op ()
+maintainAssetsOnCreate AssetColumnsOff _ _ = pure ()
+maintainAssetsOnCreate AssetColumnsOn txIn txOut =
+    case decodeTxOutView txOut of
+        Left _err -> markAssetIndexIncomplete
+        Right view ->
+            traverse_
+                (\(policy, name, qty) -> insert AssetIndex (AssetKey policy name txIn) qty)
+                (tovAssets view)
+
+{- | Asset maintenance on spend: re-extract the asset rows from the
+stored output being removed and delete exactly those. The stored
+bytes are read before the deletion in the same transaction.
+-}
+maintainAssetsOnSpend ::
+    AssetColumns ->
+    TxIn ->
+    Maybe TxOut ->
+    Transaction IO cf Cols op ()
+maintainAssetsOnSpend AssetColumnsOff _ _ = pure ()
+maintainAssetsOnSpend AssetColumnsOn txIn mTxOut =
+    case decodeTxOutView <$> mTxOut of
+        Just (Right view) ->
+            traverse_
+                (\(policy, name, _qty) -> delete AssetIndex (AssetKey policy name txIn))
+                (tovAssets view)
+        Just (Left _err) -> markAssetIndexIncomplete
         Nothing -> pure ()
-        Just addr -> do
-            delete AddressIndex (AddrKey addr txIn)
-            delete TxInCol txIn
-            delete ObservationCol txIn
+
+{- | Delete the completeness marker in the current transaction: the
+asset index is no longer known complete, so reads must answer
+unavailability instead of a partial list.
+-}
+markAssetIndexIncomplete :: Transaction IO cf Cols op ()
+markAssetIndexIncomplete =
+    delete MetaCol assetIndexCompleteKey
 
 {- | Cursor program: seek to the synthetic minimum key
 under @addr@ and walk forward, collecting every entry
@@ -1133,6 +1501,95 @@ scanAddress addr =
         | addrKeyAddress k == addr =
             nextEntry >>= go ((addrKeyTxIn k, v) : acc)
         | otherwise = pure (reverse acc)
+
+{- | Cursor program: seek to the synthetic minimum key under one
+asset and walk forward, collecting the holding 'TxIn's with their
+quantities in ascending 'TxIn' order. The composite key layout
+keeps one asset's rows contiguous, so the walk stops at the first
+key of another asset.
+-}
+scanAsset ::
+    (Monad m) =>
+    PolicyId ->
+    AssetName ->
+    Cursor m (KV AssetKey Word64) [(TxIn, Word64)]
+scanAsset policy name =
+    let seekTo =
+            AssetKey
+                policy
+                name
+                (TxIn (BS.replicate 32 0) 0)
+     in seekKey seekTo >>= go []
+  where
+    go acc Nothing = pure (reverse acc)
+    go acc (Just Entry{entryKey = k, entryValue = q})
+        | assetKeyPolicy k == policy && assetKeyName k == name =
+            nextEntry >>= go ((assetKeyTxIn k, q) : acc)
+        | otherwise = pure (reverse acc)
+
+{- | The indexed point: the newest rollback-log row carrying
+block-hash metadata, read backwards from the tip. A store with no
+following row (empty, or restoration-only) has no point.
+-}
+indexedPoint ::
+    Transaction IO cf Cols op (Maybe (SlotNo, BlockHash))
+indexedPoint =
+    iterating RollbackCol (lastEntry >>= loop)
+  where
+    loop Nothing = pure Nothing
+    loop (Just Entry{entryKey = slot, entryValue = rp}) =
+        case rpMeta rp of
+            Just bh -> pure (Just (slot, bh))
+            Nothing -> prevEntry >>= loop
+
+{- | The typed asset read, all in one transaction: the indexed
+point, the asset rows for the queried asset, and the join back to
+the live columns for the stored bytes and creation point. A row
+whose 'TxIn' lacks live data makes the whole read inconsistent.
+-}
+readAssetSnapshot ::
+    PolicyId ->
+    AssetName ->
+    Transaction IO cf Cols op (Either AssetQueryUnavailable AssetSnapshot)
+readAssetSnapshot policy name = do
+    mMarker <- query MetaCol assetIndexCompleteKey
+    case mMarker of
+        Just v | v == assetIndexCompleteValue -> readComplete
+        _ -> pure (Left AssetIndexAbsent)
+  where
+    readComplete = do
+        mPoint <- indexedPoint
+        case mPoint of
+            Nothing -> pure (Left NoIndexedPoint)
+            Just point -> do
+                rows <- iterating AssetIndex (scanAsset policy name)
+                result <- traverse matchOf rows
+                pure (fmap (AssetSnapshot point) (sequenceA result))
+
+    matchOf (txIn, qty) = do
+        mAddr <- query TxInCol txIn
+        case mAddr of
+            Nothing -> pure (Left (AssetIndexInconsistent txIn))
+            Just addr -> do
+                mOut <- query AddressIndex (AddrKey addr txIn)
+                case mOut of
+                    Nothing -> pure (Left (AssetIndexInconsistent txIn))
+                    Just txOut -> do
+                        mObs <- query ObservationCol txIn
+                        case mObs of
+                            Nothing -> pure (Left (AssetIndexInconsistent txIn))
+                            Just (slot, bh) ->
+                                pure
+                                    ( Right
+                                        ( AssetMatch
+                                            { amTxIn = txIn
+                                            , amTxOut = txOut
+                                            , amQuantity = qty
+                                            , amCreatedSlot = slot
+                                            , amCreatedBlockHash = bh
+                                            }
+                                        )
+                                    )
 
 {- | Stream a mutable list reference one element at a
 time, returning 'Nothing' when exhausted. Used to feed
