@@ -14,12 +14,14 @@ Docs and diagnostics only. No behaviour change.
 
 ## Requirements
 
-- **R1** — The Haddock on `csStartPoint` states the cold-only rule:
-  the point is used only when `getResumePoints` is empty; on a warm
-  boot resume candidates come exclusively from the store and the
-  configured point is ignored.
+- **R1** — The Haddock on `csStartPoint` states when it is consulted:
+  only when the follower has no usable stored resume point — (i) the
+  UTxO store holds no rollback-log row (cold boot), or (ii) a history
+  attachment is configured and the shared resume point is absent (the
+  history store has no cursor). In every other case resume candidates
+  come from the stores and the configured point is ignored.
 - **R2** — The Haddock on `coldBootResumePoints` states the same rule
-  from its side: it is consulted only for a cold boot.
+  from its side: it is consulted only in cases (i) and (ii) of R1.
 - **R3** — The `WarmBoot` `intersectNotFound` error names both routes:
   - (a) the saved chain diverged from the node beyond the security
     parameter `k`;
@@ -27,11 +29,14 @@ Docs and diagnostics only. No behaviour change.
     inside the volatile window (the intersection point itself is never
     applied, so never stored as a rollback-log row) and the chain
     rolled back past its start point before it retained `k` blocks.
-- **R4** — The same error gives the recovery for each route:
+- **R4** — The same error gives the recovery for each route, true on
+  every boot path:
   - (a) wipe the DB and rebuild, or restart against a node whose chain
     still includes one of the saved points;
-  - (b) wipe the store (nearly empty by construction) and cold-start
-    again, from a start point outside the volatile window.
+  - (b) wipe the indexer DB and start again; a wiped store cold-boots
+    from the configured start point, so choose one older than the
+    rollback depth (or start from Origin).
+  The error makes no other claim about `csStartPoint`.
 - **R5** — The `BootMode` Haddock, which today names only the
   `k`-divergence reason for failing closed, is consistent with R3.
 - **R6** — The user docs (`docs/usage/utxo-indexer.md`) state the

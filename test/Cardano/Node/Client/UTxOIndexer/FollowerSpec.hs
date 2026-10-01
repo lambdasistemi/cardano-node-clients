@@ -28,6 +28,10 @@ import Cardano.Node.Client.N2C.Reconnect (
     defaultReconnectPolicy,
  )
 import Cardano.Node.Client.N2C.Trace (nullN2CTracer)
+import Cardano.Node.Client.TxHistoryIndexer.Indexer (
+    HistoryIndexer,
+    withInMemoryHistoryIndexer,
+ )
 import Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
     FollowerHandle (..),
@@ -36,6 +40,7 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     applyBlockOps,
     coldBootResumePoints,
     filterBlockOps,
+    historyAttachment,
     withChainSyncFollower,
     withChainSyncFollowerUsing,
  )
@@ -55,6 +60,7 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     TxIn (..),
     TxOut (..),
  )
+import ChainFollower (Intersector (..))
 import ChainFollower.Rollbacks.Types (RollbackPoint (..))
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (
@@ -65,10 +71,12 @@ import Control.Concurrent.STM (
     readTVar,
     writeTVar,
  )
-import Control.Exception (try)
+import Control.Exception (ErrorCall (..), try)
 import Control.Tracer (Tracer (..), nullTracer, traceWith)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
+import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.List (isInfixOf, isPrefixOf, tails)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Set qualified as Set
 import Ouroboros.Consensus.Block.EBB (
@@ -81,7 +89,13 @@ import Ouroboros.Network.Block qualified as Network
 import Ouroboros.Network.Magic (NetworkMagic (..))
 import Ouroboros.Network.Point qualified as Network.Point
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
+import Test.Hspec (
+    Spec,
+    describe,
+    it,
+    shouldBe,
+    shouldReturn,
+ )
 
 spec :: Spec
 spec =
@@ -237,6 +251,59 @@ spec =
                                             pure tips
                                     observedTips
                                         `shouldBe` [Network.SlotNo 123]
+
+        describe "warm-boot no-intersection" $ do
+            it
+                "offers the stored points and ignores\
+                \ csStartPoint on a warm boot"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    warmUp idx
+                    (offered, _) <-
+                        probeNoIntersection configuredPointCfg idx
+                    offered `shouldBe` [toHeaderPoint (SlotNo 10) blk1]
+
+            it
+                "retries with the configured start point on a\
+                \ cold boot"
+                $ withInMemoryIndexer
+                $ \idx -> do
+                    (offered, outcome) <-
+                        probeNoIntersection configuredPointCfg idx
+                    offered `shouldBe` [configuredPoint]
+                    outcome `shouldBe` Right [configuredPoint]
+
+            it
+                "offers the configured start point instead of the\
+                \ stored points when the history store has no cursor"
+                $ withInMemoryIndexer
+                $ \idx ->
+                    withInMemoryHistoryIndexer $ \histIdx -> do
+                        warmUp idx
+                        (offered, _) <-
+                            probeNoIntersection
+                                (cursorlessHistoryCfg histIdx)
+                                idx
+                        offered `shouldBe` [configuredPoint]
+
+            it
+                "fails closed naming divergence beyond k with its\
+                \ recovery, on every warm path"
+                $ onWarmPaths (missingFrom divergenceRoute)
+                    `shouldReturn` everyWarmPath []
+
+            it
+                "fails closed naming a store younger than the\
+                \ rollback depth with its recovery, on every warm\
+                \ path"
+                $ onWarmPaths (missingFrom youngStoreRoute)
+                    `shouldReturn` everyWarmPath []
+
+            it
+                "fails closed with exactly one start-point claim,\
+                \ the cold boot after a wipe, on every warm path"
+                $ onWarmPaths startPointClaims
+                    `shouldReturn` everyWarmPath ([], 1)
 
         describe "filterBlockOps (interest-set semantics)" $ do
             it
@@ -497,6 +564,129 @@ mkCfg sock =
         , csTipTracer = nullTracer
         , csHistory = Nothing
         }
+
+{- | Run the follower bring-up against an injected
+chain-sync runner whose node offers no intersection.
+Returns the resume points the follower offered and the
+outcome of its own 'intersectNotFound': the retry points
+on a cold boot, the raised 'ErrorCall' on a warm boot.
+-}
+probeNoIntersection ::
+    ChainSyncConfig ->
+    IndexerHandle ->
+    IO ([HeaderPoint], Either ErrorCall [HeaderPoint])
+probeNoIntersection cfg idx = do
+    observed <- newIORef Nothing
+    let runner _ _ _ _ _ intersector points = do
+            outcome <- try $ snd <$> intersectNotFound intersector
+            writeIORef observed (Just (points, outcome))
+            pure (Right ())
+    withChainSyncFollowerUsing runner nullN2CTracer cfg idx $
+        Async.wait . fhAsync
+    readIORef observed
+        >>= maybe (error "chain-sync runner was not invoked") pure
+
+{- | Every way a warm store reaches @intersectNotFound@:
+offering its stored points, and offering the configured
+start point because an attached history store has no
+cursor yet. Each path runs on fresh stores and yields
+@inspect@ of its fail-closed message, or a 'Left' naming
+the retry it took instead of failing closed.
+-}
+onWarmPaths ::
+    (String -> a) -> IO [(String, Either String a)]
+onWarmPaths inspect =
+    traverse
+        run
+        [ ("stored points offered", const configuredPointCfg)
+        , ("history store without a cursor", cursorlessHistoryCfg)
+        ]
+  where
+    run (path, mkCfgWith) =
+        withInMemoryIndexer $ \idx ->
+            withInMemoryHistoryIndexer $ \histIdx -> do
+                warmUp idx
+                (_, outcome) <-
+                    probeNoIntersection (mkCfgWith histIdx) idx
+                pure
+                    ( path
+                    , either
+                        (\(ErrorCall message) -> Right (inspect message))
+                        (\retry -> Left ("retried with " <> show retry))
+                        outcome
+                    )
+
+-- | The expected 'onWarmPaths' result: @a@ on every path.
+everyWarmPath :: a -> [(String, Either String a)]
+everyWarmPath a =
+    [ ("stored points offered", Right a)
+    , ("history store without a cursor", Right a)
+    ]
+
+-- | The phrases a message lacks.
+missingFrom :: [String] -> String -> [String]
+missingFrom phrases message =
+    filter (not . (`isInfixOf` message)) phrases
+
+-- | The phrases a message carries.
+presentIn :: [String] -> String -> [String]
+presentIn phrases message = filter (`isInfixOf` message) phrases
+
+-- | Route (a) and its recovery.
+divergenceRoute :: [String]
+divergenceRoute =
+    [ "diverged from the node beyond the security parameter k"
+    , "Wipe the indexer DB and rebuild"
+    , "restart against a node whose chain still includes one\
+      \ of the saved points"
+    ]
+
+-- | Route (b) and its recovery.
+youngStoreRoute :: [String]
+youngStoreRoute =
+    [ "younger than the rollback depth"
+    , "cold-started inside the volatile window"
+    , "rolled back past"
+    , "Wipe the indexer DB and start again"
+    , "A wiped store cold-boots from the configured start point"
+    , "older than the rollback depth (or start from Origin)"
+    ]
+
+{- | Mentions of the 'csStartPoint' field, and the number
+of start-point claims; the message may make one, that a
+wiped store cold-boots from the configured start point.
+-}
+startPointClaims :: String -> ([String], Int)
+startPointClaims message =
+    ( presentIn ["csStartPoint"] message
+    , length (filter ("start point" `isPrefixOf`) (tails message))
+    )
+
+-- | A warm configuration whose history store has no cursor.
+cursorlessHistoryCfg :: HistoryIndexer -> ChainSyncConfig
+cursorlessHistoryCfg histIdx =
+    configuredPointCfg
+        { csHistory =
+            Just $ historyAttachment (\_ _ -> Nothing) histIdx
+        }
+
+-- | Make the store warm: one applied block, one resume point.
+warmUp :: IndexerHandle -> IO ()
+warmUp idx = do
+    applyAtSlot idx (SlotNo 10) blk1 []
+    getResumePoints idx `shouldReturn` [(SlotNo 10, blk1)]
+
+configuredPointCfg :: ChainSyncConfig
+configuredPointCfg =
+    (mkCfg "unused.sock")
+        { csStartPoint = Just (SlotNo 5_000_000, configuredHash)
+        }
+
+configuredPoint :: HeaderPoint
+configuredPoint = toHeaderPoint (SlotNo 5_000_000) configuredHash
+
+configuredHash :: BlockHash
+configuredHash = BlockHash (BS.replicate 32 0x42)
 
 toHeaderPoint :: SlotNo -> BlockHash -> HeaderPoint
 toHeaderPoint (SlotNo slot) (BlockHash hashBytes) =
