@@ -10,6 +10,10 @@ module Cardano.Node.Client.E2E.Devnet (
     withCardanoNode,
     withRestartableCardanoNode,
 
+    -- * Restart with a hook while the node is down
+    RestartableNode (..),
+    withRestartableNode,
+
     -- * Genesis key
     genesisSignKey,
     genesisAddr,
@@ -78,13 +82,14 @@ import Control.Exception (
     onException,
     throwIO,
     try,
+    uninterruptibleMask_,
  )
-import Control.Monad (unless, void, (>=>))
+import Control.Monad (unless, void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
+import Data.Foldable (traverse_)
 import Data.IORef (
-    IORef,
     newIORef,
     readIORef,
     writeIORef,
@@ -162,12 +167,71 @@ cardano-node and spawns a new one against the same
 database, socket path, and genesis. Used by the issue-97
 reproducer to drive a relay-process restart against an
 indexer running in the same process.
+
+It is 'withRestartableNode' with a restart whose hook
+does nothing.
 -}
 withRestartableCardanoNode ::
     FilePath ->
     (FilePath -> Integer -> IO () -> IO a) ->
     IO a
-withRestartableCardanoNode srcGenesis action = do
+withRestartableCardanoNode srcGenesis action =
+    withRestartableNode srcGenesis $ \node ->
+        action
+            (nodeSocket node)
+            (nodeStartMs node)
+            (restartNodeWith node (pure ()))
+
+-- | A running devnet node, as handed out by 'withRestartableNode'.
+data RestartableNode = RestartableNode
+    { nodeSocket :: FilePath
+    -- ^ the node socket path, the same across restarts
+    , nodeStartMs :: Integer
+    -- ^ the system start time (POSIX ms) used in the genesis
+    , nodeRunDir :: FilePath
+    -- ^ the run directory, removed when the bracket exits
+    , nodeDbDir :: FilePath
+    -- ^ the @--database-path@ of every spawn of the node,
+    -- inside 'nodeRunDir'
+    , restartNodeWith :: IO () -> IO ()
+    -- ^ @restartNodeWith hook@ stops the node and waits for
+    --     its process to exit, removes the socket path, runs
+    --     @hook@, then spawns the node against the same run
+    --     directory, database, socket and genesis and waits until
+    --     it is ready.
+    --
+    --     While @hook@ runs no node process of the run exists and
+    --     nothing accepts connections on the socket path, so the
+    --     hook may change the database in 'nodeDbDir' (for
+    --     instance restore a snapshot taken in an earlier hooked
+    --     restart); the respawned node opens it as the hook left
+    --     it. Readiness (a non-origin tip) is awaited without a
+    --     time limit: an empty database never reaches it once the
+    --     devnet is more than a few seconds old, and a restored
+    --     one older than the forecast horizon (3 s on this devnet)
+    --     is ready at its tip but may be unable to forge.
+    --
+    --     If @hook@ throws, the exception propagates, no node is
+    --     spawned for that restart, and a later restart starts
+    --     the node again.
+    }
+
+{- | Run a @cardano-node@ subprocess like 'withCardanoNode',
+handing the callback a 'RestartableNode': the socket path,
+the start time, the run and database directories, and a
+restart that runs a hook while the node is down.
+
+The bracket owns every node process it spawns: on every
+exit path, including an exception thrown by a restart hook,
+the current node (if any) is terminated and waited for,
+then the run directory is removed. On a callback exception
+the tail of the node log is printed first.
+-}
+withRestartableNode ::
+    FilePath ->
+    (RestartableNode -> IO a) ->
+    IO a
+withRestartableNode srcGenesis action = do
     now <- getCurrentTime
     let startTime = addUTCTime startOffset now
         startMs =
@@ -186,51 +250,51 @@ withRestartableCardanoNode srcGenesis action = do
                 hSetBuffering logH LineBuffering
                 ph <- launchNode tmpDir logH `onException` hClose logH
                 pure (ph, logH)
-            cleanupNode (ph, logH) = do
-                terminateProcess ph
-                void (waitForProcess ph)
-                hClose logH
-        bracket
-            (spawnNode >>= newIORef)
-            (readIORef >=> cleanupNode)
-            $ \npRef -> do
+            -- The reference holds the node while one runs. A
+            -- spawned node is recorded before anything can
+            -- interrupt, and forgotten only once it has exited,
+            -- so the release always reaches it.
+            startNode npRef = do
+                uninterruptibleMask_ $
+                    spawnNode >>= writeIORef npRef . Just
                 waitForSocket sock 300
                 -- Block until cardano-node's LSQ server replies
-                -- with a non-Origin tip — i.e. ChainDB has finished
-                -- loading. Replaces the previous 1 s blind grace
-                -- with a real readiness check.
+                -- with a non-Origin tip — i.e. ChainDB has
+                -- finished loading.
                 waitForNodeReady
                     nullN2CTracer
                     defaultProbeConfig
                     devnetNetworkMagic
                     sock
-                let restart =
-                        restartNode npRef sock spawnNode cleanupNode
-                action sock startMs restart
-                    `onException` dumpNodeLog logPath
+            stopNode npRef =
+                readIORef npRef
+                    >>= traverse_
+                        ( \(ph, logH) -> do
+                            terminateProcess ph
+                            void (waitForProcess ph)
+                            hClose logH
+                            writeIORef npRef Nothing
+                        )
+        bracket (newIORef Nothing) stopNode $ \npRef -> do
+            startNode npRef
+            let node =
+                    RestartableNode
+                        { nodeSocket = sock
+                        , nodeStartMs = startMs
+                        , nodeRunDir = tmpDir
+                        , nodeDbDir = runDbDir tmpDir
+                        , restartNodeWith = \hook -> do
+                            stopNode npRef
+                            removePathForcibly sock
+                            hook
+                            startNode npRef
+                        }
+            action node
+                `onException` dumpNodeLog logPath
 
-restartNode ::
-    IORef (ProcessHandle, Handle) ->
-    FilePath ->
-    IO (ProcessHandle, Handle) ->
-    ((ProcessHandle, Handle) -> IO ()) ->
-    IO ()
-restartNode npRef sock spawnNode cleanupNode = do
-    oldNp <- readIORef npRef
-    cleanupNode oldNp
-    removePathForcibly sock `onException` pure ()
-    newNp <- spawnNode
-    writeIORef npRef newNp
-    waitForSocket sock 300
-    -- Block until ChainDB has finished loading and the LSQ
-    -- server is replying with a non-Origin tip. Replaces the
-    -- previous fixed sleep — the new node is ready when it
-    -- says it is.
-    waitForNodeReady
-        nullN2CTracer
-        defaultProbeConfig
-        devnetNetworkMagic
-        sock
+-- | The database directory of a run directory.
+runDbDir :: FilePath -> FilePath
+runDbDir tmpDir = tmpDir </> "db"
 
 {- | The devnet's network magic, hardcoded in the
 genesis files patched by 'prepareRunDir'. Used by the
@@ -265,7 +329,7 @@ patched genesis files and delegate keys.
 prepareRunDir ::
     FilePath -> UTCTime -> FilePath -> IO ()
 prepareRunDir srcGenesis startTime tmpDir = do
-    createDirectory (tmpDir </> "db")
+    createDirectory (runDbDir tmpDir)
     createDirectory (tmpDir </> "delegate-keys")
     -- Copy genesis files
     let cp name =
@@ -375,7 +439,7 @@ launchNode tmpDir logH = do
             , "--topology"
             , tmpDir </> "topology.json"
             , "--database-path"
-            , tmpDir </> "db"
+            , runDbDir tmpDir
             , "--socket-path"
             , tmpDir </> "node.sock"
             , "--shelley-kes-key"

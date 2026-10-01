@@ -12,6 +12,7 @@ import Cardano.Node.Client.E2E.Issue97ReproSpec qualified as Issue97ReproSpec
 import Cardano.Node.Client.E2E.N2CFullSpec qualified as N2CFullSpec
 import Cardano.Node.Client.E2E.PV11GovernanceSpec qualified as PV11GovernanceSpec
 import Cardano.Node.Client.E2E.ProviderSpec qualified as ProviderSpec
+import Cardano.Node.Client.E2E.RestartHookSpec qualified as RestartHookSpec
 import Cardano.Node.Client.E2E.UTxOIndexerReconnectSpec qualified as UTxOIndexerReconnectSpec
 
 main :: IO ()
@@ -27,3 +28,4 @@ main = hspec $ do
     PV11GovernanceSpec.spec
     GovernanceEnactmentSpec.spec
     DevnetIsolationSpec.spec
+    RestartHookSpec.spec
