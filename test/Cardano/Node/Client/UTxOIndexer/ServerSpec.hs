@@ -17,6 +17,12 @@ import Cardano.Node.Client.N2C.Reconnect (
     DisconnectInfo (..),
     UpstreamStatus (..),
  )
+import Cardano.Node.Client.UTxOIndexer.Disclosure (
+    AddressCoverage (..),
+    Coverage (..),
+    CoverageStart (..),
+    Disclosure (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     UtxoOp (..),
@@ -44,6 +50,8 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..))
 import Network.Socket (
     Family (AF_UNIX),
     SockAddr (SockAddrUnix),
@@ -126,7 +134,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Server" $ do
                 let sockPath = dir <> "/sock"
                 tid <-
                     forkIO
-                        (runServer sockPath idx (pure ready1))
+                        (runServer sockPath idx fullDisclosure (pure ready1))
                 waitForFile sockPath
                 let addrHex = Text.unpack (hex (BS.replicate 29 0xAA))
                     req =
@@ -164,7 +172,7 @@ spec = describe "Cardano.Node.Client.UTxOIndexer.Server" $ do
                 let sockPath = dir <> "/sock"
                 tid <-
                     forkIO
-                        (runServer sockPath idx (pure ready1))
+                        (runServer sockPath idx fullDisclosure (pure ready1))
                 waitForFile sockPath
                 -- Kick off the await client in a background
                 -- thread; meanwhile, apply the create.
@@ -225,6 +233,7 @@ ready1 =
         , rsProcessedSlot = Just (SlotNo 1230)
         , rsSlotsBehind = Just 4
         , rsUpstream = UpstreamConnected
+        , rsLastProgress = UTCTime (fromGregorian 2026 10 1) 0
         }
 
 {- | Decode a 'Data.Aeson.encode' result (lazy 'ByteString')
@@ -249,7 +258,7 @@ withTestServer rs action =
             let sockPath = dir <> "/sock"
             createDirectoryIfMissing True dir
             bracket
-                (forkIO (runServer sockPath idx (pure rs)))
+                (forkIO (runServer sockPath idx fullDisclosure (pure rs)))
                 ( \tid -> do
                     killThread tid
                     _ <- removeIfPresent sockPath
@@ -344,3 +353,13 @@ decodeUtxos bs = do
         Aeson.String txout <- KM.lookup (Key.fromText "txout") o
         pure (txin, txout)
     decodeEntry _ = Nothing
+
+-- | Full coverage from origin; the ready endpoint never reads it.
+fullDisclosure :: Disclosure
+fullDisclosure =
+    Disclosure
+        { dsNetworkMagic = 42
+        , dsCoverage = Coverage FromOrigin AllAddresses
+        , dsReadyThresholdSlots = 60
+        , dsStaleAfterSeconds = 600
+        }

@@ -35,6 +35,8 @@ import Cardano.Node.Client.UTxOIndexer.Daemon (
 import Cardano.Node.Client.UTxOIndexer.Server (ReadyStatus (..))
 import Cardano.Node.Client.UTxOIndexer.Types (SlotNo (..))
 import Data.Text qualified as Text
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 spec :: Spec
@@ -90,6 +92,7 @@ spec = do
                         , rsProcessedSlot = Nothing
                         , rsSlotsBehind = Nothing
                         , rsUpstream = disconnect
+                        , rsLastProgress = epoch
                         }
                 rs1 = applyUpstreamStatus testCfg UpstreamConnected rs0
             rsReady rs1 `shouldBe` False
@@ -120,6 +123,7 @@ testCfg =
         , dcDbPath = Nothing
         , dcReconnectPolicy = defaultReconnectPolicy
         , dcProbeConfig = defaultProbeConfig
+        , dcStaleAfterSeconds = 600
         }
 
 caughtUp :: ReadyStatus
@@ -130,6 +134,7 @@ caughtUp =
         , rsProcessedSlot = Just (SlotNo 60)
         , rsSlotsBehind = Just 0
         , rsUpstream = UpstreamConnected
+        , rsLastProgress = epoch
         }
 
 disconnect :: UpstreamStatus
@@ -140,3 +145,7 @@ disconnect =
             , diAttempt = 1
             , diSinceMs = 0
             }
+
+-- | A fixed last-progress time; these transitions never read it.
+epoch :: UTCTime
+epoch = UTCTime (fromGregorian 2026 10 1) 0

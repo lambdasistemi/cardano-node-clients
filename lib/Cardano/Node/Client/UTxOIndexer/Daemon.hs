@@ -22,18 +22,30 @@ preserved across the refactor.
 module Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
+    parseDaemonArgs,
+    followerCoverage,
     applyUpstreamStatus,
 ) where
 
 import Cardano.Node.Client.BlockIndexer.Readiness qualified as Readiness
-import Cardano.Node.Client.N2C.Probe (ProbeConfig)
+import Cardano.Node.Client.N2C.Probe (
+    ProbeConfig (..),
+    defaultProbeConfig,
+ )
 import Cardano.Node.Client.N2C.Reconnect (
-    ReconnectPolicy,
+    ReconnectPolicy (..),
     UpstreamStatus (..),
+    defaultReconnectPolicy,
  )
 import Cardano.Node.Client.N2C.Trace (
     N2CEvent (..),
     StopReason (..),
+ )
+import Cardano.Node.Client.UTxOIndexer.Disclosure (
+    AddressCoverage (..),
+    Coverage (..),
+    CoverageStart (..),
+    Disclosure (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
@@ -58,11 +70,13 @@ import Control.Concurrent.STM (atomically)
 import Control.Exception (onException)
 import Control.Tracer (Tracer, nullTracer, traceWith)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Word (Word32, Word64)
 import Ouroboros.Network.Magic (NetworkMagic (..))
+import Text.Read (readMaybe)
 
 {- | Daemon runtime configuration. Plain Haskell record;
-the CLI-parsing in @Main@ produces this.
+'parseDaemonArgs' produces it from the command line.
 -}
 data DaemonConfig = DaemonConfig
     { dcRelaySocket :: FilePath
@@ -87,6 +101,9 @@ data DaemonConfig = DaemonConfig
     -- each reconnect attempt. Defaults via
     -- 'defaultProbeConfig' — chain-replay-tolerant
     -- (unbounded total timeout).
+    , dcStaleAfterSeconds :: !Word64
+    -- ^ Seconds without follower progress beyond which a
+    -- connected upstream makes asset answers @stale@.
     }
     deriving stock (Show)
 
@@ -124,7 +141,11 @@ runDaemon tracer cfg = do
                     let getReady =
                             readyStatusFrom cfg
                                 <$> atomically (fhReadiness fh)
-                    runServer (dcListenSocket cfg) idx getReady
+                    runServer
+                        (dcListenSocket cfg)
+                        idx
+                        (daemonDisclosure cfg)
+                        getReady
     onStart =
         traceWith
             tracer
@@ -184,6 +205,7 @@ readyStatusFrom cfg r =
         , rsProcessedSlot = rProcessedSlot r
         , rsSlotsBehind = behind
         , rsUpstream = rUpstream r
+        , rsLastProgress = rUpdatedAt r
         }
   where
     behind =
@@ -230,3 +252,170 @@ applyUpstreamStatus cfg newStatus rs =
                 { rsUpstream = newStatus
                 , rsReady = False
                 }
+
+{- | What every asset answer of this daemon states: the magic
+its follower connects with, the coverage of the follower
+configuration it runs ('toChainSyncCfg'), the ready
+threshold and the stale bound.
+-}
+daemonDisclosure :: DaemonConfig -> Disclosure
+daemonDisclosure cfg =
+    Disclosure
+        { dsNetworkMagic = dcNetworkMagic cfg
+        , dsCoverage = followerCoverage (toChainSyncCfg cfg)
+        , dsReadyThresholdSlots = dcReadyThresholdSlots cfg
+        , dsStaleAfterSeconds = dcStaleAfterSeconds cfg
+        }
+
+{- | The coverage a follower configuration indexes: from origin
+without a start point, from the start point otherwise; every
+address under 'IndexAll', a filtered set under
+'IndexAddressSet'.
+
+The start point is honoured on cold boot only: a store warm-booted
+under a configuration with a different start point keeps the
+history it was created with, which this does not see.
+-}
+followerCoverage :: ChainSyncConfig -> Coverage
+followerCoverage cfg =
+    Coverage
+        { covStart = case csStartPoint cfg of
+            Nothing -> FromOrigin
+            Just (slot, hash) -> FromPoint slot hash
+        , covAddresses = case csInterestSet cfg of
+            IndexAll -> AllAddresses
+            IndexAddressSet _ -> FilteredAddresses
+        }
+
+-- | Default stale bound (seconds).
+defaultStaleAfterSeconds :: Word64
+defaultStaleAfterSeconds = 600
+
+-- | Default ready threshold (slots).
+defaultReadyThreshold :: Word
+defaultReadyThreshold = 60
+
+{- | Default Cardano security parameter @k@ — the
+rollback log is capped at this many of the most-recent
+entries (per-block, not per-slot). Mainnet/preprod/
+preview all use 2160; devnets typically override.
+-}
+defaultSecurityParamK :: Word
+defaultSecurityParamK = 2160
+
+{- | Parse a single @--key value@ pair from the argument
+list. Returns the value and the remaining args.
+-}
+takeFlag :: String -> [String] -> Maybe (String, [String])
+takeFlag _ [] = Nothing
+takeFlag key args = go [] args
+  where
+    go _ [] = Nothing
+    go seen (k : v : rest)
+        | k == key = Just (v, reverse seen ++ rest)
+    go seen (x : rest) = go (x : seen) rest
+
+{- | Parse the daemon's command-line flags into a
+'DaemonConfig'. 'Left' carries the message to print
+above the usage text.
+-}
+parseDaemonArgs :: [String] -> Either String DaemonConfig
+parseDaemonArgs args0 = do
+    (relay, args1) <- requireFlag "--relay-socket" args0
+    (listen, args2) <- requireFlag "--listen" args1
+    (magicS, args3) <- requireFlag "--network-magic" args2
+    (slotsS, args4) <- requireFlag "--byron-epoch-slots" args3
+    let (readyS, args5) =
+            fromMaybe (show defaultReadyThreshold, args4) $
+                takeFlag "--ready-threshold-slots" args4
+        (kS, args6) =
+            fromMaybe (show defaultSecurityParamK, args5) $
+                takeFlag "--security-param-k" args5
+        (mDbPath, args7) = case takeFlag "--db-path" args6 of
+            Just (p, rest) -> (Just p, rest)
+            Nothing -> (Nothing, args6)
+        (initialMsS, args8) =
+            fromMaybe
+                (show (rpInitialMs defaultReconnectPolicy), args7)
+                (takeFlag "--reconnect-initial-ms" args7)
+        (maxMsS, args9) =
+            fromMaybe
+                (show (rpMaxMs defaultReconnectPolicy), args8)
+                (takeFlag "--reconnect-max-ms" args8)
+        (resetMsS, args10) =
+            fromMaybe
+                ( show (rpResetThresholdMs defaultReconnectPolicy)
+                , args9
+                )
+                (takeFlag "--reconnect-reset-threshold-ms" args9)
+        (mTotalMs, args11) = case takeFlag "--node-ready-timeout-ms" args10 of
+            Just (s, rest) -> (Just s, rest)
+            Nothing -> (Nothing, args10)
+        (mStaleS, args12) = case takeFlag "--stale-after-seconds" args11 of
+            Just (s, rest) -> (Just s, rest)
+            Nothing -> (Nothing, args11)
+    case args12 of
+        [] -> pure ()
+        extra -> Left $ "Unexpected args: " <> show extra
+    magic <- requireWord "--network-magic" magicS
+    slots <- requireWord "--byron-epoch-slots" slotsS
+    ready <- requireWord "--ready-threshold-slots" readyS
+    k <- requireWord "--security-param-k" kS
+    initialMs <-
+        requireWord "--reconnect-initial-ms" initialMsS
+    maxMs <- requireWord "--reconnect-max-ms" maxMsS
+    resetMs <-
+        requireWord "--reconnect-reset-threshold-ms" resetMsS
+    mTotalMsParsed <- case mTotalMs of
+        Nothing -> pure Nothing
+        Just s ->
+            Just <$> requireWord "--node-ready-timeout-ms" s
+    staleAfter <-
+        maybe (Right defaultStaleAfterSeconds) requirePositive mStaleS
+    let policy =
+            ReconnectPolicy
+                { rpInitialMs = fromIntegral (initialMs :: Word)
+                , rpMaxMs = fromIntegral (maxMs :: Word)
+                , rpResetThresholdMs =
+                    fromIntegral (resetMs :: Word)
+                }
+        probe =
+            defaultProbeConfig
+                { pcTotalTimeoutMs =
+                    fmap
+                        (fromIntegral :: Word -> Word64)
+                        mTotalMsParsed
+                }
+    pure
+        DaemonConfig
+            { dcRelaySocket = relay
+            , dcListenSocket = listen
+            , dcNetworkMagic = fromIntegral (magic :: Word)
+            , dcByronEpochSlots = fromIntegral (slots :: Word)
+            , dcReadyThresholdSlots = fromIntegral (ready :: Word)
+            , dcSecurityParamK = fromIntegral (k :: Word)
+            , dcDbPath = mDbPath
+            , dcReconnectPolicy = policy
+            , dcProbeConfig = probe
+            , dcStaleAfterSeconds = staleAfter
+            }
+  where
+    requireFlag key args =
+        maybe
+            (Left $ "Missing required flag: " <> key)
+            Right
+            (takeFlag key args)
+    requireWord key s =
+        maybe
+            (Left $ key <> " expects a non-negative integer, got: " <> s)
+            Right
+            (readMaybe s)
+    -- Read through Integer: reading a Word wraps negative input.
+    requirePositive s = case readMaybe s :: Maybe Integer of
+        Just n
+            | n >= 1 && n <= toInteger (maxBound :: Word64) ->
+                Right (fromInteger n)
+        _ ->
+            Left $
+                "--stale-after-seconds expects a positive whole number of seconds, got: "
+                    <> s

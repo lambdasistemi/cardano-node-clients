@@ -56,6 +56,12 @@ import Cardano.Node.Client.UTxOIndexer.Columns (
     rollbackCodecs,
     txInColCodecs,
  )
+import Cardano.Node.Client.UTxOIndexer.Disclosure (
+    AddressCoverage (..),
+    Coverage (..),
+    CoverageStart (..),
+    Disclosure (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     UtxoOp (..),
@@ -110,6 +116,8 @@ import Data.Default.Class (def)
 import Data.List (nub, sort, sortOn)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..))
 import Data.Word (Word64, Word8)
 import Database.KV.Database (Codecs, mkColumns)
 import Database.KV.RocksDB (mkRocksDBDatabase)
@@ -605,11 +613,22 @@ readyFixed =
         , rsProcessedSlot = Just (SlotNo 12)
         , rsSlotsBehind = Just 8
         , rsUpstream = UpstreamConnected
+        , rsLastProgress = UTCTime (fromGregorian 2026 10 1) 0
+        }
+
+-- | Full coverage from origin; v1 assertions read only v1 members.
+fullDisclosure :: Disclosure
+fullDisclosure =
+    Disclosure
+        { dsNetworkMagic = 42
+        , dsCoverage = Coverage FromOrigin AllAddresses
+        , dsReadyThresholdSlots = 60
+        , dsStaleAfterSeconds = 600
         }
 
 withServer :: IndexerHandle -> (FilePath -> IO a) -> IO a
 withServer h =
-    withSocketServer (\path -> runServer path h (pure readyFixed))
+    withSocketServer (\path -> runServer path h fullDisclosure (pure readyFixed))
 
 -- | A seeded in-memory indexer with the server on its socket.
 withFixture :: (IndexerHandle -> FilePath -> IO a) -> IO a

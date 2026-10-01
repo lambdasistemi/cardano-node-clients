@@ -212,6 +212,7 @@ runAssetQueryE2E = do
                         , dcDbPath = Just (tmp </> "db")
                         , dcReconnectPolicy = defaultReconnectPolicy
                         , dcProbeConfig = defaultProbeConfig
+                        , dcStaleAfterSeconds = 600
                         }
             withAsync (runDaemon nullTracer cfg) $ \daemon -> do
                 waitForFile daemonSock 600

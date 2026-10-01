@@ -38,6 +38,12 @@ import Cardano.Node.Client.N2C.Reconnect (
     DisconnectInfo (..),
     UpstreamStatus (..),
  )
+import Cardano.Node.Client.UTxOIndexer.Disclosure (
+    AddressCoverage (..),
+    Coverage (..),
+    CoverageStart (..),
+    Disclosure (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     IndexerHandle (..),
     UtxoOp (..),
@@ -74,6 +80,8 @@ import Data.List (nubBy)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..))
 import Data.Word (Word16, Word64, Word8)
 import Test.Hspec (
     Spec,
@@ -214,7 +222,7 @@ withServerPair action =
         seedFixture h
         ref <- newIORef (Readiness False Nothing Nothing Nothing Nothing)
         withSocketServer (\p -> Pre.runServer p h (preReady <$> readIORef ref)) $ \pre ->
-            withSocketServer (\p -> Cur.runServer p h (curReady <$> readIORef ref)) $ \cur -> do
+            withSocketServer (\p -> Cur.runServer p h fullDisclosure (curReady <$> readIORef ref)) $ \cur -> do
                 malformed <- requestLine pre "not json"
                 action (Pair pre cur ref malformed)
 
@@ -250,6 +258,16 @@ preReady r =
         , Pre.rsUpstream = upstreamOf r
         }
 
+-- | Full coverage from origin; the existing endpoints never read it.
+fullDisclosure :: Disclosure
+fullDisclosure =
+    Disclosure
+        { dsNetworkMagic = 42
+        , dsCoverage = Coverage FromOrigin AllAddresses
+        , dsReadyThresholdSlots = 60
+        , dsStaleAfterSeconds = 600
+        }
+
 curReady :: Readiness -> Cur.ReadyStatus
 curReady r =
     Cur.ReadyStatus
@@ -258,6 +276,7 @@ curReady r =
         , Cur.rsProcessedSlot = SlotNo <$> rdProcessed r
         , Cur.rsSlotsBehind = rdBehind r
         , Cur.rsUpstream = upstreamOf r
+        , Cur.rsLastProgress = UTCTime (fromGregorian 2026 10 1) 0
         }
 
 -- * Fixture: two blocks of ledger-built outputs, one holding an asset
