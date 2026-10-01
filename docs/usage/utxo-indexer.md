@@ -22,7 +22,8 @@ utxo-indexer \
   [--reconnect-max-ms              30000] \
   [--reconnect-reset-threshold-ms  30000] \
   [--node-ready-timeout-ms         <ms>] \
-  [--stale-after-seconds           600]
+  [--stale-after-seconds           600] \
+  [--rebuild-asset-index]
 ```
 
 | Flag | Default | Purpose |
@@ -39,6 +40,7 @@ utxo-indexer \
 | `--reconnect-reset-threshold-ms` | `30000` | Healthy-run duration that resets the supervisor's failure counter. |
 | `--node-ready-timeout-ms` | unset | Total cap on the LSQ tip probe. **Unset = wait forever** for the upstream node's ChainDB to load. Set explicitly for CI scenarios that want to fail fast. |
 | `--stale-after-seconds` | `600` | Seconds without follower progress after which a connected upstream makes asset answers `stale` (see [Network, coverage and freshness](#network-coverage-and-freshness)). A positive whole number; anything else is a usage error. |
+| `--rebuild-asset-index` | off | Add the asset index in place to a RocksDB store that has none, from the outputs it already holds, while the daemon serves (see [Restart and upgrade](#restart-and-upgrade)). Takes no value. On a store whose index is complete, a new store or the in-memory backend it changes nothing. |
 
 All flags are parsed by `parseDaemonArgs` in
 `Cardano.Node.Client.UTxOIndexer.Daemon`; required flags are
@@ -230,6 +232,7 @@ the query answers `asset_index_unavailable` with `inconsistent` instead.
 flowchart TD
     R[request line] -->|not an object of exactly policy_id and asset_name, bad hex or lengths| E1["invalid_asset_query + detail"]
     R -->|readable| A{store holds a complete asset index?}
+    A -->|no, an upgrade is running| E5["asset_index_unavailable, reason rebuilding"]
     A -->|no| E2["asset_index_unavailable, reason absent"]
     A -->|yes| P{store has applied a block?}
     P -->|no| E3["asset_index_unavailable, reason no_indexed_point"]
@@ -250,7 +253,8 @@ flowchart TD
 
 | `reason` | Meaning | What to do |
 |----------|---------|------------|
-| `absent` | The store has no complete asset index: it was created by an earlier version of the daemon, or it met an output it could not read. Such a store keeps answering `utxos_at`, `ready` and `await`. | Start the daemon on a new `--db-path`; a store created from empty indexes assets from its first block. |
+| `rebuilding` | The daemon is adding the asset index to this store (started with `--rebuild-asset-index`, or continuing an upgrade an earlier run began). `utxos_at`, `ready` and `await` answer as usual meanwhile. | Retry later; the answer turns into the holders once every live output is indexed. See [Restart and upgrade](#restart-and-upgrade). |
+| `absent` | The store has no complete asset index: it was created by an earlier version of the daemon, or it met an output it could not read. Such a store keeps answering `utxos_at`, `ready` and `await`. | Restart the daemon on the same `--db-path` with `--rebuild-asset-index` (see [Restart and upgrade](#restart-and-upgrade)). If the answer is `absent` again once that upgrade ends, the store holds an output the daemon cannot read: start it on a new `--db-path`, which indexes assets from its first block. |
 | `no_indexed_point` | The store has no point to answer at yet: no block applied, or the daemon is still in its initial catch-up from genesis, which records no rollback points. | Retry once `ready` is `true`. |
 | `inconsistent` | An index entry has no matching live output, or an output's bytes cannot be read. | Report it; the store needs rebuilding. |
 
@@ -409,6 +413,97 @@ restart) without exiting:
 
 Operators no longer need orchestrator-level `restart: always` on the
 indexer container to recover from peer flapping.
+
+## Restart and upgrade
+
+You run the daemon on a RocksDB `--db-path` and stop it for a deploy, a
+host reboot or a new binary. When it comes back on the same directory
+you want the same answers, including `utxos_with_asset`. If the
+directory was created by a daemon that predates the asset index, you
+want to add the index in place. You don't want to resync the chain
+into a new directory or get a wrong list in the meantime.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Complete: new --db-path (indexed from its first block)
+    [*] --> Absent: --db-path created before the asset index
+    Complete --> Complete: stop and start, flag or not
+    Absent --> Absent: start without --rebuild-asset-index
+    Absent --> Rebuilding: start with --rebuild-asset-index
+    Rebuilding --> Rebuilding: stopped mid-way, started again (flag or not)
+    Rebuilding --> Complete: every live output indexed
+    Rebuilding --> Absent: an output whose bytes cannot be read
+```
+
+### Restart
+
+Stop the daemon and start it on the same `--db-path`. It resumes the
+chain from the newest block the store recorded and answers
+`utxos_with_asset` with the same holders, bytes, quantities and
+creation points as before the stop. It then follows the chain on from
+there. Nothing has to be rebuilt.
+
+This holds once the daemon has applied a block within k slots of the
+chain tip (k is `--security-param-k`): from then on the store records
+the points it resumes from. A daemon stopped earlier, during its initial
+catch-up from genesis, has recorded none. On restart it starts the
+chain again from genesis, over the blocks it already holds.
+
+If the node's chain no longer includes any of the stored points, the
+daemon refuses to resume rather than replay from genesis over the
+store; [When `csStartPoint` is consulted](#when-csstartpoint-is-consulted)
+names the two ways this happens and how to recover.
+
+### Upgrading a store created before the asset index
+
+A store written by a daemon that predates the asset index answers
+`utxos_with_asset` with `asset_index_unavailable`, reason `absent`, and
+keeps serving everything else. To add the index in place:
+
+1. Stop the daemon and keep a copy of the directory. The upgrade is
+   one-way from the moment it starts: the first start with the flag
+   adds the asset index's column families, and from then on a binary
+   that predates the index cannot open the store, even if the upgrade
+   is stopped before it completes. The copy is your way back.
+
+   ```bash
+   cp -a /var/lib/utxo-indexer /var/lib/utxo-indexer.before-asset-index
+   ```
+
+2. Start the daemon on the same directory with `--rebuild-asset-index`:
+
+   ```bash
+   utxo-indexer \
+     --relay-socket /path/to/cardano-node/node.sock \
+     --listen /tmp/idx.sock \
+     --network-magic 764824073 \
+     --byron-epoch-slots 21600 \
+     --db-path /var/lib/utxo-indexer \
+     --rebuild-asset-index
+   ```
+
+The daemon builds the index from the outputs the store already holds,
+while it follows the chain and serves the socket:
+
+| Request | While the index is being built |
+|---------|-------------------------------|
+| `utxos_at` | Answered as usual, byte for byte. |
+| `await` | Answered as usual. |
+| `ready` | Answered as usual; the daemon keeps following the chain. |
+| `utxos_with_asset` | `asset_index_unavailable`, reason `rebuilding`, until every live output is indexed. After that, the holders. It never answers a partial list. |
+
+- **Stopped mid-way?** The next start continues the upgrade from where
+  it stopped, with or without the flag. One exception: a daemon stopped
+  while it was adding the column families, before the upgrade began,
+  leaves a store that opens as `absent` without the flag; start it with
+  the flag again and the upgrade continues.
+- **Leaving the flag on is harmless.** On a store whose index is
+  complete, or on a new store, it changes nothing. The in-memory
+  backend (no `--db-path`) ignores it.
+- **An output the daemon cannot read** ends the upgrade without an
+  index, and the answer goes back to `absent`. The store keeps
+  serving `utxos_at`, `ready` and `await`. Start the daemon on a new
+  `--db-path` to get the asset query.
 
 ## Stderr trace stream
 

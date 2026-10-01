@@ -447,6 +447,7 @@ answer @inconsistent@: its datum is never made up.
 assetAnswer :: Either AssetQueryUnavailable AssetSnapshot -> Value
 assetAnswer = \case
     Left AssetIndexAbsent -> unavailable "absent"
+    Left AssetIndexRebuilding -> unavailable "rebuilding"
     Left NoIndexedPoint -> unavailable "no_indexed_point"
     Left (AssetIndexInconsistent _) -> unavailable "inconsistent"
     Right AssetSnapshot{asPoint, asMatches} ->

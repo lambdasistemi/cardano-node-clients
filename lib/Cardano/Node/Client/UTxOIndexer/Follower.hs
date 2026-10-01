@@ -175,7 +175,11 @@ import Control.Concurrent.STM (
     readTVarIO,
     writeTVar,
  )
-import Control.Exception (SomeException)
+import Control.Exception (
+    ErrorCall (..),
+    SomeException,
+    throwIO,
+ )
 import Control.Monad (void)
 import Control.Tracer (Tracer)
 import Data.ByteString (ByteString)
@@ -849,7 +853,12 @@ mkIntersector bootMode cfg readinessVar idx = self
                     -- DB — that mixes chain histories.
                     -- Fail closed; manual recovery is
                     -- wiping the database.
-                    error
+                    -- An action that throws when run, never a
+                    -- bottom value: the intersector's fields
+                    -- are strict, so a bottom here would fire
+                    -- when the record is built, before the node
+                    -- answers (#214).
+                    throwIO . ErrorCall $
                         "utxo-indexer: chain-sync found no \
                         \intersection, and the UTxO store \
                         \already holds rollback-log points, so \

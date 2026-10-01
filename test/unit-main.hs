@@ -33,6 +33,7 @@ import Cardano.Node.Client.UTxOIndexer.ServerStabilitySpec qualified as UTxOInde
 import Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec qualified as UTxOIndexerSharedFollowerSpec
 import Cardano.Node.Client.UTxOIndexer.TxOutViewSpec qualified as UTxOIndexerTxOutViewSpec
 import Cardano.Node.Client.UTxOIndexer.TypesSpec qualified as UTxOIndexerTypesSpec
+import Cardano.Node.Client.UTxOIndexer.WarmBootSpec qualified as UTxOIndexerWarmBootSpec
 import Cardano.Node.Client.ValiditySpec qualified as ValiditySpec
 import Data.List.SampleFibonacciSpec qualified as SampleFibonacciSpec
 
@@ -45,6 +46,7 @@ main = hspec $ do
     AddressSpec.spec
     SampleFibonacciSpec.spec
     UTxOIndexerTypesSpec.spec
+    UTxOIndexerWarmBootSpec.spec
     UTxOIndexerTxOutViewSpec.spec
     UTxOIndexerAssetIndexSpec.spec
     UTxOIndexerAssetProvenanceSpec.spec

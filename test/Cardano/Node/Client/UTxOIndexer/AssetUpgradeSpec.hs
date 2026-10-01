@@ -44,6 +44,12 @@ import Cardano.Node.Client.UTxOIndexer.Columns (
     rollbackCodecs,
     txInColCodecs,
  )
+import Cardano.Node.Client.UTxOIndexer.Disclosure (
+    AddressCoverage (..),
+    Coverage (..),
+    CoverageStart (..),
+    Disclosure (..),
+ )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     AssetMatch (..),
     AssetQueryUnavailable (..),
@@ -102,6 +108,8 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, isJust, isNothing)
 import Data.Text qualified as Text
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..))
 import Data.Word (Word64, Word8)
 import Database.KV.Cursor (Cursor, Entry (..), firstEntry, nextEntry)
 import Database.KV.Database (Codecs, KV, mkColumns)
@@ -539,7 +547,14 @@ interruptedUpgradeCompletes tmp = do
                 withRocksDBIndexerRunnerWith options path $ \_ runner -> do
                     let progress = runTransaction runner (query MetaCol rebuildKey)
                     p0 <- progress
-                    waitUntil "the rebuild to advance" 60 ((/= p0) <$> progress)
+                    -- The resumed backfill may finish before p0 is read:
+                    -- then p0 is already Nothing and only the marker
+                    -- shows progress. The next session and the checks
+                    -- after the loop assert the completed state.
+                    waitUntil "the rebuild to advance or complete" 60 $ do
+                        p <- progress
+                        completed <- runTransaction runner (query MetaCol markerKey)
+                        pure (p /= p0 || isJust completed)
                 session (i + 1)
     session 1
     readIORef interrupted >>= (`shouldSatisfy` (>= 2))
@@ -1017,10 +1032,22 @@ readyFixed =
         , rsProcessedSlot = Just (SlotNo 12)
         , rsSlotsBehind = Just 8
         , rsUpstream = UpstreamConnected
+        , rsLastProgress = UTCTime (fromGregorian 2026 10 1) 0
+        }
+
+-- | Full coverage from origin, as every store in this spec has.
+fullDisclosure :: Disclosure
+fullDisclosure =
+    Disclosure
+        { dsNetworkMagic = 42
+        , dsCoverage = Coverage FromOrigin AllAddresses
+        , dsReadyThresholdSlots = 60
+        , dsStaleAfterSeconds = 600
         }
 
 withServer :: IndexerHandle -> (FilePath -> IO a) -> IO a
-withServer h = withSocketServer (\path -> runServer path h (pure readyFixed))
+withServer h =
+    withSocketServer (\path -> runServer path h fullDisclosure (pure readyFixed))
 
 assetRequest :: ByteString -> ByteString -> ByteString
 assetRequest p n =

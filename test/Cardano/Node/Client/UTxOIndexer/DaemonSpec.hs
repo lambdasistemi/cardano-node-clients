@@ -31,6 +31,7 @@ import Cardano.Node.Client.N2C.Reconnect (
 import Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     applyUpstreamStatus,
+    parseDaemonArgs,
  )
 import Cardano.Node.Client.UTxOIndexer.Server (ReadyStatus (..))
 import Cardano.Node.Client.UTxOIndexer.Types (SlotNo (..))
@@ -109,6 +110,22 @@ spec = do
             rsReady rs2 `shouldBe` True
             rsTipSlot rs2 `shouldBe` rsTipSlot rs0
 
+    describe "parseDaemonArgs --rebuild-asset-index" $ do
+        it "leaves the upgrade off when the flag is absent" $
+            fmap dcRebuildAssetIndex (parseDaemonArgs requiredArgs)
+                `shouldBe` Right False
+
+        it "requests the upgrade wherever the flag appears, taking no value" $ do
+            let withFlag =
+                    [ "--rebuild-asset-index" : requiredArgs
+                    , requiredArgs <> ["--rebuild-asset-index"]
+                    , requiredArgs <> ["--rebuild-asset-index", "--db-path", "/var/lib/idx"]
+                    ]
+            map (fmap dcRebuildAssetIndex . parseDaemonArgs) withFlag
+                `shouldBe` map (const (Right True)) withFlag
+            fmap dcDbPath (parseDaemonArgs (last withFlag))
+                `shouldBe` Right (Just "/var/lib/idx")
+
 -- Test fixtures -----------------------------------------------------
 
 testCfg :: DaemonConfig
@@ -124,6 +141,7 @@ testCfg =
         , dcReconnectPolicy = defaultReconnectPolicy
         , dcProbeConfig = defaultProbeConfig
         , dcStaleAfterSeconds = 600
+        , dcRebuildAssetIndex = False
         }
 
 caughtUp :: ReadyStatus
@@ -149,3 +167,16 @@ disconnect =
 -- | A fixed last-progress time; these transitions never read it.
 epoch :: UTCTime
 epoch = UTCTime (fromGregorian 2026 10 1) 0
+
+-- | The four flags the daemon cannot start without.
+requiredArgs :: [String]
+requiredArgs =
+    [ "--relay-socket"
+    , "/run/node.sock"
+    , "--listen"
+    , "/run/idx.sock"
+    , "--network-magic"
+    , "42"
+    , "--byron-epoch-slots"
+    , "86400"
+    ]

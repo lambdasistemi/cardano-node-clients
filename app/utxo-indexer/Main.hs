@@ -48,7 +48,8 @@ dieUsage msg = do
     hPutStrLn stderr "  [--reconnect-max-ms INT] \\"
     hPutStrLn stderr "  [--reconnect-reset-threshold-ms INT] \\"
     hPutStrLn stderr "  [--node-ready-timeout-ms INT] \\"
-    hPutStrLn stderr "  [--stale-after-seconds INT]"
+    hPutStrLn stderr "  [--stale-after-seconds INT] \\"
+    hPutStrLn stderr "  [--rebuild-asset-index]"
     exitFailure
 
 -- | Entry point. Parse args, log config, run the daemon.

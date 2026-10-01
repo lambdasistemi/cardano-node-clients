@@ -10,6 +10,6 @@
 
 ## S2 daemon, E2E, docs
 
-- [ ] T006 `--rebuild-asset-index` through `DaemonConfig` (F6)
-- [ ] T007 E2E: daemon restart on the same `--db-path` against a devnet, asset answer before and after (U8)
-- [ ] T008 `docs/usage/utxo-indexer.md`: restart, upgrade procedure, answers during it, `rebuilding`, one-way upgrade (R10)
+- [x] T006 `--rebuild-asset-index` through `DaemonConfig` (F6)
+- [x] T007 E2E: daemon restart on the same `--db-path` against a devnet, asset answer before and after (U8)
+- [x] T008 `docs/usage/utxo-indexer.md`: restart, upgrade procedure, answers during it, `rebuilding`, one-way upgrade (R10)
