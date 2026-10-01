@@ -45,14 +45,26 @@ versioning/migration and will extend this column (clean seam).
   rollback restoration; every other `await` case byte-identical.
 - **D4 Point from `RollbackCol`.** A store with no following row (empty,
   or restoration-only) has no point → `no_indexed_point`.
+- **D6 Degraded open of pre-change stores** (see Live boundaries):
+  chosen because the pinned `rocksdb-haskell-jprupp` exposes neither
+  `create_missing_column_families` nor column-family creation. Rejected:
+  refusing to open pre-change stores (breaks existing `utxos_at`/`ready`/
+  `await` deployments until #202).
 - **D5 Wire request key `utxos_with_asset`**, camelCase response fields
   matching `await`/`ready`, decimal-string quantity.
 
 ## Live boundaries
 
-- RocksDB open of a pre-change directory: missing column families must be
-  created, the store must open, `utxos_at` keeps working, the asset query
-  answers `absent`.
+- RocksDB open of a pre-change directory (D6): the pinned RocksDB binding
+  cannot create missing column families, so the store opens with its four
+  pre-change families when, and only when, the full open fails with
+  "Column family not found". Other open errors propagate unchanged; a
+  failed fallback reports the original error; errors from the caller's own
+  work are never reclassified. On such a store `utxos_at`, `ready` and
+  `await` keep working (including the R8a correction for new rows), asset
+  maintenance is skipped on every handler path, and the asset query
+  answers `absent`. Adding the families (migration) is #202; a store
+  created by this change cannot be opened by a pre-change binary.
 - Column-family name ↔ GADT pairing (`mkColumns` lex order) must hold for
   the two new families; verified by reopen tests, not by inspection.
 - E2E: a real devnet node produces mint, transfer, split, spend and burn
