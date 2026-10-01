@@ -15,6 +15,7 @@ import Cardano.Node.Client.TxHistoryIndexer.IndexerSpec qualified as TxHistoryIn
 import Cardano.Node.Client.UTxOIndexer.AssetIndexSpec qualified as UTxOIndexerAssetIndexSpec
 import Cardano.Node.Client.UTxOIndexer.AssetProvenanceSpec qualified as UTxOIndexerAssetProvenanceSpec
 import Cardano.Node.Client.UTxOIndexer.AssetTypesSpec qualified as UTxOIndexerAssetTypesSpec
+import Cardano.Node.Client.UTxOIndexer.AssetUpgradeSpec qualified as UTxOIndexerAssetUpgradeSpec
 import Cardano.Node.Client.UTxOIndexer.AssetWireSpec qualified as UTxOIndexerAssetWireSpec
 import Cardano.Node.Client.UTxOIndexer.BlockExtractSpec qualified as UTxOIndexerBlockExtractSpec
 import Cardano.Node.Client.UTxOIndexer.DaemonDisclosureSpec qualified as UTxOIndexerDaemonDisclosureSpec
@@ -48,6 +49,7 @@ main = hspec $ do
     UTxOIndexerAssetIndexSpec.spec
     UTxOIndexerAssetProvenanceSpec.spec
     UTxOIndexerAssetTypesSpec.spec
+    UTxOIndexerAssetUpgradeSpec.spec
     UTxOIndexerAssetWireSpec.spec
     UTxOIndexerBlockExtractSpec.spec
     UTxOIndexerSpec.spec

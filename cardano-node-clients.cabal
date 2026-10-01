@@ -215,6 +215,7 @@ library utxo-indexer-lib
     Cardano.Node.Client.UTxOIndexer.Types
     Data.List.SampleFibonacci
 
+  other-modules:    Cardano.Node.Client.UTxOIndexer.ColumnFamilies
   build-depends:
     , async
     , base
@@ -304,6 +305,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.AssetIndexSpec
     Cardano.Node.Client.UTxOIndexer.AssetProvenanceSpec
     Cardano.Node.Client.UTxOIndexer.AssetTypesSpec
+    Cardano.Node.Client.UTxOIndexer.AssetUpgradeSpec
     Cardano.Node.Client.UTxOIndexer.AssetWireSpec
     Cardano.Node.Client.UTxOIndexer.BlockExtractSpec
     Cardano.Node.Client.UTxOIndexer.DaemonDisclosureSpec

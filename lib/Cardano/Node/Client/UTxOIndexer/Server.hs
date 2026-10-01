@@ -44,7 +44,8 @@ RESP: {"point": {"slot":<int>, "blockHash":"<hex>"},
                  | "catching_up" | "disconnected" | "stale", ...]}
     | {"error": "invalid_asset_query", "detail": "<text>"}
     | {"error": "asset_index_unavailable",
-       "reason": "absent" | "no_indexed_point" | "inconsistent"}
+       "reason": "rebuilding" | "absent" | "no_indexed_point"
+               | "inconsistent"}
 @
 
 Each connection is a single request → single response →
@@ -428,6 +429,7 @@ assetAnswer = \case
     Left AssetIndexAbsent -> unavailable "absent"
     Left NoIndexedPoint -> unavailable "no_indexed_point"
     Left (AssetIndexInconsistent _) -> unavailable "inconsistent"
+    Left AssetIndexRebuilding -> unavailable "rebuilding"
     Right AssetSnapshot{asPoint, asMatches} ->
         case traverse matchValue asMatches of
             Nothing -> unavailable "inconsistent"
