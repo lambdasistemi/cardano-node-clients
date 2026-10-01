@@ -154,7 +154,11 @@ main = do
   transaction-history storage with direction-aware summaries.
 - `cardano-node-clients:devnet` — `withCardanoNode` /
   `withRestartableCardanoNode` helpers that run a real `cardano-node`
-  subprocess for E2E tests.
+  subprocess for E2E tests. Each run works in its own fresh
+  `cardano-e2e-<hex>` directory under the system temporary directory
+  (`TMPDIR` when set) and removes exactly that directory on exit,
+  after stopping its node; concurrent runs on one host are isolated
+  and pre-existing paths are never touched.
 
 ## Documentation
 
@@ -180,8 +184,8 @@ indexer (indexing and history rollback), the block-indexer handler,
 the adversary chain-points parser and server, address parsing, and
 validity helpers. E2E tests run a real devnet node for ChainSync,
 horizon-aware validity, provider queries, the full N2C session, the
-UTxO indexer relay-restart reconnect scenario, and the issue #97
-reproduction.
+UTxO indexer relay-restart reconnect scenario, the issue #97
+reproduction, and the isolation of concurrent devnet runs.
 
 ## License
 

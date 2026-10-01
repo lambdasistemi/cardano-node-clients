@@ -384,6 +384,7 @@ test-suite e2e-tests
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.E2E.AssetQuerySpec
     Cardano.Node.Client.E2E.ChainSyncSpec
+    Cardano.Node.Client.E2E.DevnetIsolationSpec
     Cardano.Node.Client.E2E.GovernanceEnactmentSpec
     Cardano.Node.Client.E2E.HorizonSpec
     Cardano.Node.Client.E2E.Issue97ReproSpec

@@ -90,6 +90,13 @@ main = do
   the UTxO indexer relay-restart reconnect scenario, and the issue
   [#97](https://github.com/lambdasistemi/cardano-node-clients/issues/97)
   reproduction.
+- Each devnet run (`withCardanoNode`, `withRestartableCardanoNode`
+  and the `withDevnet` family) gets its own fresh `cardano-e2e-<hex>`
+  directory under the system temporary directory (`TMPDIR` when
+  set). The directory is removed on every exit path, after the node
+  is stopped, and nothing that existed before the run is touched, so
+  concurrent runs on one host — including several in one test
+  process — do not interfere.
 
 ## Build
 
