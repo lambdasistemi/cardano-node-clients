@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiWayIf #-}
+
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.TxOutView
 Description : Ledger-free decoding of stored outputs into assets and datum
@@ -42,7 +44,6 @@ import Codec.CBOR.Decoding (
     Decoder,
     TokenType (..),
     decodeBytes,
-    decodeInteger,
     decodeListLen,
     decodeMapLen,
     decodeTag,
@@ -195,25 +196,27 @@ decodeAddress :: Decoder s ByteString
 decodeAddress = decodeBytes
 
 {- | A value: a coin @uint@ (no assets) or the pair
-@[coin, multiasset]@.
+@[coin, multiasset]@. A @uint@ is accepted in every argument width:
+the coin of 2^32 lovelace or more needs the eight-byte one.
 -}
 decodeValue :: forall s. Decoder s [(PolicyId, AssetName, Word64)]
 decodeValue = do
     tt <- peekTokenType
-    case tt of
-        TypeUInt -> [] <$ decodeWord64
-        TypeListLen -> do
+    if
+        | isUnsigned tt -> [] <$ decodeWord64
+        | tt == TypeListLen -> do
             n <- decodeListLen
             unless (n == 2) $
                 fail "value: expected coin or [coin, multiasset]"
             _coin <- decodeWord64
             decodeMultiAsset
-        _ -> fail "value: expected uint or pair"
+        | otherwise -> fail "value: expected uint or pair"
 
 {- | The multi-asset map: @policy(28) -> name(0..32) -> quantity@.
-Quantities must be positive and fit a 'Word64'; zero-quantity
-entries are skipped; duplicate keys are a decode failure (the
-ledger never writes them).
+Quantities must be @uint@s, in any argument width, as the ledger
+reads them (a negative integer or a bignum is a decode failure);
+zero-quantity entries are skipped; duplicate keys are a decode
+failure (the ledger never writes them).
 -}
 decodeMultiAsset ::
     forall s. Decoder s [(PolicyId, AssetName, Word64)]
@@ -245,13 +248,16 @@ decodeMultiAsset = do
         aname <- case mkAssetName nBs of
             Just a -> pure a
             Nothing -> fail "multiasset: asset name longer than 32 bytes"
-        q <- decodeInteger
-        if q < 0
-            then fail "multiasset: negative quantity"
-            else
-                if q == 0
-                    then pure (aname, [])
-                    else
-                        if q > toInteger (maxBound :: Word64)
-                            then fail "multiasset: quantity overflows Word64"
-                            else pure (aname, [(policy, aname, fromInteger q)])
+        tt <- peekTokenType
+        if
+            | isUnsigned tt -> do
+                q <- decodeWord64
+                pure (aname, [(policy, aname, q) | q /= 0])
+            | tt == TypeNInt || tt == TypeNInt64 ->
+                fail "multiasset: negative quantity"
+            | otherwise ->
+                fail "multiasset: quantity is not an unsigned integer"
+
+-- | Whether a token is an unsigned integer, whatever its argument width.
+isUnsigned :: TokenType -> Bool
+isUnsigned tt = tt == TypeUInt || tt == TypeUInt64

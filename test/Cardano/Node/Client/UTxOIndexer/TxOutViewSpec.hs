@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.TxOutViewSpec
 Description : Stored-output decoder cross-checked against the ledger
@@ -50,6 +52,7 @@ import Cardano.Ledger.Hashes (
     DataHash,
     ScriptHash (..),
     extractHash,
+    originalBytes,
     unsafeMakeSafeHash,
  )
 import Cardano.Ledger.Mary.Value qualified as Mary
@@ -72,9 +75,12 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Short qualified as SBS
+import Data.Either (isRight)
+import Data.List (sort)
+import Data.Maybe (isNothing)
 import Data.Maybe.Strict (StrictMaybe (..))
 import Data.Proxy (Proxy (..))
-import Data.Word (Word64)
+import Data.Word (Word64, Word8)
 import Lens.Micro ((&), (.~), (^.))
 import Test.Hspec (
     Expectation,
@@ -83,6 +89,23 @@ import Test.Hspec (
     it,
     shouldBe,
     shouldSatisfy,
+ )
+import Test.QuickCheck (
+    Gen,
+    Property,
+    arbitrary,
+    checkCoverage,
+    choose,
+    counterexample,
+    cover,
+    elements,
+    forAll,
+    frequency,
+    oneof,
+    property,
+    sublistOf,
+    suchThat,
+    (===),
  )
 
 spec :: Spec
@@ -184,6 +207,12 @@ spec =
                             ]
                 View.decodeTxOutView (TxOut badRef)
                     `shouldSatisfy` isLeftView
+
+        describe "integers of every CBOR width, against the ledger" $
+            it "decodes exactly the outputs the ledger decodes, to the ledger's view" $
+                property $
+                    checkCoverage $
+                        forAll genWidthOutput agreesWithLedger
 
 -- * Ledger-side construction and oracle
 
@@ -447,3 +476,217 @@ checkScriptRef _ = do
                 (ledgerAssets (Proxy @era) stored)
                 (ledgerDatum (Proxy @era) stored)
             )
+
+-- * Integers of every CBOR width
+
+{- | One generated output whose integers are written by hand, so the
+width of every coin and quantity is chosen rather than left to the
+ledger's encoder.
+-}
+data WidthOutput = WidthOutput
+    { woForm :: Form
+    , woCoin :: IntCode
+    , woAssets :: [(ByteString, [(ByteString, IntCode)])]
+    -- ^ Policies with their names and quantities; empty for a
+    -- coin-only value.
+    , woInlineDatum :: Bool
+    -- ^ Map form only: carry an inline datum under key 2.
+    }
+    deriving stock (Show)
+
+data Form = ArrayForm | MapForm
+    deriving stock (Eq, Show)
+
+-- | The argument width of an unsigned integer.
+data Width = Inline | Bytes1 | Bytes2 | Bytes4 | Bytes8
+    deriving stock (Eq, Show, Enum, Bounded)
+
+-- | How one integer of the value is written.
+data IntCode
+    = UInt Width Integer
+    | -- | A tag-2 bignum: an integer, but not an unsigned one.
+      BigNum Integer
+    | -- | A negative integer, minus the given magnitude.
+      NegInt Integer
+    deriving stock (Eq, Show)
+
+{- | Both output forms, coin-only and with assets, every argument width
+for the coin and for each quantity — mostly the value's canonical
+width, sometimes a wider one, often a boundary value — and now and then
+an integer that is not unsigned.
+-}
+genWidthOutput :: Gen WidthOutput
+genWidthOutput = do
+    form <- elements [ArrayForm, MapForm]
+    coin <- genIntCode 0
+    assets <- oneof [pure [], genAssets]
+    inline <- case form of
+        MapForm -> arbitrary
+        ArrayForm -> pure False
+    pure (WidthOutput form coin assets inline)
+  where
+    genAssets = do
+        policies <- nonEmptySublist (map (BS.replicate 28) [0x11, 0x22, 0x33])
+        traverse
+            ( \p -> do
+                names <- nonEmptySublist ["", "tok", BS.replicate 32 0xEE]
+                (,) p <$> traverse (\n -> (,) n <$> genIntCode 1) names
+            )
+            policies
+    nonEmptySublist xs = sublistOf xs `suchThat` (not . null)
+
+{- | An integer at least @lo@ (zero-quantity entries are not ledger
+outputs): canonical in a random width, a boundary value, a value
+written wider than it needs, or not an unsigned integer at all.
+-}
+genIntCode :: Integer -> Gen IntCode
+genIntCode lo =
+    frequency
+        [ (6, elements [minBound .. maxBound] >>= \w -> UInt w <$> choose (max lo (widthMin w), widthMax w))
+        , (3, (\v -> UInt (canonicalWidth v) v) <$> elements (filter (>= lo) boundaries))
+        , (2, elements [Bytes1 ..] >>= \w -> UInt w <$> choose (lo, widthMax (pred w)))
+        , (1, BigNum <$> choose (max 1 lo, 2 ^ (64 :: Int) - 1))
+        , (1, NegInt <$> choose (1, 24))
+        ]
+  where
+    boundaries =
+        [0, 23, 24, 255, 256, 65_535, 65_536, 2 ^ (32 :: Int) - 1, 2 ^ (32 :: Int), 2 ^ (64 :: Int) - 1]
+
+widthMin, widthMax :: Width -> Integer
+widthMin = \case
+    Inline -> 0
+    Bytes1 -> 24
+    Bytes2 -> 256
+    Bytes4 -> 65_536
+    Bytes8 -> 2 ^ (32 :: Int)
+widthMax = \case
+    Inline -> 23
+    Bytes1 -> 255
+    Bytes2 -> 65_535
+    Bytes4 -> 2 ^ (32 :: Int) - 1
+    Bytes8 -> 2 ^ (64 :: Int) - 1
+
+canonicalWidth :: Integer -> Width
+canonicalWidth v = case filter (\w -> v <= widthMax w) [minBound .. maxBound] of
+    w : _ -> w
+    [] -> error ("not a 64-bit unsigned integer: " <> show v)
+
+encodeIntCode :: IntCode -> [Word8]
+encodeIntCode = \case
+    UInt Inline v -> [fromInteger v]
+    UInt Bytes1 v -> 0x18 : bigEndian 1 v
+    UInt Bytes2 v -> 0x19 : bigEndian 2 v
+    UInt Bytes4 v -> 0x1A : bigEndian 4 v
+    UInt Bytes8 v -> 0x1B : bigEndian 8 v
+    BigNum v -> 0xC2 : bytesItem (BS.pack (dropWhile (== 0) (bigEndian 8 v)))
+    NegInt n -> [0x20 + fromInteger (n - 1)]
+
+bigEndian :: Int -> Integer -> [Word8]
+bigEndian n v = [fromInteger (v `div` (256 ^ i) `mod` 256) | i <- [n - 1, n - 2 .. 0]]
+
+bytesItem :: ByteString -> [Word8]
+bytesItem bs
+    | len < 24 = (0x40 + fromIntegral len) : BS.unpack bs
+    | otherwise = 0x58 : fromIntegral len : BS.unpack bs
+  where
+    len = BS.length bs
+
+-- | The output bytes: an enterprise testnet address, then the value.
+encodeWidthOutput :: WidthOutput -> ByteString
+encodeWidthOutput WidthOutput{woForm, woCoin, woAssets, woInlineDatum} =
+    BS.pack $ case woForm of
+        ArrayForm -> 0x82 : address <> value
+        MapForm
+            | woInlineDatum -> [0xA3, 0x00] <> address <> [0x01] <> value <> datum
+            | otherwise -> [0xA2, 0x00] <> address <> [0x01] <> value
+  where
+    address = bytesItem (BS.pack (0x60 : replicate 28 0xAA))
+    value = case woAssets of
+        [] -> encodeIntCode woCoin
+        assets -> 0x82 : encodeIntCode woCoin <> multiAsset assets
+    multiAsset assets =
+        (0xA0 + fromIntegral (length assets))
+            : concat
+                [ bytesItem p
+                    <> [0xA0 + fromIntegral (length names)]
+                    <> concat [bytesItem n <> encodeIntCode q | (n, q) <- names]
+                | (p, names) <- assets
+                ]
+    -- key 2: [1, 24(<<I 42>>)]
+    datum = [0x02, 0x82, 0x01, 0xD8, 0x18] <> bytesItem (BS.pack [0x18, 0x2A])
+
+{- | The decoder agrees with the ledger's own decoding of the same
+bytes: both refuse them, or both read them, to the same assets
+(compared as sets) and datum.
+-}
+agreesWithLedger :: WidthOutput -> Property
+agreesWithLedger w =
+    coverWidths w
+        . cover 50 (isRight (ledgerView bytes)) "the ledger reads the output"
+        $ case (ledgerView bytes, View.decodeTxOutView (TxOut bytes)) of
+            (Left _, Left _) -> property True
+            (Right expected, Right got) -> normalise got === normalise expected
+            (Right expected, Left err) ->
+                counterexample
+                    ("the ledger reads " <> show expected <> ", the decoder fails: " <> show err)
+                    False
+            (Left err, Right got) ->
+                counterexample
+                    ("the ledger refuses (" <> show err <> "), the decoder reads " <> show got)
+                    False
+  where
+    bytes = encodeWidthOutput w
+    normalise v = v{View.tovAssets = sort (View.tovAssets v)}
+
+ledgerView :: ByteString -> Either DecoderError View.TxOutView
+ledgerView raw = do
+    out <-
+        decodeFullDecoder
+            (Ledger.eraProtVerLow @ConwayEra)
+            "txout"
+            decCBOR
+            (BSL.fromStrict raw) ::
+            Either DecoderError (Ledger.TxOut ConwayEra)
+    let Mary.MaryValue _ multiAsset = out ^. Ledger.valueTxOutL
+        assets =
+            [ (pol, nm, fromIntegral q)
+            | (Mary.PolicyID (ScriptHash (UnsafeHash p)), Mary.AssetName n, q) <-
+                Mary.flattenMultiAsset multiAsset
+            , q > 0
+            , Just pol <- [mkPolicyId (SBS.fromShort p)]
+            , Just nm <- [mkAssetName (SBS.fromShort n)]
+            ]
+        datum = case out ^. datumTxOutF of
+            DatumHash sh -> View.DatumHash (hashToBytes (extractHash sh))
+            Datum bd -> View.InlineDatum (originalBytes bd)
+            NoDatum -> View.NoDatum
+    pure (View.TxOutView assets datum)
+
+{- | Require every form × value kind × coin width, every quantity
+width, the named boundaries and the non-unsigned integers to be
+exercised.
+-}
+coverWidths :: WidthOutput -> Property -> Property
+coverWidths WidthOutput{woForm, woCoin, woAssets} =
+    foldr (.) id $
+        [ cover 1 (woForm == form && null woAssets == coinOnly && coinWidth == Just width) $
+            show form <> (if coinOnly then ", coin only, coin " else ", with assets, coin ") <> show width
+        | form <- [ArrayForm, MapForm]
+        , coinOnly <- [True, False]
+        , width <- [minBound .. maxBound]
+        ]
+            <> [ cover 2 (Just width `elem` map widthOf quantities) ("a quantity in " <> show width)
+               | width <- [minBound .. maxBound]
+               ]
+            <> [ cover 1 (woCoin == UInt (canonicalWidth v) v) ("coin " <> show v)
+               | v <- [2 ^ (32 :: Int) - 1, 2 ^ (32 :: Int), 2 ^ (64 :: Int) - 1]
+               ]
+            <> [ cover 2 (isNothing coinWidth) "a coin that is not an unsigned integer"
+               , cover 2 (Nothing `elem` map widthOf quantities) "a quantity that is not an unsigned integer"
+               ]
+  where
+    coinWidth = widthOf woCoin
+    quantities = [q | (_, names) <- woAssets, (_, q) <- names]
+    widthOf = \case
+        UInt width _ -> Just width
+        _ -> Nothing
