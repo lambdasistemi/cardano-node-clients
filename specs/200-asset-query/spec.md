@@ -98,6 +98,13 @@ Hex input is case-insensitive; output is lower-case. `quantity` is a
 decimal string so no consumer loses precision. Siblings #201/#202 add
 fields only; v1 fields never change meaning.
 
+The `utxos_with_asset` object is strict: any key other than `policy_id`
+and `asset_name` inside it answers `invalid_asset_query` naming the key,
+so a daemon never silently ignores a request field it does not
+understand. The top-level envelope stays lenient, as for the existing
+endpoints. A request field added later is answered by an older daemon
+with `invalid_asset_query`, never with a different question's answer.
+
 ## Out of scope
 
 Network identity, coverage/start-point/filter limits, freshness (#201);
