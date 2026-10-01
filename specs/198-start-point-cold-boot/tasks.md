@@ -9,4 +9,4 @@
 
 ## S2 — consistency with the coverage section after #206
 
-- [ ] T005 Qualify the § Coverage start-point bullet in `docs/usage/utxo-indexer.md` to agree with § "When `csStartPoint` is consulted" (R6)
+- [x] T005 Qualify the § Coverage start-point bullet in `docs/usage/utxo-indexer.md` to agree with § "When `csStartPoint` is consulted" (R6)

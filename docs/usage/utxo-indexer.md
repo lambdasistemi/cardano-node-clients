@@ -307,11 +307,14 @@ point or an address set (see [Embedded use](#embedded-use)).
 Coverage is the configuration of the **running process**, not a record
 kept in the store:
 
-- A start point is used only when the store is empty (cold boot). A
-  store that already holds blocks resumes from its own rollback points
-  whatever the configuration says, so a start point disclosed for a
-  store that was created under a different configuration does not
-  describe that store.
+- A start point is used only when the stores hold no usable resume
+  point: the UTxO store is empty (cold boot), or a history store is
+  attached and has no cursor yet (see
+  [When `csStartPoint` is consulted](#when-csstartpoint-is-consulted)).
+  Otherwise the store resumes from its own rollback points whatever
+  the configuration says, so a start point disclosed for a store that
+  was created under a different configuration does not describe that
+  store.
 - Changing the interest set over an existing store does not re-index
   the outputs it skipped or drop the ones it kept.
 
