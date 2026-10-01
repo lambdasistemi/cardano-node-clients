@@ -89,10 +89,10 @@ Precedence: `disconnected` > `stale` > `catching_up` > `synced`.
 ## Decisions
 
 - **Coverage is the serving process's follower configuration.** The
-  store does not record the configuration it was created under; store
-  metadata is #202's. The shipped daemon always creates stores from
-  origin over all addresses, so its disclosure is exact for stores it
-  created. Docs state this limit.
+  store's build configuration is not yet recorded; a store reopened
+  with a different start point or filter is #207. The shipped daemon is
+  unaffected: its configuration is fixed (origin start, `IndexAll`).
+  Docs state this limit.
 - **#198 is not absorbed.** Its changes (start-point Haddock, the
   intersect-not-found diagnostic) live in the follower, outside this
   ticket's fence. The coverage docs state the cold-boot-only start
@@ -102,5 +102,6 @@ Precedence: `disconnected` > `stale` > `catching_up` > `synced`.
 
 ## Out of scope
 
-Restart, upgrade, migration and persisted store metadata (#202);
-fault-injection checks (#203); fields on `asset_index_unavailable`.
+Restart, upgrade and migration (#202); recording the store's build
+configuration (#207); fault-injection checks (#203); fields on
+`asset_index_unavailable`.
