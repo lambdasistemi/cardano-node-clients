@@ -398,6 +398,7 @@ test-suite e2e-tests
     Cardano.Node.Client.E2E.N2CFullSpec
     Cardano.Node.Client.E2E.ProviderSpec
     Cardano.Node.Client.E2E.PV11GovernanceSpec
+    Cardano.Node.Client.E2E.RestartHookSpec
     Cardano.Node.Client.E2E.UTxOIndexerReconnectSpec
     Cardano.Node.Client.UTxOIndexer.WireClient
 

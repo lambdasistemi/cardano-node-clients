@@ -89,7 +89,8 @@ main = do
   horizon-aware validity, provider queries, the full N2C session,
   the UTxO indexer relay-restart reconnect scenario, and the issue
   [#97](https://github.com/lambdasistemi/cardano-node-clients/issues/97)
-  reproduction.
+  reproduction, the isolation of concurrent devnet runs, and the
+  hooked restart of the restartable devnet node.
 - Each devnet run (`withCardanoNode`, `withRestartableCardanoNode`
   and the `withDevnet` family) gets its own fresh `cardano-e2e-<hex>`
   directory under the system temporary directory (`TMPDIR` when
@@ -97,6 +98,30 @@ main = do
   is stopped, and nothing that existed before the run is touched, so
   concurrent runs on one host — including several in one test
   process — do not interfere.
+- `withRestartableNode` hands its callback a `RestartableNode` with
+  the socket path, the start time, the run directory (`nodeRunDir`),
+  the database directory the node opens on every spawn
+  (`nodeDbDir`, inside the run directory), and
+  `restartNodeWith hook`. The hooked restart stops the node and waits
+  for its process to exit, removes the socket path, runs `hook`,
+  then respawns the node against the same database, socket and
+  genesis and waits until it is ready. While the hook runs no node
+  process of the run exists and nothing accepts on the socket, so
+  the hook may change the database — for instance restore a snapshot
+  taken in an earlier hooked restart, to force a fork — and the
+  respawned node opens it as the hook left it. Readiness means a
+  non-origin tip and is awaited without a time limit. An empty
+  database never gets there once the devnet is more than a few
+  seconds old (the node has no ledger view for the current slot, so
+  it cannot forge), and the restart does not return; a restored
+  database whose tip is older than the forecast horizon (3k/f slots,
+  3 s on this devnet) is ready at its tip but may be unable to forge.
+  If the hook throws, the exception propagates out of
+  `restartNodeWith` and no node is spawned for that restart; a later
+  restart starts the node again, and on exit the bracket still
+  leaves no node process running and removes the run directory.
+  `withRestartableCardanoNode`'s `restart` is `restartNodeWith` with
+  a hook that does nothing.
 
 ## Build
 

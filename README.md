@@ -153,12 +153,29 @@ main = do
 - `cardano-node-clients:tx-history-indexer-lib` — multi-tenant
   transaction-history storage with direction-aware summaries.
 - `cardano-node-clients:devnet` — `withCardanoNode` /
-  `withRestartableCardanoNode` helpers that run a real `cardano-node`
-  subprocess for E2E tests. Each run works in its own fresh
-  `cardano-e2e-<hex>` directory under the system temporary directory
-  (`TMPDIR` when set) and removes exactly that directory on exit,
-  after stopping its node; concurrent runs on one host are isolated
-  and pre-existing paths are never touched.
+  `withRestartableCardanoNode` / `withRestartableNode` helpers that
+  run a real `cardano-node` subprocess for E2E tests. Each run works
+  in its own fresh `cardano-e2e-<hex>` directory under the system
+  temporary directory (`TMPDIR` when set) and removes exactly that
+  directory on exit, after stopping its node; concurrent runs on one
+  host are isolated and pre-existing paths are never touched.
+  `withRestartableNode` hands its callback a `RestartableNode`: the
+  socket path, the start time, the run directory (`nodeRunDir`), the
+  database directory the node opens (`nodeDbDir`), and
+  `restartNodeWith hook`, which stops the node and waits for it to
+  exit, removes the socket, runs `hook`, then respawns the node on the
+  same database and waits until it is ready. While the hook runs the
+  node is down and nothing accepts on the socket, so the hook may
+  change the database (for instance restore a snapshot taken in an
+  earlier hooked restart); the respawned node opens it as the hook
+  left it. The restart waits, without a time limit, for a non-origin
+  tip: an empty database never reaches one once the devnet is more
+  than a few seconds old, and a restored one older than the forecast
+  horizon (3 s on this devnet) is ready at its tip but may be unable
+  to forge. If the hook throws, the exception propagates and no node
+  is spawned for that restart; a later restart starts it again, and
+  the bracket still leaves no node running and removes the run
+  directory.
 
 ## Documentation
 
@@ -185,7 +202,8 @@ the adversary chain-points parser and server, address parsing, and
 validity helpers. E2E tests run a real devnet node for ChainSync,
 horizon-aware validity, provider queries, the full N2C session, the
 UTxO indexer relay-restart reconnect scenario, the issue #97
-reproduction, and the isolation of concurrent devnet runs.
+reproduction, the isolation of concurrent devnet runs, and the
+hooked restart of the restartable devnet node.
 
 ## License
 
