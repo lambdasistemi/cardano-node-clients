@@ -40,9 +40,14 @@ consistent indexed point.
   index (created before this change, or whose index lost completeness)
   or with no indexed point answers the asset query with an explicit
   unavailability, never with an empty or partial match list.
+- **R8a `await` correction (epic ruling A-001).** After a rollback
+  restores a spent output, `await` and the asset query both report its
+  original creation slot/hash. Rollback-log rows written before this
+  change (tags 0/1) still decode and apply with their old behaviour and
+  are never rewritten. Every other `await` case is byte-identical.
 - **R10 Docs.** `docs/usage/utxo-indexer.md` documents the request with a
-  runnable example, every response field, error codes, and datum
-  availability.
+  runnable example, every response field, error codes, datum
+  availability, and the `await` correction (R8a).
 
 ## Invariants (stable IDs)
 
@@ -55,7 +60,7 @@ consistent indexed point.
 | I5 | every response's matches equal the model state at the response's `point` under concurrent apply/rollback | a mixed-point response |
 | I6 | replay of an applied block leaves asset rows unchanged; a divergent block (`ApplyConflict`) leaves them unchanged | rows change |
 | I7 | a pre-change store, or one with no indexed point, never answers with `utxos` | an empty/partial list is returned |
-| I8 | `utxos_at`/`ready`/`await` request and response bytes unchanged (await: see Q-001) | any byte differs |
+| I8 | `utxos_at`/`ready`/`await` request and response bytes unchanged, except `await` after a rollback restoration, which now reports the true creation slot/hash (R8a) | any other byte differs |
 | I9 | datum view matches the ledger's own decoding of the same output; inline bytes are a slice of `txout` | mismatch or bytes not found in `txout` |
 | I10 | malformed requests (policy ≠ 28 bytes, name > 32 bytes, bad hex, missing field) get `invalid_asset_query`, never a match list | accepted or answered with data |
 

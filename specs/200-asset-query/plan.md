@@ -41,7 +41,8 @@ versioning/migration and will extend this column (clean seam).
   `UtxoCreate` (breaking constructor change).
 - **D3 Spend inverses carry provenance** via an additive `UtxoOp`
   constructor and rollback-log tag 2. Old tag-0/1 rows still decode.
-  Effect on `await` is Q-001 (pending ruling).
+  Effect on `await` approved (spec R8a): exact creation point after a
+  rollback restoration; every other `await` case byte-identical.
 - **D4 Point from `RollbackCol`.** A store with no following row (empty,
   or restoration-only) has no point → `no_indexed_point`.
 - **D5 Wire request key `utxos_with_asset`**, camelCase response fields
