@@ -55,9 +55,11 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
     withChainSyncFollower,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    OpenOptions (..),
+    defaultOpenOptions,
     liveUtxoHandler,
     withInMemoryIndexer,
-    withRocksDBIndexer,
+    withRocksDBIndexerWith,
  )
 import Cardano.Node.Client.UTxOIndexer.Server (
     ReadyStatus (..),
@@ -104,6 +106,14 @@ data DaemonConfig = DaemonConfig
     , dcStaleAfterSeconds :: !Word64
     -- ^ Seconds without follower progress beyond which a
     -- connected upstream makes asset answers @stale@.
+    , dcRebuildAssetIndex :: !Bool
+    -- ^ Request the asset-index upgrade of the RocksDB
+    -- store at 'dcDbPath' (CLI @--rebuild-asset-index@).
+    -- A store without a complete asset index — one
+    -- created before the index existed, or one that met
+    -- an unreadable output — rebuilds it online from its
+    -- own live outputs. A store with a complete index, a
+    -- new store and the in-memory backend ignore it.
     }
     deriving stock (Show)
 
@@ -152,7 +162,12 @@ runDaemon tracer cfg = do
             (IndexerStarted (dcListenSocket cfg) (dcDbPath cfg))
     onStop r = traceWith tracer (IndexerStopped r)
     withIndexer Nothing = withInMemoryIndexer
-    withIndexer (Just path) = withRocksDBIndexer path
+    withIndexer (Just path) =
+        withRocksDBIndexerWith
+            defaultOpenOptions
+                { ooRebuildAssetIndex = dcRebuildAssetIndex cfg
+                }
+            path
 
 {- | Lift the daemon's flat 'DaemonConfig' into the
 follower-shaped 'ChainSyncConfig'. Field names track the
@@ -303,6 +318,12 @@ preview all use 2160; devnets typically override.
 defaultSecurityParamK :: Word
 defaultSecurityParamK = 2160
 
+{- | Take a flag that carries no value from the argument list:
+whether it was present, and the remaining args.
+-}
+takeSwitch :: String -> [String] -> (Bool, [String])
+takeSwitch key args = (key `elem` args, filter (/= key) args)
+
 {- | Parse a single @--key value@ pair from the argument
 list. Returns the value and the remaining args.
 -}
@@ -354,7 +375,9 @@ parseDaemonArgs args0 = do
         (mStaleS, args12) = case takeFlag "--stale-after-seconds" args11 of
             Just (s, rest) -> (Just s, rest)
             Nothing -> (Nothing, args11)
-    case args12 of
+        (rebuildAssetIndex, args13) =
+            takeSwitch "--rebuild-asset-index" args12
+    case args13 of
         [] -> pure ()
         extra -> Left $ "Unexpected args: " <> show extra
     magic <- requireWord "--network-magic" magicS
@@ -398,6 +421,7 @@ parseDaemonArgs args0 = do
             , dcReconnectPolicy = policy
             , dcProbeConfig = probe
             , dcStaleAfterSeconds = staleAfter
+            , dcRebuildAssetIndex = rebuildAssetIndex
             }
   where
     requireFlag key args =

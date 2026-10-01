@@ -15,6 +15,7 @@ import Cardano.Node.Client.TxHistoryIndexer.IndexerSpec qualified as TxHistoryIn
 import Cardano.Node.Client.UTxOIndexer.AssetIndexSpec qualified as UTxOIndexerAssetIndexSpec
 import Cardano.Node.Client.UTxOIndexer.AssetProvenanceSpec qualified as UTxOIndexerAssetProvenanceSpec
 import Cardano.Node.Client.UTxOIndexer.AssetTypesSpec qualified as UTxOIndexerAssetTypesSpec
+import Cardano.Node.Client.UTxOIndexer.AssetUpgradeSpec qualified as UTxOIndexerAssetUpgradeSpec
 import Cardano.Node.Client.UTxOIndexer.AssetWireSpec qualified as UTxOIndexerAssetWireSpec
 import Cardano.Node.Client.UTxOIndexer.BlockExtractSpec qualified as UTxOIndexerBlockExtractSpec
 import Cardano.Node.Client.UTxOIndexer.DaemonDisclosureSpec qualified as UTxOIndexerDaemonDisclosureSpec
@@ -32,6 +33,7 @@ import Cardano.Node.Client.UTxOIndexer.ServerStabilitySpec qualified as UTxOInde
 import Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec qualified as UTxOIndexerSharedFollowerSpec
 import Cardano.Node.Client.UTxOIndexer.TxOutViewSpec qualified as UTxOIndexerTxOutViewSpec
 import Cardano.Node.Client.UTxOIndexer.TypesSpec qualified as UTxOIndexerTypesSpec
+import Cardano.Node.Client.UTxOIndexer.WarmBootSpec qualified as UTxOIndexerWarmBootSpec
 import Cardano.Node.Client.ValiditySpec qualified as ValiditySpec
 import Data.List.SampleFibonacciSpec qualified as SampleFibonacciSpec
 
@@ -44,10 +46,12 @@ main = hspec $ do
     AddressSpec.spec
     SampleFibonacciSpec.spec
     UTxOIndexerTypesSpec.spec
+    UTxOIndexerWarmBootSpec.spec
     UTxOIndexerTxOutViewSpec.spec
     UTxOIndexerAssetIndexSpec.spec
     UTxOIndexerAssetProvenanceSpec.spec
     UTxOIndexerAssetTypesSpec.spec
+    UTxOIndexerAssetUpgradeSpec.spec
     UTxOIndexerAssetWireSpec.spec
     UTxOIndexerBlockExtractSpec.spec
     UTxOIndexerSpec.spec

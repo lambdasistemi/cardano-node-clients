@@ -71,6 +71,12 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     withInMemoryIndexerRunner,
     withRocksDBIndexer,
     withRocksDBIndexerRunner,
+    withRocksDBIndexerWith,
+    withRocksDBIndexerRunnerWith,
+
+    -- * Open options
+    OpenOptions (..),
+    defaultOpenOptions,
 
     -- * UTxO operations and filters
     InterestSet (..),
@@ -99,6 +105,7 @@ import Cardano.Node.Client.BlockIndexer.Handler (
     IndexerHandler (..),
  )
 import Cardano.Node.Client.BlockIndexer.Handler qualified as Handler
+import Cardano.Node.Client.UTxOIndexer.ColumnFamilies (createColumnFamilies)
 import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols (..),
     addressIndexCodecs,
@@ -123,6 +130,10 @@ import Cardano.Node.Client.UTxOIndexer.Types (
     SlotNo (..),
     TxIn (..),
     TxOut,
+    assetKeyFromBytes,
+    assetKeyToBytes,
+    txInFromBytes,
+    txInToBytes,
  )
 import ChainFollower.Rollbacks.Store qualified as Rollbacks
 import ChainFollower.Rollbacks.Types (
@@ -130,7 +141,7 @@ import ChainFollower.Rollbacks.Types (
  )
 import ChainFollower.Runner qualified as Runner
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (race)
+import Control.Concurrent.Async (link, race, withAsync)
 import Control.Concurrent.STM (
     STM,
     TMVar,
@@ -275,6 +286,8 @@ data AssetQueryUnavailable
       NoIndexedPoint
     | -- | An asset row references a 'TxIn' with missing live data.
       AssetIndexInconsistent !TxIn
+    | -- | An upgrade of the asset index is in progress.
+      AssetIndexRebuilding
     deriving stock (Eq, Show)
 
 type IndexerTx cf op =
@@ -471,7 +484,7 @@ withInMemoryIndexerRunner ::
 withInMemoryIndexerRunner action = do
     db <- mkInMemoryDatabase (mkColumns [0 :: Int ..] indexerCodecs)
     runner <- newRunTransaction db
-    bootHandle runner AssetColumnsOn $ \handle ->
+    bootHandle runner AssetColumnsOn False $ \handle ->
         action handle runner
 
 {- | Open a RocksDB-backed indexer at @path@ (creating
@@ -493,9 +506,7 @@ the names are paired with the right typed selector.
 -}
 withRocksDBIndexer ::
     FilePath -> (IndexerHandle -> IO a) -> IO a
-withRocksDBIndexer path action =
-    withRocksDBIndexerRunner path $ \handle _runner ->
-        action handle
+withRocksDBIndexer = withRocksDBIndexerWith defaultOpenOptions
 
 {- | Open a RocksDB-backed indexer and expose both the public
 'IndexerHandle' and the underlying transaction runner.
@@ -509,20 +520,59 @@ withRocksDBIndexerRunner ::
     FilePath ->
     (forall cf op. IndexerHandle -> RunTransaction IO cf Cols op -> IO a) ->
     IO a
-withRocksDBIndexerRunner path action =
-    openIndexerStore path $ \rdb assetColumns -> do
+withRocksDBIndexerRunner = withRocksDBIndexerRunnerWith defaultOpenOptions
+
+{- | How a RocksDB store is opened. With 'ooRebuildAssetIndex' a store
+whose asset index is not complete is upgraded in place: a store written
+before the asset index gains its two column families, and its asset
+rows are derived from its own live outputs while the handle serves as
+usual. A store already complete, or opened empty, is unaffected.
+-}
+newtype OpenOptions = OpenOptions
+    { ooRebuildAssetIndex :: Bool
+    -- ^ Upgrade a store whose asset index is not complete.
+    }
+    deriving stock (Eq, Show)
+
+-- | The options of 'withRocksDBIndexer': no upgrade.
+defaultOpenOptions :: OpenOptions
+defaultOpenOptions = OpenOptions{ooRebuildAssetIndex = False}
+
+-- | 'withRocksDBIndexer' with explicit 'OpenOptions'.
+withRocksDBIndexerWith ::
+    OpenOptions -> FilePath -> (IndexerHandle -> IO a) -> IO a
+withRocksDBIndexerWith options path action =
+    withRocksDBIndexerRunnerWith options path $ \handle _runner ->
+        action handle
+
+{- | 'withRocksDBIndexerRunner' with explicit 'OpenOptions'.
+
+An upgrade in progress runs in a task bound to the action: it starts
+before the action, interleaves its bounded transactions with the
+action's, is cancelled when the action returns, and continues at the
+next open of the store whatever its options. A failure of the task is
+rethrown to the action's thread.
+-}
+withRocksDBIndexerRunnerWith ::
+    OpenOptions ->
+    FilePath ->
+    (forall cf op. IndexerHandle -> RunTransaction IO cf Cols op -> IO a) ->
+    IO a
+withRocksDBIndexerRunnerWith options path action =
+    openIndexerStore options path $ \rdb assetColumns -> do
         let base =
                 mkRocksDBDatabase
                     rdb
                     (mkColumns (columnFamilies rdb) (columnsFor assetColumns))
+            request = ooRebuildAssetIndex options
         case assetColumns of
             AssetColumnsOn -> do
                 runner <- newRunTransaction base
-                bootHandle runner assetColumns $ \handle ->
+                bootHandle runner assetColumns request $ \handle ->
                     action handle runner
             AssetColumnsOff -> do
                 runner <- newRunTransaction (degradedDatabase base)
-                bootHandle runner assetColumns $ \handle ->
+                bootHandle runner assetColumns request $ \handle ->
                     action handle runner
 
 {- | Which typed columns a store opened with: everything, or only
@@ -553,24 +603,27 @@ fullFamilies =
     , ("utxo-indexer.meta", def)
     ]
 
-baseFamilies :: [(String, Config)]
-baseFamilies = take 4 fullFamilies
+{- | Open a RocksDB store with the full column-family list. When that
+fails with RocksDB's "Column family not found" the store predates the
+asset index, or an upgrade stopped between creating its two families:
+it holds the four pre-change families, possibly followed by the asset
+family. Without the upgrade request such a store opens degraded with
+the families it has. With the request it gains the missing families
+and is then opened with all six. Any other open failure propagates
+unchanged, and when no shorter family list opens either, the original
+error is the one that escapes.
 
-{- | Open a RocksDB store with the full column-family list, falling
-back to the four pre-change families only when the full open fails
-with RocksDB's "Column family not found" — a directory written by a
-pre-change binary. Any other open failure propagates unchanged, and
-if the fallback open also fails, the original error is the one that
-escapes. A degraded store has no asset or metadata columns: asset
-and marker maintenance is skipped and the asset read answers
-'AssetIndexAbsent'; every other path behaves exactly as on base,
-including the provenance-carrying inverses.
+A degraded store has no asset or metadata columns: asset and marker
+maintenance is skipped and the asset read answers 'AssetIndexAbsent';
+every other path behaves exactly as on base, including the
+provenance-carrying inverses.
 -}
 openIndexerStore ::
+    OpenOptions ->
     FilePath ->
     (DB -> AssetColumns -> IO a) ->
     IO a
-openIndexerStore path action = do
+openIndexerStore options path action = do
     openedFull <- newIORef False
     full <-
         try @IOException $
@@ -583,20 +636,38 @@ openIndexerStore path action = do
             fullOpened <- readIORef openedFull
             if fullOpened || not (isColumnFamilyNotFound original)
                 then throwIO original
-                else do
-                    openedBase <- newIORef False
-                    degraded <-
-                        try @IOException $
-                            withDBCF path def{createIfMissing = True} baseFamilies $ \rdb -> do
-                                writeIORef openedBase True
-                                action rdb AssetColumnsOff
-                    case degraded of
-                        Right a -> pure a
-                        Left fallbackErr -> do
-                            baseOpened <- readIORef openedBase
-                            if baseOpened
-                                then throwIO fallbackErr
-                                else throwIO original
+                else
+                    if ooRebuildAssetIndex options
+                        then do
+                            withPartialFamilies path original $ \rdb n ->
+                                createColumnFamilies rdb (drop n fullFamilies)
+                            withDBCF path def{createIfMissing = True} fullFamilies $ \rdb ->
+                                action rdb AssetColumnsOn
+                        else withPartialFamilies path original $ \rdb _ ->
+                            action rdb AssetColumnsOff
+
+{- | Run an action on a store opened with the four pre-change families,
+or with those four plus the asset family; the action gets how many
+families are open. Errors raised once a list has opened propagate;
+when neither list opens, the full open's error escapes.
+-}
+withPartialFamilies ::
+    FilePath -> IOException -> (DB -> Int -> IO a) -> IO a
+withPartialFamilies path original action = go [4, 5]
+  where
+    go [] = throwIO original
+    go (n : rest) = do
+        opened <- newIORef False
+        r <-
+            try @IOException $
+                withDBCF path def{createIfMissing = True} (take n fullFamilies) $ \rdb -> do
+                    writeIORef opened True
+                    action rdb n
+        case r of
+            Right a -> pure a
+            Left e -> do
+                wasOpened <- readIORef opened
+                if wasOpened then throwIO e else go rest
 
 -- | Whether an open failure is RocksDB's missing-family error.
 isColumnFamilyNotFound :: IOException -> Bool
@@ -654,32 +725,56 @@ inertIterator =
         }
 
 {- | Final stage shared by both constructors: derive the
-initial rollback-log counter from the database, seed the
-completeness marker when the store is opened empty, set up
-the await-state TVars, and hand the constructed handle
-to the caller's action. The marker is written only for a
-store whose transaction and rollback columns are both
-empty — a pre-change store never gains it.
+initial rollback-log counter from the database, decide the
+asset index state, set up the await-state TVars, and hand
+the constructed handle to the caller's action.
+
+In one transaction: a store with the rebuild key resumes its
+upgrade; a complete store stays complete; a store whose
+transaction and rollback columns are both empty gains the
+completeness marker; otherwise, when the upgrade is
+requested, the rebuild key is written and the upgrade starts.
+A store in none of these cases, and every degraded store,
+keeps its index absent.
 -}
 bootHandle ::
     RunTransaction IO cf Cols op ->
     AssetColumns ->
+    Bool ->
     (IndexerHandle -> IO a) ->
     IO a
-bootHandle runner@RunTransaction{runTransaction} assetColumns action = do
-    initialCount <- runTransaction seedOrCount
+bootHandle runner@RunTransaction{runTransaction} assetColumns request action = do
+    (initialCount, rebuilding) <- runTransaction openState
     waitersVar <- newTVarIO Map.empty
     observedVar <- newTVarIO Map.empty
     countVar <- newTVarIO initialCount
-    action (mkHandle runner assetColumns waitersVar observedVar countVar)
+    let handle = mkHandle runner assetColumns waitersVar observedVar countVar
+    if rebuilding
+        then withAsync (rebuildAssetIndex runTransaction) $ \task -> do
+            link task
+            action handle
+        else action handle
   where
-    seedOrCount = do
+    openState = do
         count <- countRollbackEntries
+        rebuilding <- case assetColumns of
+            AssetColumnsOff -> pure False
+            AssetColumnsOn -> decide count
+        pure (count, rebuilding)
+    decide count = do
         emptyTxIn <- isEmptyColumn TxInCol
-        when
-            (assetColumns == AssetColumnsOn && emptyTxIn && count == 0)
-            $ insert MetaCol assetIndexCompleteKey assetIndexCompleteValue
-        pure count
+        marker <- query MetaCol assetIndexCompleteKey
+        progress <- query MetaCol assetIndexRebuildKey
+        case (progress, marker) of
+            (Just _, _) -> pure True
+            (Nothing, Just _) -> pure False
+            _
+                | emptyTxIn && count == 0 ->
+                    False
+                        <$ insert MetaCol assetIndexCompleteKey assetIndexCompleteValue
+                | request ->
+                    True <$ setRebuildProgress (BackfillFrom Nothing)
+                | otherwise -> pure False
 
 {- | The metadata key marking a store whose asset index is complete
 since the store was created. Written only at open of an empty store;
@@ -692,6 +787,140 @@ assetIndexCompleteKey = "asset-index"
 -- | The marker's v1 value.
 assetIndexCompleteValue :: BS.ByteString
 assetIndexCompleteValue = BS.singleton 1
+
+{- | The metadata key present while an upgrade of the asset index is in
+progress; its value is the upgrade's progress. Never present together
+with 'assetIndexCompleteKey'.
+-}
+assetIndexRebuildKey :: BS.ByteString
+assetIndexRebuildKey = "asset-index-rebuild"
+
+{- | Where an upgrade stands: deriving rows from the live outputs after
+the given 'TxIn', then sweeping the asset rows after the given key.
+-}
+data RebuildProgress
+    = BackfillFrom !(Maybe TxIn)
+    | SweepFrom !(Maybe AssetKey)
+
+{- | Progress bytes, version 1: @0x01@, a phase byte (@0@ backfill,
+@1@ sweep), then the last processed key, empty at the phase start.
+-}
+encodeRebuildProgress :: RebuildProgress -> BS.ByteString
+encodeRebuildProgress = \case
+    BackfillFrom from -> BS.pack [1, 0] <> maybe BS.empty txInToBytes from
+    SweepFrom from -> BS.pack [1, 1] <> maybe BS.empty assetKeyToBytes from
+
+decodeRebuildProgress :: BS.ByteString -> Maybe RebuildProgress
+decodeRebuildProgress bytes = case BS.unpack (BS.take 2 bytes) of
+    [1, 0] -> BackfillFrom <$> position txInFromBytes
+    [1, 1] -> SweepFrom <$> position assetKeyFromBytes
+    _ -> Nothing
+  where
+    rest = BS.drop 2 bytes
+    position :: (BS.ByteString -> Maybe k) -> Maybe (Maybe k)
+    position decode
+        | BS.null rest = Just Nothing
+        | otherwise = Just <$> decode rest
+
+setRebuildProgress :: RebuildProgress -> Transaction IO cf Cols op ()
+setRebuildProgress =
+    insert MetaCol assetIndexRebuildKey . encodeRebuildProgress
+
+-- | Live outputs, or asset rows, handled per upgrade transaction.
+rebuildChunkSize :: Int
+rebuildChunkSize = 128
+
+{- | Run an upgrade to its end, one bounded transaction at a time. Each
+transaction reads the rebuild key first, so an upgrade abandoned by a
+follower transaction in between stops here.
+-}
+rebuildAssetIndex ::
+    (forall a. Transaction IO cf Cols op a -> IO a) -> IO ()
+rebuildAssetIndex runTx = do
+    continue <- runTx rebuildStep
+    when continue (rebuildAssetIndex runTx)
+
+{- | One upgrade transaction. The backfill writes, for the next chunk of
+live outputs in key order, exactly the rows their stored bytes carry.
+The sweep then visits the next chunk of asset rows and deletes or
+corrects every row the live outputs do not derive. Finishing the sweep
+removes the rebuild key and writes the completeness marker; an output
+whose bytes fail extraction removes the rebuild key and leaves the
+marker absent. An unreadable progress value restarts the backfill,
+which only rewrites derived rows. Returns whether to continue.
+-}
+rebuildStep :: Transaction IO cf Cols op Bool
+rebuildStep = do
+    mProgress <- query MetaCol assetIndexRebuildKey
+    case decodeRebuildProgress <$> mProgress of
+        Nothing -> pure False
+        Just Nothing -> True <$ setRebuildProgress (BackfillFrom Nothing)
+        Just (Just (BackfillFrom from)) -> do
+            entries <- iterating TxInCol (chunkAfter from)
+            derived <- traverse (uncurry backfillOne) entries
+            advance
+                (and derived)
+                entries
+                (BackfillFrom . Just)
+                (True <$ setRebuildProgress (SweepFrom Nothing))
+        Just (Just (SweepFrom from)) -> do
+            rows <- iterating AssetIndex (chunkAfter from)
+            swept <- traverse (uncurry sweepOne) rows
+            advance (and swept) rows (SweepFrom . Just) $ do
+                delete MetaCol assetIndexRebuildKey
+                insert MetaCol assetIndexCompleteKey assetIndexCompleteValue
+                pure False
+  where
+    advance ok chunk next finish
+        | not ok = False <$ markAssetIndexIncomplete
+        | length chunk < rebuildChunkSize = finish
+        | otherwise = case reverse chunk of
+            (key, _) : _ -> True <$ setRebuildProgress (next key)
+            [] -> finish
+
+-- | Write the rows one live output's stored bytes carry; 'False' when they do not decode.
+backfillOne :: TxIn -> Address -> Transaction IO cf Cols op Bool
+backfillOne txIn addr = do
+    mTxOut <- query AddressIndex (AddrKey addr txIn)
+    case decodeTxOutView <$> mTxOut of
+        Nothing -> pure True
+        Just (Left _err) -> pure False
+        Just (Right view) ->
+            True
+                <$ traverse_
+                    (\(policy, name, qty) -> insert AssetIndex (AssetKey policy name txIn) qty)
+                    (tovAssets view)
+
+{- | Keep an asset row the live outputs derive, correct its quantity, or
+delete it; 'False' when the holding output's bytes do not decode.
+-}
+sweepOne :: AssetKey -> Word64 -> Transaction IO cf Cols op Bool
+sweepOne key@AssetKey{assetKeyPolicy, assetKeyName, assetKeyTxIn} qty = do
+    mAddr <- query TxInCol assetKeyTxIn
+    mTxOut <- maybe (pure Nothing) (\addr -> query AddressIndex (AddrKey addr assetKeyTxIn)) mAddr
+    case decodeTxOutView <$> mTxOut of
+        Nothing -> True <$ delete AssetIndex key
+        Just (Left _err) -> pure False
+        Just (Right view) ->
+            True <$ case [q | (p, n, q) <- tovAssets view, p == assetKeyPolicy, n == assetKeyName] of
+                [] -> delete AssetIndex key
+                q : _ -> when (q /= qty) (insert AssetIndex key q)
+
+-- | Cursor program: up to 'rebuildChunkSize' entries after a key, or from the first.
+chunkAfter :: (Monad m, Eq k) => Maybe k -> Cursor m (KV k v) [(k, v)]
+chunkAfter from = start >>= go rebuildChunkSize []
+  where
+    start = case from of
+        Nothing -> firstEntry
+        Just key ->
+            seekKey key >>= \case
+                Just Entry{entryKey} | entryKey == key -> nextEntry
+                other -> pure other
+    go n acc = \case
+        Nothing -> pure (reverse acc)
+        Just Entry{entryKey, entryValue} ->
+            let acc' = (entryKey, entryValue) : acc
+             in if n <= 1 then pure (reverse acc') else nextEntry >>= go (n - 1) acc'
 
 -- | Whether a column holds no entries.
 isEmptyColumn ::
@@ -1473,13 +1702,15 @@ maintainAssetsOnSpend AssetColumnsOn txIn mTxOut =
         Just (Left _err) -> markAssetIndexIncomplete
         Nothing -> pure ()
 
-{- | Delete the completeness marker in the current transaction: the
-asset index is no longer known complete, so reads must answer
+{- | Delete the completeness marker and the rebuild key in the current
+transaction: the asset index is no longer known complete and cannot
+become complete by an upgrade in progress, so reads must answer
 unavailability instead of a partial list.
 -}
 markAssetIndexIncomplete :: Transaction IO cf Cols op ()
-markAssetIndexIncomplete =
+markAssetIndexIncomplete = do
     delete MetaCol assetIndexCompleteKey
+    delete MetaCol assetIndexRebuildKey
 
 {- | Cursor program: seek to the synthetic minimum key
 under @addr@ and walk forward, collecting every entry
@@ -1552,9 +1783,11 @@ readAssetSnapshot ::
     AssetName ->
     Transaction IO cf Cols op (Either AssetQueryUnavailable AssetSnapshot)
 readAssetSnapshot policy name = do
+    mRebuild <- query MetaCol assetIndexRebuildKey
     mMarker <- query MetaCol assetIndexCompleteKey
-    case mMarker of
-        Just v | v == assetIndexCompleteValue -> readComplete
+    case (mRebuild, mMarker) of
+        (Just _, _) -> pure (Left AssetIndexRebuilding)
+        (Nothing, Just v) | v == assetIndexCompleteValue -> readComplete
         _ -> pure (Left AssetIndexAbsent)
   where
     readComplete = do

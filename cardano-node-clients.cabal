@@ -215,6 +215,7 @@ library utxo-indexer-lib
     Cardano.Node.Client.UTxOIndexer.Types
     Data.List.SampleFibonacci
 
+  other-modules:    Cardano.Node.Client.UTxOIndexer.ColumnFamilies
   build-depends:
     , async
     , base
@@ -304,6 +305,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.AssetIndexSpec
     Cardano.Node.Client.UTxOIndexer.AssetProvenanceSpec
     Cardano.Node.Client.UTxOIndexer.AssetTypesSpec
+    Cardano.Node.Client.UTxOIndexer.AssetUpgradeSpec
     Cardano.Node.Client.UTxOIndexer.AssetWireSpec
     Cardano.Node.Client.UTxOIndexer.BlockExtractSpec
     Cardano.Node.Client.UTxOIndexer.DaemonDisclosureSpec
@@ -323,6 +325,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec
     Cardano.Node.Client.UTxOIndexer.TxOutViewSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
+    Cardano.Node.Client.UTxOIndexer.WarmBootSpec
     Cardano.Node.Client.UTxOIndexer.WireClient
     Cardano.Node.Client.ValiditySpec
     Data.List.SampleFibonacciSpec
@@ -390,6 +393,7 @@ test-suite e2e-tests
     Cardano.Node.Client.ConwayFixtures
     Cardano.Node.Client.E2E.AssetDisclosureSpec
     Cardano.Node.Client.E2E.AssetQuerySpec
+    Cardano.Node.Client.E2E.AssetRestartSpec
     Cardano.Node.Client.E2E.ChainSyncSpec
     Cardano.Node.Client.E2E.DevnetIsolationSpec
     Cardano.Node.Client.E2E.GovernanceEnactmentSpec
@@ -425,6 +429,7 @@ test-suite e2e-tests
     , chain-follower
     , containers
     , contra-tracer
+    , data-default-class
     , directory
     , filepath
     , hspec
@@ -434,6 +439,7 @@ test-suite e2e-tests
     , ouroboros-consensus
     , ouroboros-consensus:cardano
     , ouroboros-network:api
+    , rocksdb-haskell-jprupp
     , rocksdb-kv-transactions:kv-transactions
     , stm
     , temporary

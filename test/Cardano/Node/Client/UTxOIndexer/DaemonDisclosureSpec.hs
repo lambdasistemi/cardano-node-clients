@@ -291,6 +291,7 @@ withDaemonOverStore magic bound action =
                     , dcReconnectPolicy = defaultReconnectPolicy
                     , dcProbeConfig = defaultProbeConfig
                     , dcStaleAfterSeconds = bound
+                    , dcRebuildAssetIndex = False
                     }
         withRocksDBIndexer db seedStore
         withAsync (runDaemon nullTracer cfg) $ \_ -> do

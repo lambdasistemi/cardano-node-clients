@@ -26,7 +26,39 @@ applies, a step that does not change the chain's holders) stop the
 test at once. Answer mismatches are collected and reported together
 at the end, so every step runs.
 -}
-module Cardano.Node.Client.E2E.AssetQuerySpec (spec) where
+module Cardano.Node.Client.E2E.AssetQuerySpec (
+    spec,
+
+    -- * Shared with the restart and upgrade spec
+    Asset (..),
+    assetBytes,
+    tokenA,
+    tokenB,
+    decoyA,
+    holderA,
+    holderB,
+    holderKeyA,
+    holderKeyB,
+    queriedAssets,
+    mintTxFrom,
+    assetTx,
+    out,
+    fee,
+    View,
+    step,
+    compareAsset,
+    nodeView,
+    holdersOf,
+    quantityOf,
+    requireCount,
+    coinIn,
+    wireTxIn,
+    Ctx (..),
+    withNodeClient,
+    requireRunning,
+    waitReady,
+    waitForFile,
+) where
 
 import Cardano.Crypto.Hash.Class (hashToBytes)
 import Cardano.Ledger.Address (Addr, serialiseAddr)
@@ -213,6 +245,7 @@ runAssetQueryE2E = do
                         , dcReconnectPolicy = defaultReconnectPolicy
                         , dcProbeConfig = defaultProbeConfig
                         , dcStaleAfterSeconds = 600
+                        , dcRebuildAssetIndex = False
                         }
             withAsync (runDaemon nullTracer cfg) $ \daemon -> do
                 waitForFile daemonSock 600
@@ -233,19 +266,7 @@ driveSteps ctx = do
     (gIn, gOut) <- case genesis of
         g : _ -> pure g
         [] -> fail "setup: no genesis UTxO"
-    let gCoin = unCoin (gOut ^. coinTxOutL)
-        mintTx =
-            assetTx
-                (Set.singleton gIn)
-                [ out holderA assetCoin [(tokenA, 1)] NoDatum
-                , out holderA assetCoin [(tokenA, 2)] inlineDatum
-                , out holderB assetCoin [(tokenB, 5)] NoDatum
-                , out holderB assetCoin [(decoyA, 3)] NoDatum
-                , out genesisAddr (gCoin - 4 * assetCoin - fee) [] NoDatum
-                ]
-                (minted [(tokenA, 3), (tokenB, 5), (decoyA, 3)])
-                [scriptA, scriptB]
-                [genesisSignKey, policyKeyA, policyKeyB]
+    let mintTx = mintTxFrom gIn gOut
     v1 <- step ctx "mint" Map.empty mintTx
     holdersOf v1 tokenA `requireCount` 2
 
@@ -302,6 +323,30 @@ driveSteps ctx = do
     v5 <- step ctx "burn" v4 burnTx
     holdersOf v5 tokenA `requireCount` 0
 
+{- | Spend a genesis output to mint the three assets: two holders of
+the queried token (one with an inline datum), one of the same name
+under the other policy, one of the longer name, and the change.
+-}
+mintTxFrom :: TxIn -> Ledger.TxOut ConwayEra -> ConwayTx
+mintTxFrom gIn gOut =
+    assetTx
+        (Set.singleton gIn)
+        [ out holderA assetCoin [(tokenA, 1)] NoDatum
+        , out holderA assetCoin [(tokenA, 2)] inlineDatum
+        , out holderB assetCoin [(tokenB, 5)] NoDatum
+        , out holderB assetCoin [(decoyA, 3)] NoDatum
+        , out genesisAddr (gCoin - 4 * assetCoin - fee) [] NoDatum
+        ]
+        (minted [(tokenA, 3), (tokenB, 5), (decoyA, 3)])
+        [scriptA, scriptB]
+        [genesisSignKey, policyKeyA, policyKeyB]
+  where
+    gCoin = unCoin (gOut ^. coinTxOutL)
+
+-- | Every asset the daemon is asked about after each step.
+queriedAssets :: [Asset]
+queriedAssets = [tokenA, tokenB, decoyA]
+
 {- | Submit one transaction, wait until the daemon applied its block,
 read the node's view of the holder addresses, require the chain's
 holders of the queried asset to have changed, and compare the
@@ -316,7 +361,7 @@ step ctx name previous tx = do
     view <- nodeView (ctxProvider ctx)
     when (map fst (holdersOf view tokenA) == map fst (holdersOf previous tokenA)) $
         fail ("setup: " <> name <> " left the chain's holders of the token unchanged")
-    forM_ [tokenA, tokenB, decoyA] (compareAsset ctx name view)
+    forM_ queriedAssets (compareAsset ctx name view)
     pure view
 
 -- | The node's UTxO at the two holder addresses, from one acquired snapshot.
@@ -493,12 +538,15 @@ requireRunning daemon ctx =
         Just r -> fail ("setup: daemon stopped " <> ctx <> ": " <> show r)
 
 waitReady :: FilePath -> Int -> IO ()
-waitReady _ 0 = fail "setup: daemon never became ready"
-waitReady sock n = do
-    resp <- requestLine sock (encodeLine ["ready" .= Aeson.Null])
-    case Aeson.decodeStrict' resp of
-        Just (Aeson.Object o) | KM.lookup "ready" o == Just (Aeson.Bool True) -> pure ()
-        _ -> threadDelay 1_000_000 >> waitReady sock (n - 1)
+waitReady sock = go "nothing"
+  where
+    go lastAnswer 0 =
+        fail ("setup: daemon never became ready; last ready answer: " <> lastAnswer)
+    go _ n = do
+        resp <- requestLine sock (encodeLine ["ready" .= Aeson.Null])
+        case Aeson.decodeStrict' resp of
+            Just (Aeson.Object o) | KM.lookup "ready" o == Just (Aeson.Bool True) -> pure ()
+            _ -> threadDelay 1_000_000 >> go (show resp) (n - 1)
 
 waitForFile :: FilePath -> Int -> IO ()
 waitForFile path = go

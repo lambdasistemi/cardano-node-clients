@@ -88,6 +88,7 @@ runDisclosureE2E = do
                         , dcReconnectPolicy = defaultReconnectPolicy
                         , dcProbeConfig = defaultProbeConfig
                         , dcStaleAfterSeconds = 600
+                        , dcRebuildAssetIndex = False
                         }
             withAsync (runDaemon nullTracer cfg) $ \daemon -> do
                 waitForFile daemonSock 600
