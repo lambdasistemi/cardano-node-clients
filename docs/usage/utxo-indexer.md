@@ -307,11 +307,14 @@ point or an address set (see [Embedded use](#embedded-use)).
 Coverage is the configuration of the **running process**, not a record
 kept in the store:
 
-- A start point is used only when the store is empty (cold boot). A
-  store that already holds blocks resumes from its own rollback points
-  whatever the configuration says, so a start point disclosed for a
-  store that was created under a different configuration does not
-  describe that store.
+- A start point is used only when the stores hold no usable resume
+  point: the UTxO store is empty (cold boot), or a history store is
+  attached and has no cursor yet (see
+  [When `csStartPoint` is consulted](#when-csstartpoint-is-consulted)).
+  Otherwise the store resumes from its own rollback points whatever
+  the configuration says, so a start point disclosed for a store that
+  was created under a different configuration does not describe that
+  store.
 - Changing the interest set over an existing store does not re-index
   the outputs it skipped or drop the ones it kept.
 
@@ -437,3 +440,49 @@ is single-writer) and run the follower without the NDJSON server, use
 `cardano-tx-generator` daemon in
 [lambdasistemi/cardano-tx-tools](https://github.com/lambdasistemi/cardano-tx-tools)
 embeds the indexer this way.
+
+### When `csStartPoint` is consulted
+
+`ChainSyncConfig.csStartPoint` is consulted only when the follower has
+no usable stored resume point:
+
+1. **cold boot** — the UTxO store holds no rollback-log point
+   (`getResumePoints` is empty);
+2. **history store without a cursor** — `csHistory` is attached and its
+   history store has no cursor yet, so there is no shared resume point
+   (`sharedResumePoint` is `Nothing`), even though the UTxO store is
+   warm.
+
+In every other case chain-sync resume candidates come from the stores
+and `csStartPoint` is ignored: changing it has no effect until the
+stores are wiped. The bundled daemon sets no start point and
+cold-boots from Origin.
+
+```mermaid
+flowchart TD
+    Boot[boot] --> Q{UTxO store holds a rollback-log point?}
+    Q -- no --> Cold[cold boot: offer csStartPoint or Origin]
+    Q -- yes --> H{csHistory attached and history store has no cursor?}
+    H -- no --> Warm[warm boot: offer the stored points]
+    H -- yes --> WarmStart[warm boot: offer csStartPoint or Origin]
+    Cold -- no intersection --> Cold
+    Warm -- no intersection --> Fail[fail closed]
+    WarmStart -- no intersection --> Fail
+```
+
+A cold boot that finds no intersection retries. A warm boot that finds
+none fails closed. When the stored points were offered, two routes lead
+there:
+
+| Route | Cause | Recovery |
+|---|---|---|
+| (a) divergence beyond `k` | the saved chain diverged from the node by more than the security parameter `k` | wipe the DB and rebuild, or restart against a node whose chain still includes one of the saved points |
+| (b) store younger than the rollback depth | the store cold-started inside the volatile window, and the chain rolled back past its start point before the store retained `k` blocks | wipe the store (it holds fewer than `k` blocks) and cold-start again from a start point outside the volatile window, at least `k` blocks behind the tip |
+
+Route (b) exists because the intersection point is never delivered as a
+roll-forward: it is never applied, so it never becomes a rollback-log
+point. A store that has followed more than `k` blocks is immune —
+retention keeps `k + 1` points and the oldest is always offered.
+
+When the history store had no cursor, the start point was offered
+instead of the stored points, and the node's chain does not include it.

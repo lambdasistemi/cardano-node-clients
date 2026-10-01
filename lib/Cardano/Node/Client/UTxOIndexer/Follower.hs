@@ -218,6 +218,21 @@ data ChainSyncConfig = ChainSyncConfig
     -- 'Nothing' preserves the historical Origin boot; a
     -- concrete @(slot, hash)@ lets callers start from a
     -- known point instead of replaying from genesis.
+    --
+    -- Consulted only when the follower has no usable
+    -- stored resume point: (i) the UTxO store holds no
+    -- rollback-log point ('getResumePoints' is empty, a
+    -- cold boot), or (ii) 'csHistory' is attached and
+    -- 'sharedResumePoint' is 'Nothing' because the
+    -- history store has no cursor yet. In every other
+    -- case chain-sync resume candidates come from the
+    -- stores and this field is ignored; changing it has
+    -- no effect until the stores are wiped. The point
+    -- itself is never applied, so it is never stored as
+    -- a rollback-log point: a start point inside the
+    -- volatile window leaves the store unable to survive
+    -- a rollback past it until @k@ blocks are retained
+    -- (see 'BootMode').
     , csReadyThresholdSlots :: !Word64
     -- ^ Slot-lag threshold beyond which @ready@ flips to
     -- @False@. Plumbed through to consumers (the follower
@@ -718,12 +733,37 @@ initialReadiness =
 points — fresh DB or in-memory) vs. warm (one or more
 retained points from a prior run).
 
+A cold boot intersects at 'coldBootResumePoints'
+('csStartPoint', or Origin). A warm boot intersects at
+the retained points and ignores 'csStartPoint', except
+when 'csHistory' is attached and the history store has
+no cursor yet ('sharedResumePoint' is 'Nothing'): the
+request then names 'coldBootResumePoints' instead of the
+retained points, while the boot stays warm.
+
 The two are treated differently on @intersectNotFound@:
-cold boots retry with @[Origin]@ (transient races during
-node startup are normal), warm boots fail closed (their
-saved chain has diverged from the node beyond the
-security parameter @k@, and origin-replay over the
-populated DB would mix histories).
+cold boots retry with 'coldBootResumePoints' (transient
+races during node startup are normal), warm boots fail
+closed, because origin-replay over the populated DB would
+mix histories. When the retained points were offered, a
+warm boot finds no intersection by one of two routes:
+
+* the saved chain has diverged from the node beyond the
+  security parameter @k@ — wipe the DB and rebuild, or
+  restart against a node whose chain still includes one
+  of the saved points;
+* the store is younger than the rollback depth: it
+  cold-started inside the volatile window, and the chain
+  rolled back past its start point before it retained
+  @k@ blocks. The intersection point is never applied, so
+  it is never a rollback-log point, and no retained point
+  survives that rollback — wipe the store (it holds fewer
+  than @k@ blocks) and cold-start again from a start point
+  outside the volatile window.
+
+A store that has followed more than @k@ blocks is immune
+to the second route: retention keeps @k + 1@ points and
+the oldest is always offered.
 -}
 data BootMode
     = ColdBoot
@@ -753,6 +793,17 @@ toHeaderPoint (SlotNo s, BlockHash bh) =
 no configured start point the follower preserves the
 historical Origin cold boot; with a configured point the
 first intersection request names that concrete block.
+
+Consulted only when the follower has no usable stored
+resume point: (i) a cold boot, where 'getResumePoints'
+is empty — for the initial intersection request and for
+the retry after @intersectNotFound@; or (ii) a warm UTxO
+store with 'csHistory' attached whose history store has
+no cursor yet ('sharedResumePoint' is 'Nothing') — for
+the initial request only, since a missing intersection
+on a warm boot fails closed. In every other case the
+resume candidates come from the stores and 'csStartPoint'
+has no effect.
 -}
 coldBootResumePoints :: ChainSyncConfig -> [HeaderPoint]
 coldBootResumePoints cfg =
@@ -800,14 +851,30 @@ mkIntersector bootMode cfg readinessVar idx = self
                     -- wiping the database.
                     error
                         "utxo-indexer: chain-sync found no \
-                        \intersection against any retained \
-                        \rollback-log point. The saved chain \
-                        \has diverged from the node beyond \
-                        \the security parameter k. Wipe \
-                        \the indexer DB to rebuild from \
-                        \Origin, or restart against a node \
-                        \whose chain still includes one of \
-                        \the saved points."
+                        \intersection, and the UTxO store \
+                        \already holds rollback-log points, so \
+                        \the follower fails closed instead of \
+                        \replaying over them. Two known routes \
+                        \lead here. \
+                        \(a) The saved chain has diverged from \
+                        \the node beyond the security \
+                        \parameter k. Wipe the indexer DB and \
+                        \rebuild, or restart against a node \
+                        \whose chain still includes one of the \
+                        \saved points. \
+                        \(b) The store is younger than the \
+                        \rollback depth: it cold-started inside \
+                        \the volatile window, and the chain \
+                        \rolled back past the point it started \
+                        \from before it retained k blocks. That \
+                        \point is never applied, so it is never \
+                        \a rollback-log point, and no retained \
+                        \point survives the rollback. Wipe the \
+                        \indexer DB and start again. A wiped \
+                        \store cold-boots from the configured \
+                        \start point, so choose one older than \
+                        \the rollback depth (or start from \
+                        \Origin)."
             }
 
 {- | Convert a chain-sync 'HeaderPoint' to the indexer's
