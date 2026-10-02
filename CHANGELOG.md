@@ -9,6 +9,30 @@
 
 ## Unreleased
 
+## [0.1.5.0](https://github.com/lambdasistemi/cardano-node-clients/compare/v0.1.4.0...v0.1.5.0) (2026-10-02)
+
+### Features
+
+* **devnet:** support protocol version 11 and full PlutusV3 cost model (#188) ([a10cdb7](https://github.com/lambdasistemi/cardano-node-clients/commit/a10cdb73317a2b6d5375b216f72f40b71736e648))
+* acquire Globals with N2C provider snapshot ([bb01006](https://github.com/lambdasistemi/cardano-node-clients/commit/bb010066cb8e5181534d2e1d48e5a4e785493fc7))
+* index live outputs by policy ID and asset name ([ce16b6d](https://github.com/lambdasistemi/cardano-node-clients/commit/ce16b6da387e0ad53c834eee6d1408473e75bf4f))
+* answer policy-and-asset queries on the utxo-indexer socket ([624c5e9](https://github.com/lambdasistemi/cardano-node-clients/commit/624c5e9f329240e2a1449b8960824d36ec13a905))
+* asset answer states network, coverage and freshness ([1e39e66](https://github.com/lambdasistemi/cardano-node-clients/commit/1e39e66a602fc11c5fe1a47892c05e3e456665f1))
+* **devnet:** run a hook while the restartable node is down ([9d3bc4f](https://github.com/lambdasistemi/cardano-node-clients/commit/9d3bc4ffbff9ee51b7bdabea69c2f8aeaa6bcd40))
+* **utxo-indexer:** upgrade pre-asset stores in place and keep the asset index across restart ([dfdcd89](https://github.com/lambdasistemi/cardano-node-clients/commit/dfdcd8924cc837329234e350aaebb6bbc7249201))
+* **utxo-indexer:** rebuild the asset index from the CLI and keep it across daemon restart ([bb4e3cc](https://github.com/lambdasistemi/cardano-node-clients/commit/bb4e3cccf43a6f7282e0bbf708fa7648d1c54047))
+* **utxo-indexer:** record the store's build coverage and serve it on asset answers ([cf91e2b](https://github.com/lambdasistemi/cardano-node-clients/commit/cf91e2b86925bc0492e314275b6dd5a08b6857f2))
+* add atomic indexed read views ([3dde6c7](https://github.com/lambdasistemi/cardano-node-clients/commit/3dde6c7fe68251171cb763c3858a103273b19898))
+* serve atomic socket read views for #220 ([2c6ce05](https://github.com/lambdasistemi/cardano-node-clients/commit/2c6ce05f1a2be9f98de0e26d60339060736c1078))
+
+### Bug Fixes
+
+* **n2c:** recover LSQ callers from connection loss ([2726c00](https://github.com/lambdasistemi/cardano-node-clients/commit/2726c00029007b749da61d2ec585d22af4ee0c7b))
+* **devnet:** stock committee arrangement blocks all governance enactment (#191) ([7c7e3d7](https://github.com/lambdasistemi/cardano-node-clients/commit/7c7e3d76e9668cf43eb407390f4e7e03cfd39ea1))
+* decode stored outputs whose coin needs eight bytes ([7c5d10a](https://github.com/lambdasistemi/cardano-node-clients/commit/7c5d10a90e8c1a90dd641610acc61e460e22de22))
+* **devnet:** unique per-run working directory ([638c70e](https://github.com/lambdasistemi/cardano-node-clients/commit/638c70e8002d6bcf10000fa4f0f482ef61779d0e))
+* name both routes to the warm-boot no-intersection error ([09bbc49](https://github.com/lambdasistemi/cardano-node-clients/commit/09bbc49d7d84308fb51c5905ec74f01e0422be48))
+
 ## [0.1.4.0](https://github.com/lambdasistemi/cardano-node-clients/compare/v0.1.3.0...v0.1.4.0) (2026-07-10)
 
 ### Features
