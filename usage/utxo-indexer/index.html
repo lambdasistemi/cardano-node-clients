@@ -1,0 +1,1964 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://lambdasistemi.github.io/cardano-node-clients/usage/utxo-indexer/">
+      
+      
+        <link rel="prev" href="../../installation/">
+      
+      
+        <link rel="next" href="../cardano-adversary/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+    
+    
+      
+        <title>utxo-indexer - cardano-node-clients</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#utxo-indexer" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="cardano-node-clients" class="md-header__button md-logo" aria-label="cardano-node-clients" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            cardano-node-clients
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              utxo-indexer
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lambdasistemi/cardano-node-clients" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="cardano-node-clients" class="md-nav__button md-logo" aria-label="cardano-node-clients" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    cardano-node-clients
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lambdasistemi/cardano-node-clients" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Usage
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    utxo-indexer
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    utxo-indexer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#read-wire-ndjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read wire (NDJSON)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#holders-of-a-native-asset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Holders of a native asset
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Holders of a native asset">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#datum-availability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Datum availability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fault-checks-in-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fault checks in CI
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#network-coverage-and-freshness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network, coverage and freshness
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Network, coverage and freshness">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coverage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#freshness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Freshness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rollbacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollbacks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#await-after-a-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        await after a rollback
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reconnect-behaviour-issue-97" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reconnect behaviour (issue #97)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restart-and-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restart and upgrade
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Restart and upgrade">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restart
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#upgrading-a-store-created-before-the-asset-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrading a store created before the asset index
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stderr-trace-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stderr trace stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#embedded-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Embedded use
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Embedded use">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-several-queries-at-one-indexed-point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read several queries at one indexed point
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-csstartpoint-is-consulted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When csStartPoint is consulted
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cardano-adversary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    cardano-adversary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modules
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Modules
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../modules/provider/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../modules/submitter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Submitter
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../modules/n2c/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    N2C
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../modules/validity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../modules/indexers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Indexers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="./" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Usage
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="utxo-indexer">utxo-indexer<a class="headerlink" href="#utxo-indexer" title="Permanent link">&para;</a></h1>
+<p>In-process address→UTxO indexer daemon. Follows the chain via
+Node-to-Client (N2C) ChainSync from a single Cardano relay, maintains
+an indexed view (in-memory or RocksDB-backed), and exposes four read
+primitives over a Unix-domain NDJSON socket: <code>ready</code>,
+<code>utxos_at &lt;addr&gt;</code>, <code>await &lt;txin&gt; [timeout_seconds]</code>, and
+<code>utxos_with_asset &lt;policy_id&gt; &lt;asset_name&gt;</code>.</p>
+<h2 id="cli">CLI<a class="headerlink" href="#cli" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>utxo-indexer<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--relay-socket<span class="w">   </span>/path/to/cardano-node/node.sock<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--listen<span class="w">         </span>/tmp/idx.sock<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--network-magic<span class="w">  </span><span class="m">42</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--byron-epoch-slots<span class="w"> </span><span class="m">86400</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="o">[</span>--ready-threshold-slots<span class="w"> </span><span class="m">60</span><span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="o">[</span>--security-param-k<span class="w"> </span><span class="m">2160</span><span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="o">[</span>--db-path<span class="w">        </span>/tmp/idx-db<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="o">[</span>--reconnect-initial-ms<span class="w">          </span><span class="m">1000</span><span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="o">[</span>--reconnect-max-ms<span class="w">              </span><span class="m">30000</span><span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="o">[</span>--reconnect-reset-threshold-ms<span class="w">  </span><span class="m">30000</span><span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="o">[</span>--node-ready-timeout-ms<span class="w">         </span>&lt;ms&gt;<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="o">[</span>--stale-after-seconds<span class="w">           </span><span class="m">600</span><span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="o">[</span>--rebuild-asset-index<span class="o">]</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--relay-socket</code></td>
+<td>—</td>
+<td>Unix socket of the upstream cardano-node relay.</td>
+</tr>
+<tr>
+<td><code>--listen</code></td>
+<td>—</td>
+<td>Path the indexer will bind for NDJSON consumers.</td>
+</tr>
+<tr>
+<td><code>--network-magic</code></td>
+<td>—</td>
+<td>Cardano network magic (mainnet=764824073, preprod=1, preview=2, antithesis testnet=42).</td>
+</tr>
+<tr>
+<td><code>--byron-epoch-slots</code></td>
+<td>—</td>
+<td>Byron-era epoch length (mainnet=21600, antithesis testnet=86400).</td>
+</tr>
+<tr>
+<td><code>--ready-threshold-slots</code></td>
+<td><code>60</code></td>
+<td><code>slotsBehind ≤ this ⇒ ready=true</code>.</td>
+</tr>
+<tr>
+<td><code>--security-param-k</code></td>
+<td><code>2160</code></td>
+<td>Cardano security parameter k; caps the rollback log.</td>
+</tr>
+<tr>
+<td><code>--db-path</code></td>
+<td>(in-memory)</td>
+<td>If set, RocksDB at this path. State survives process restart.</td>
+</tr>
+<tr>
+<td><code>--reconnect-initial-ms</code></td>
+<td><code>1000</code></td>
+<td>Base of the supervisor's full-jitter exponential backoff.</td>
+</tr>
+<tr>
+<td><code>--reconnect-max-ms</code></td>
+<td><code>30000</code></td>
+<td>Cap of the supervisor's backoff window.</td>
+</tr>
+<tr>
+<td><code>--reconnect-reset-threshold-ms</code></td>
+<td><code>30000</code></td>
+<td>Healthy-run duration that resets the supervisor's failure counter.</td>
+</tr>
+<tr>
+<td><code>--node-ready-timeout-ms</code></td>
+<td>unset</td>
+<td>Total cap on the LSQ tip probe. <strong>Unset = wait forever</strong> for the upstream node's ChainDB to load. Set explicitly for CI scenarios that want to fail fast.</td>
+</tr>
+<tr>
+<td><code>--stale-after-seconds</code></td>
+<td><code>600</code></td>
+<td>Seconds without follower progress after which a connected upstream makes asset answers <code>stale</code> (see <a href="#network-coverage-and-freshness">Network, coverage and freshness</a>). A positive whole number; anything else is a usage error.</td>
+</tr>
+<tr>
+<td><code>--rebuild-asset-index</code></td>
+<td>off</td>
+<td>Add the asset index in place to a RocksDB store that has none, from the outputs it already holds, while the daemon serves (see <a href="#restart-and-upgrade">Restart and upgrade</a>). Takes no value. On a store whose index is complete, a new store or the in-memory backend it changes nothing.</td>
+</tr>
+</tbody>
+</table>
+<p>All flags are parsed by <code>parseDaemonArgs</code> in
+<code>Cardano.Node.Client.UTxOIndexer.Daemon</code>; required flags are
+<code>--relay-socket</code>, <code>--listen</code>, <code>--network-magic</code>, and
+<code>--byron-epoch-slots</code>.</p>
+<h2 id="read-wire-ndjson">Read wire (NDJSON)<a class="headerlink" href="#read-wire-ndjson" title="Permanent link">&para;</a></h2>
+<p>One request line per connection, one response line, then EOF:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>REQ:  {&quot;ready&quot;: null}
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>RESP: {&quot;ready&quot;:&lt;bool&gt;, &quot;tipSlot&quot;:&lt;int|null&gt;,
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>       &quot;processedSlot&quot;:&lt;int|null&gt;, &quot;slotsBehind&quot;:&lt;int|null&gt;, ...}
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>REQ:  {&quot;utxos_at&quot;: &quot;&lt;hex-of-address-bytes&gt;&quot;}
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>RESP: {&quot;utxos&quot;: [{&quot;txin&quot;:&quot;&lt;txid&gt;#&lt;ix&gt;&quot;, &quot;txout&quot;:&quot;&lt;base16-cbor&gt;&quot;}, ...]}
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>REQ:  {&quot;await&quot;: &quot;&lt;txid_hex&gt;#&lt;ix&gt;&quot;}            # optional &quot;timeout_seconds&quot;: &lt;int&gt;
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>RESP: {&quot;slot&quot;:&lt;int&gt;, &quot;blockHash&quot;:&quot;&lt;hex&gt;&quot;, &quot;txout&quot;:&quot;&lt;base16-cbor&gt;&quot;}
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    | {&quot;timeout&quot;: true}
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>REQ:  {&quot;utxos_with_asset&quot;: {&quot;policy_id&quot;: &quot;&lt;56 hex&gt;&quot;, &quot;asset_name&quot;: &quot;&lt;0..64 hex&gt;&quot;}}
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>RESP: see &quot;Holders of a native asset&quot; below
+</span></code></pre></div>
+<p>Address bytes go on the wire as hex; bech32 parsing lives in the
+consumer. On upstream disconnect the <code>ready</code> response carries an
+<code>upstream</code> object naming the reason, attempt counter, and
+elapsed-since-disconnect time, while <code>utxos_at</code>, <code>await</code> and
+<code>utxos_with_asset</code> continue to be served from cached state. A line no
+request accepts is answered <code>{"error":"malformed json"}</code>.</p>
+<h2 id="holders-of-a-native-asset">Holders of a native asset<a class="headerlink" href="#holders-of-a-native-asset" title="Permanent link">&para;</a></h2>
+<p>You hold a policy ID and an asset name, and you want every live output
+that carries that asset: where it is, how much of the asset it holds,
+its exact ledger bytes, its datum, and the block that created it — all
+read at one point of the chain. <code>utxos_with_asset</code> answers exactly
+that, or tells you explicitly why it cannot; it never answers a
+partial list.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant C as Client
+    participant D as utxo-indexer socket
+    participant S as Index store
+    C-&gt;&gt;D: one request line {"utxos_with_asset": {...}}
+    alt request not readable
+        D--&gt;&gt;C: {"error":"invalid_asset_query","detail":...}
+    else request readable
+        D-&gt;&gt;S: one read: indexed point, holders, their bytes and creation points
+        S--&gt;&gt;D: snapshot, or why the store cannot answer
+        D-&gt;&gt;D: sample upstream freshness after the read
+        D--&gt;&gt;C: {"point","utxos","network","coverage","freshness","limits"} or {"error":"asset_index_unavailable",...}
+    end
+    D--&gt;&gt;C: EOF</code></pre>
+<h3 id="request">Request<a class="headerlink" href="#request" title="Permanent link">&para;</a></h3>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="nt">&quot;utxos_with_asset&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;policy_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;56 hex digits&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;asset_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;0 to 64 hex digits&gt;&quot;</span><span class="p">}}</span>
+</span></code></pre></div>
+<ul>
+<li><code>policy_id</code> is the 28-byte policy ID as hex.</li>
+<li><code>asset_name</code> is the raw asset name, 0 to 32 bytes, as hex. Names are
+  bytes, not text: the empty name (<code>""</code>) and names that are not UTF-8
+  are valid and distinct.</li>
+<li>Hex is read in any case; every hex value the daemon writes is lower
+  case.</li>
+<li>The object carries exactly these two fields. Any other field inside
+  it is refused rather than ignored, so a field this daemon does not
+  understand never silently changes the question.</li>
+<li>Send one request per line. A line that also carries a well-formed
+  <code>utxos_at</code>, <code>ready</code> or <code>await</code> request is answered as that request.</li>
+</ul>
+<h3 id="run-it">Run it<a class="headerlink" href="#run-it" title="Permanent link">&para;</a></h3>
+<p>With the daemon listening on <code>/tmp/idx.sock</code> (<code>--listen /tmp/idx.sock</code>):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s\n&#39;</span><span class="w"> </span><span class="s1">&#39;{&quot;utxos_with_asset&quot;:{&quot;policy_id&quot;:&quot;1f6b3ad2a4c9e8d7b6f5a4938271605f4e3d2c1b0a99887766554433&quot;,&quot;asset_name&quot;:&quot;746f6b656e&quot;}}&#39;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>socat<span class="w"> </span>-<span class="w"> </span>UNIX-CONNECT:/tmp/idx.sock
+</span></code></pre></div>
+<p><code>nc -U /tmp/idx.sock</code> works the same way in place of <code>socat</code>. The
+answer is one line; piped through <code>jq .</code> it reads:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;coverage&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">&quot;addresses&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;all&quot;</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;origin&quot;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;freshness&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">&quot;secondsSinceProgress&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="nt">&quot;slotsBehind&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;synced&quot;</span><span class="p">,</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="nt">&quot;tipSlot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1294</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">  </span><span class="nt">&quot;limits&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">  </span><span class="nt">&quot;network&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="nt">&quot;magic&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">  </span><span class="nt">&quot;point&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">    </span><span class="nt">&quot;blockHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00&quot;</span><span class="p">,</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">    </span><span class="nt">&quot;slot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1290</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="w">  </span><span class="nt">&quot;utxos&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="w">        </span><span class="nt">&quot;blockHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;6b1f4c2e9a8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b&quot;</span><span class="p">,</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="w">        </span><span class="nt">&quot;slot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1200</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a><span class="w">      </span><span class="nt">&quot;datum&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a><span class="w">        </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;none&quot;</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a><span class="w">      </span><span class="nt">&quot;quantity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;100&quot;</span><span class="p">,</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a><span class="w">      </span><span class="nt">&quot;txin&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0d6a2f9e8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f#0&quot;</span><span class="p">,</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a><span class="w">      </span><span class="nt">&quot;txout&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;82581d608a1f2e3d4c5b6a79881726354453627180918a7b6c5d4e3f2a1b0c9d821a001e8480a1581c1f6b3ad2a4c9e8d7b6f5a4938271605f4e3d2c1b0a99887766554433a145746f6b656e1864&quot;</span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35" href="#__codelineno-4-35"></a><span class="w">        </span><span class="nt">&quot;blockHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a3c5e7f9b1d2c4e6f8a0b2d4c6e8f0a2b4d6c8e0f2a4b6d8c0e2f4a6b8d0c2e4&quot;</span><span class="p">,</span>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36" href="#__codelineno-4-36"></a><span class="w">        </span><span class="nt">&quot;slot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1234</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37" href="#__codelineno-4-37"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38" href="#__codelineno-4-38"></a><span class="w">      </span><span class="nt">&quot;datum&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39" href="#__codelineno-4-39"></a><span class="w">        </span><span class="nt">&quot;cbor&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;182a&quot;</span><span class="p">,</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40" href="#__codelineno-4-40"></a><span class="w">        </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;inline&quot;</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41" href="#__codelineno-4-41"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42" href="#__codelineno-4-42"></a><span class="w">      </span><span class="nt">&quot;quantity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;5&quot;</span><span class="p">,</span>
+</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43" href="#__codelineno-4-43"></a><span class="w">      </span><span class="nt">&quot;txin&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;7e41c3a5b2d6f8e0a9c7b5d3f1e2c4a6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f8#2&quot;</span><span class="p">,</span>
+</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44" href="#__codelineno-4-44"></a><span class="w">      </span><span class="nt">&quot;txout&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a300581d603c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e701821a002dc6c0a1581c1f6b3ad2a4c9e8d7b6f5a4938271605f4e3d2c1b0a99887766554433a145746f6b656e05028201d81842182a&quot;</span>
+</span><span id="__span-4-45"><a id="__codelineno-4-45" name="__codelineno-4-45" href="#__codelineno-4-45"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-4-46"><a id="__codelineno-4-46" name="__codelineno-4-46" href="#__codelineno-4-46"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-4-47"><a id="__codelineno-4-47" name="__codelineno-4-47" href="#__codelineno-4-47"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-48"><a id="__codelineno-4-48" name="__codelineno-4-48" href="#__codelineno-4-48"></a><span class="w">        </span><span class="nt">&quot;blockHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a3c5e7f9b1d2c4e6f8a0b2d4c6e8f0a2b4d6c8e0f2a4b6d8c0e2f4a6b8d0c2e4&quot;</span><span class="p">,</span>
+</span><span id="__span-4-49"><a id="__codelineno-4-49" name="__codelineno-4-49" href="#__codelineno-4-49"></a><span class="w">        </span><span class="nt">&quot;slot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1234</span>
+</span><span id="__span-4-50"><a id="__codelineno-4-50" name="__codelineno-4-50" href="#__codelineno-4-50"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-4-51"><a id="__codelineno-4-51" name="__codelineno-4-51" href="#__codelineno-4-51"></a><span class="w">      </span><span class="nt">&quot;datum&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-52"><a id="__codelineno-4-52" name="__codelineno-4-52" href="#__codelineno-4-52"></a><span class="w">        </span><span class="nt">&quot;hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;5e9d8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f&quot;</span><span class="p">,</span>
+</span><span id="__span-4-53"><a id="__codelineno-4-53" name="__codelineno-4-53" href="#__codelineno-4-53"></a><span class="w">        </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hash&quot;</span>
+</span><span id="__span-4-54"><a id="__codelineno-4-54" name="__codelineno-4-54" href="#__codelineno-4-54"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-4-55"><a id="__codelineno-4-55" name="__codelineno-4-55" href="#__codelineno-4-55"></a><span class="w">      </span><span class="nt">&quot;quantity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
+</span><span id="__span-4-56"><a id="__codelineno-4-56" name="__codelineno-4-56" href="#__codelineno-4-56"></a><span class="w">      </span><span class="nt">&quot;txin&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;7e41c3a5b2d6f8e0a9c7b5d3f1e2c4a6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f8#3&quot;</span><span class="p">,</span>
+</span><span id="__span-4-57"><a id="__codelineno-4-57" name="__codelineno-4-57" href="#__codelineno-4-57"></a><span class="w">      </span><span class="nt">&quot;txout&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;83581d603c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7821a002625a0a1581c1f6b3ad2a4c9e8d7b6f5a4938271605f4e3d2c1b0a99887766554433a145746f6b656e0158205e9d8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f&quot;</span>
+</span><span id="__span-4-58"><a id="__codelineno-4-58" name="__codelineno-4-58" href="#__codelineno-4-58"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-59"><a id="__codelineno-4-59" name="__codelineno-4-59" href="#__codelineno-4-59"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-4-60"><a id="__codelineno-4-60" name="__codelineno-4-60" href="#__codelineno-4-60"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>When no live output holds the asset the answer is still a full answer,
+with an empty list: <code>{"point":{...},"utxos":[],...}</code> and the same
+<code>network</code>, <code>coverage</code>, <code>freshness</code> and <code>limits</code>. Whether that empty list
+is the chain's answer is what <code>limits</code> says: see
+<a href="#network-coverage-and-freshness">Network, coverage and freshness</a>.</p>
+<h3 id="fields">Fields<a class="headerlink" href="#fields" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>point.slot</code>, <code>point.blockHash</code></td>
+<td>The newest applied block the answer was read at. Every holder, every byte and every creation point below come from this one read.</td>
+</tr>
+<tr>
+<td><code>utxos</code></td>
+<td>Every live output holding the asset, in ascending output-reference order (transaction ID bytes, then output index as a number). No first-match, no uniqueness assumption.</td>
+</tr>
+<tr>
+<td><code>utxos[].txin</code></td>
+<td>The output reference, <code>&lt;txid hex&gt;#&lt;index&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>utxos[].txout</code></td>
+<td>The output's ledger CBOR, byte-identical to what <code>utxos_at</code> returns for the same <code>txin</code>.</td>
+</tr>
+<tr>
+<td><code>utxos[].quantity</code></td>
+<td>How much of the asset the output holds, as a decimal string: quantities reach 2^64−1, beyond what JSON numbers carry exactly in many consumers.</td>
+</tr>
+<tr>
+<td><code>utxos[].created.slot</code>, <code>utxos[].created.blockHash</code></td>
+<td>The block that created the output — the same point <code>await</code> reports for that <code>txin</code>.</td>
+</tr>
+<tr>
+<td><code>utxos[].datum</code></td>
+<td>The datum, read from the <code>txout</code> bytes themselves (next section).</td>
+</tr>
+<tr>
+<td><code>network.magic</code></td>
+<td>The network magic the daemon's follower connects with (<code>--network-magic</code>).</td>
+</tr>
+<tr>
+<td><code>coverage</code></td>
+<td>What the store covers, as recorded when it was created: <code>start</code> (<code>"origin"</code>, the <code>{"slot","blockHash"}</code> it started from, or <code>"unknown"</code>) and <code>addresses</code> (<code>"all"</code>, <code>"filtered"</code>, or <code>"unknown"</code>).</td>
+</tr>
+<tr>
+<td><code>freshness</code></td>
+<td>How current the answer is: <code>status</code>, the last observed upstream <code>tipSlot</code>, how many slots <code>point</code> is <code>slotsBehind</code> that tip, and <code>secondsSinceProgress</code> of the follower.</td>
+</tr>
+<tr>
+<td><code>limits</code></td>
+<td>Every reason this answer may differ from the chain-wide answer at <code>point</code>. <code>[]</code> is the only form that claims the chain's answer.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="datum-availability">Datum availability<a class="headerlink" href="#datum-availability" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th><code>datum.kind</code></th>
+<th>The output carries</th>
+<th>Extra field</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>no datum</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>hash</code></td>
+<td>only the 32-byte hash of a datum; the datum itself is not in the output and the daemon does not look it up</td>
+<td><code>hash</code>: those 32 bytes</td>
+</tr>
+<tr>
+<td><code>inline</code></td>
+<td>the datum itself</td>
+<td><code>cbor</code>: the inline datum's CBOR exactly as it appears inside <code>txout</code> (in the sample, <code>182a</code> is the tail of the second <code>txout</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>The datum view is never made up: if an output's bytes cannot be read,
+the query answers <code>asset_index_unavailable</code> with <code>inconsistent</code> instead.</p>
+<h3 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    R[request line] --&gt;|not an object of exactly policy_id and asset_name, bad hex or lengths| E1["invalid_asset_query + detail"]
+    R --&gt;|readable| A{store holds a complete asset index?}
+    A --&gt;|no, an upgrade is running| E5["asset_index_unavailable, reason rebuilding"]
+    A --&gt;|no| E2["asset_index_unavailable, reason absent"]
+    A --&gt;|yes| P{store has applied a block?}
+    P --&gt;|no| E3["asset_index_unavailable, reason no_indexed_point"]
+    P --&gt;|yes| H{every holder found with readable bytes?}
+    H --&gt;|no| E4["asset_index_unavailable, reason inconsistent"]
+    H --&gt;|yes| OK["point + utxos"]</code></pre>
+<p><code>invalid_asset_query</code> carries a human-readable <code>detail</code>; only the
+<code>error</code> value is stable. For example:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>{&quot;detail&quot;:&quot;policy_id must be 28 bytes (56 hex digits), got 4 bytes&quot;,&quot;error&quot;:&quot;invalid_asset_query&quot;}
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>{&quot;detail&quot;:&quot;unknown field limit in utxos_with_asset&quot;,&quot;error&quot;:&quot;invalid_asset_query&quot;}
+</span></code></pre></div>
+<p><code>asset_index_unavailable</code> carries a stable <code>reason</code>:</p>
+<table>
+<thead>
+<tr>
+<th><code>reason</code></th>
+<th>Meaning</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rebuilding</code></td>
+<td>The daemon is adding the asset index to this store (started with <code>--rebuild-asset-index</code>, or continuing an upgrade an earlier run began). <code>utxos_at</code>, <code>ready</code> and <code>await</code> answer as usual meanwhile.</td>
+<td>Retry later; the answer turns into the holders once every live output is indexed. See <a href="#restart-and-upgrade">Restart and upgrade</a>.</td>
+</tr>
+<tr>
+<td><code>absent</code></td>
+<td>The store has no complete asset index: it was created by an earlier version of the daemon, or it met an output it could not read. Such a store keeps answering <code>utxos_at</code>, <code>ready</code> and <code>await</code>.</td>
+<td>Restart the daemon on the same <code>--db-path</code> with <code>--rebuild-asset-index</code> (see <a href="#restart-and-upgrade">Restart and upgrade</a>). If the answer is <code>absent</code> again once that upgrade ends, the store holds an output the daemon cannot read: start it on a new <code>--db-path</code>, which indexes assets from its first block.</td>
+</tr>
+<tr>
+<td><code>no_indexed_point</code></td>
+<td>The store has no point to answer at yet: no block applied, or the daemon is still in its initial catch-up from genesis, which records no rollback points.</td>
+<td>Retry once <code>ready</code> is <code>true</code>.</td>
+</tr>
+<tr>
+<td><code>inconsistent</code></td>
+<td>An index entry has no matching live output, or an output's bytes cannot be read.</td>
+<td>Report it; the store needs rebuilding.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="fault-checks-in-ci">Fault checks in CI<a class="headerlink" href="#fault-checks-in-ci" title="Permanent link">&para;</a></h3>
+<p>Two CI jobs show that the tests guarding this answer fail when the
+behaviour they guard breaks, not only when their setup does. Each
+builds the asset query from a copy of the source with one fault
+patched in (<code>nix/faults/*.patch</code>; the shipped daemon and library are
+never built with it), runs the one guarding example, and passes only
+if that example fails on an expectation.</p>
+<table>
+<thead>
+<tr>
+<th>Job</th>
+<th>Fault</th>
+<th>Guarding example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fault-asset-matching</code></td>
+<td>the index walk keeps a row on its policy alone, so other asset names of the policy are returned</td>
+<td><code>…asset index/transactional maintenance against the model (I1)/matches after create, move, split, partial spend and burn</code></td>
+</tr>
+<tr>
+<td><code>fault-snapshot-binding</code></td>
+<td>the read runs as separate transactions and waits for the indexed point to move, so the point, the matches and their creation points come from different snapshots</td>
+<td><code>…asset index/concurrent snapshots (I5)/every snapshot equals the model state at its point</code></td>
+</tr>
+</tbody>
+</table>
+<p>Run one locally with <code>nix run --quiet .#fault-asset-matching</code> (or
+<code>.#fault-snapshot-binding</code>). It prints one line:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>FAULT-CHECK fault-asset-matching outcome=KILLED example=&lt;hspec path&gt;
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Exit</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>KILLED</code></td>
+<td>0</td>
+<td>the example failed on an expectation under the fault: the guard works</td>
+</tr>
+<tr>
+<td><code>SURVIVED</code></td>
+<td>3</td>
+<td>the example passed under the fault: the guard misses this fault</td>
+</tr>
+<tr>
+<td><code>SETUP-FAILURE:&lt;reason&gt;</code></td>
+<td>2</td>
+<td>no verdict: <code>fault-not-applied</code> (the patch no longer applies to the source), <code>example-not-run</code>, <code>example-not-unique</code>, <code>example-pending</code>, <code>failed-by-exception</code> (the example failed by an exception, not an expectation), <code>harness-failed</code> (the check script itself failed), <code>usage</code> (the runner was not given exactly one example)</td>
+</tr>
+<tr>
+<td>no <code>FAULT-CHECK</code> line</td>
+<td>1</td>
+<td>no verdict: nix failed before the check ran, typically a faulted copy that no longer compiles</td>
+</tr>
+</tbody>
+</table>
+<p>The table is itself checked: the <code>fault-check-runner</code> check (built by
+CI's build gate) drives the check script through every row with a
+stub runner, and the unit suite drives the classifier through every
+kind of example result; both fail if any outcome exits 1 or gets the
+wrong code.</p>
+<p>A <code>fault-not-applied</code> or no-line failure after a change to
+<code>Indexer.hs</code> means the patch must be refreshed to the new source; a
+<code>SURVIVED</code> means the guarding test must be strengthened.</p>
+<h2 id="network-coverage-and-freshness">Network, coverage and freshness<a class="headerlink" href="#network-coverage-and-freshness" title="Permanent link">&para;</a></h2>
+<p>An empty or short <code>utxos</code> list can mean two things: the chain holds no
+more outputs of the asset at <code>point</code>, or this index cannot see them.
+Every successful asset answer says which, in the same line:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">&quot;network&quot;</span><span class="p">:</span><span class="w">   </span><span class="p">{</span><span class="nt">&quot;magic&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">},</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">&quot;coverage&quot;</span><span class="p">:</span><span class="w">  </span><span class="p">{</span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;origin&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;addresses&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;all&quot;</span><span class="p">},</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nt">&quot;freshness&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;synced&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tipSlot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1294</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;slotsBehind&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;secondsSinceProgress&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nt">&quot;limits&quot;</span><span class="p">:</span><span class="w">    </span><span class="p">[]</span>
+</span></code></pre></div>
+<p>Read <code>limits</code> first. <strong>An empty <code>limits</code> is the only answer that claims
+to be the chain's answer at <code>point</code>.</strong> Every other answer names each
+reason it may differ, whether <code>utxos</code> is empty or not.</p>
+<table>
+<thead>
+<tr>
+<th><code>limits</code> entry</th>
+<th>Present when</th>
+<th>What it means for <code>utxos</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coverage_unknown</code></td>
+<td><code>coverage.start</code> and <code>coverage.addresses</code> are <code>"unknown"</code></td>
+<td>The store holds no record of how it was built: its start point and its address set are unknown, so holders may be missing for either reason.</td>
+</tr>
+<tr>
+<td><code>address_filter</code></td>
+<td><code>coverage.addresses</code> is <code>"filtered"</code></td>
+<td>Outputs at addresses outside the store's address set were never indexed: holders there are missing.</td>
+</tr>
+<tr>
+<td><code>partial_history</code></td>
+<td><code>coverage.start</code> is a point, not <code>"origin"</code> or <code>"unknown"</code></td>
+<td>Outputs created before the start point were never indexed: holders created earlier are missing.</td>
+</tr>
+<tr>
+<td><code>catching_up</code></td>
+<td><code>freshness.status</code> is <code>catching_up</code></td>
+<td><code>point</code> is behind the upstream tip: later creations and spends are not reflected yet.</td>
+</tr>
+<tr>
+<td><code>disconnected</code></td>
+<td><code>freshness.status</code> is <code>disconnected</code></td>
+<td>The upstream node is unreachable: the answer comes from the cached store, and how far the chain has moved since is unknown.</td>
+</tr>
+<tr>
+<td><code>stale</code></td>
+<td><code>freshness.status</code> is <code>stale</code></td>
+<td>The upstream is connected but the follower has made no progress for longer than <code>--stale-after-seconds</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Entries appear in that order, each at most once. The two error answers
+(<code>invalid_asset_query</code>, <code>asset_index_unavailable</code>) carry none of these
+members and are unchanged.</p>
+<h3 id="network">Network<a class="headerlink" href="#network" title="Permanent link">&para;</a></h3>
+<p><code>network.magic</code> is the network magic the daemon's follower connects
+with, the <code>--network-magic</code> it was started with. The follower's
+handshake with the node fails on any other magic, so a daemon that is
+following a node is on that node's network.</p>
+<h3 id="coverage">Coverage<a class="headerlink" href="#coverage" title="Permanent link">&para;</a></h3>
+<p><code>coverage</code> is the coverage the <strong>store</strong> was built with, recorded in
+the store when it was created — not the configuration of the process
+serving it:</p>
+<table>
+<thead>
+<tr>
+<th>Member</th>
+<th>Values</th>
+<th>From</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start</code></td>
+<td><code>"origin"</code>, <code>{"slot": &lt;int&gt;, "blockHash": "&lt;hex&gt;"}</code>, or <code>"unknown"</code></td>
+<td>the recorded start point (none means origin)</td>
+</tr>
+<tr>
+<td><code>addresses</code></td>
+<td><code>"all"</code>, <code>"filtered"</code>, or <code>"unknown"</code></td>
+<td>the recorded interest set: every address, or an address set</td>
+</tr>
+</tbody>
+</table>
+<p>What is recorded, and when:</p>
+<ul>
+<li>The first follower session over an <strong>empty</strong> store (no live output,
+  no rollback-log entry) records its start point and its interest set,
+  including the full address set, before chain-sync starts. The record
+  is written once and never changed.</li>
+<li>A later session whose start point or interest set differs — a start
+  point added, removed or moved, <code>"all"</code> against a set, or one address
+  set against another — is <strong>refused</strong> before chain-sync starts, with
+  an error (<code>BuildCoverageRefusal</code>) naming the recorded and the
+  requested coverage. The store is left untouched; reopen it with the
+  configuration it was built with, or build a new store. A record that
+  cannot be read is refused the same way and kept as it is.</li>
+<li>A store that already held blocks when coverage started being
+  recorded has no record, and none is ever written into it: its
+  coverage cannot be known. It is served with <code>start</code> and <code>addresses</code>
+  both <code>"unknown"</code> and the <code>coverage_unknown</code> limit, whatever the
+  serving configuration. The same holds for a store still opened with
+  only the four pre-asset column families.</li>
+</ul>
+<pre class="mermaid"><code>flowchart TD
+    S[follower session: start point, interest set] --&gt; R{store holds a record?}
+    R -- yes, equal --&gt; Serve[serve the recorded coverage]
+    R -- yes, different or unreadable --&gt; Refuse[refuse before chain-sync; store untouched]
+    R -- no --&gt; E{store empty?}
+    E -- yes --&gt; Rec[record the session's coverage, then serve it]
+    E -- no --&gt; U[serve unknown coverage; write nothing]</code></pre>
+<p>The bundled <code>utxo-indexer</code> binary always follows from origin over every
+address: a store it creates answers
+<code>{"start":"origin","addresses":"all"}</code>. The other values come from
+in-process followers built with a start point or an address set (see
+<a href="#embedded-use">Embedded use</a>).</p>
+<h3 id="freshness">Freshness<a class="headerlink" href="#freshness" title="Permanent link">&para;</a></h3>
+<p><code>freshness</code> is sampled once per answer, <strong>after</strong> the store read that
+produced <code>point</code> and <code>utxos</code>, and measured against that <code>point</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Member</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status</code></td>
+<td><code>synced</code>, <code>catching_up</code>, <code>disconnected</code> or <code>stale</code> (rules below).</td>
+</tr>
+<tr>
+<td><code>tipSlot</code></td>
+<td>The last upstream tip slot the follower observed; <code>null</code> before the first block.</td>
+</tr>
+<tr>
+<td><code>slotsBehind</code></td>
+<td><code>tipSlot − point.slot</code>, clamped at 0; <code>null</code> when <code>tipSlot</code> is <code>null</code>. It is computed from this answer's <code>point</code>, not from the follower's latest processed slot, so it says how far <em>this answer</em> is behind.</td>
+</tr>
+<tr>
+<td><code>secondsSinceProgress</code></td>
+<td>Whole seconds since the follower last made progress: applied a block, or saw its upstream connect or disconnect.</td>
+</tr>
+</tbody>
+</table>
+<p>The status is the first rule that holds:</p>
+<pre class="mermaid"><code>flowchart TD
+    S[sample after the store read] --&gt; D{upstream reported down?}
+    D --&gt;|yes| DIS[disconnected]
+    D --&gt;|no| ST{secondsSinceProgress &gt; --stale-after-seconds?}
+    ST --&gt;|yes| STALE[stale]
+    ST --&gt;|no| T{tipSlot known?}
+    T --&gt;|no| CU[catching_up]
+    T --&gt;|yes| B{slotsBehind &gt; --ready-threshold-slots?}
+    B --&gt;|yes| CU
+    B --&gt;|no| SY[synced]</code></pre>
+<ul>
+<li><code>disconnected</code> beats everything: the reconnect supervisor reports the
+  upstream down, the same state <code>ready</code> shows as its <code>upstream</code> object.</li>
+<li><code>stale</code> uses wall-clock time since the last progress, not slot
+  arithmetic, so it needs no genesis parameters. A chain that produces
+  no block for longer than the bound also reads as <code>stale</code>; choose the
+  bound well above the network's longest normal block gap.</li>
+<li><code>catching_up</code> uses the same threshold as <code>ready</code>
+  (<code>--ready-threshold-slots</code>): an answer at most that many slots behind
+  the tip is <code>synced</code>.</li>
+<li>A daemon started with no node behind its relay socket answers
+  <code>catching_up</code> (no tip yet) until the stale bound passes, then <code>stale</code>.</li>
+</ul>
+<h3 id="rollbacks">Rollbacks<a class="headerlink" href="#rollbacks" title="Permanent link">&para;</a></h3>
+<p><code>limits: []</code> means the answer is the chain's answer <strong>at <code>point</code></strong>, not
+that <code>point</code> is final. A block within the last <code>k</code> blocks
+(<code>--security-param-k</code>) can still be rolled back; after a rollback the
+same query may answer at an earlier <code>point</code> with different holders, and
+<code>created</code> points of outputs brought back follow
+<a href="#await-after-a-rollback"><code>await</code> after a rollback</a>. A client that
+needs settled holders compares <code>point.slot</code> with how deep it requires
+the block to be.</p>
+<h2 id="await-after-a-rollback"><code>await</code> after a rollback<a class="headerlink" href="#await-after-a-rollback" title="Permanent link">&para;</a></h2>
+<p>A rollback can bring back an output that a rolled-back block had spent.
+For such an output, <code>await</code> (and the asset query's <code>created</code>) report the
+block that originally created it — not the block that was rolled back:</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Chain
+    participant Index as Index store
+    Chain-&gt;&gt;Index: block at slot 1200 creates output o
+    Chain-&gt;&gt;Index: block at slot 1250 spends o
+    Chain-&gt;&gt;Index: rollback to slot 1240 (o is live again)
+    Note over Index: await o and created report slot 1200</code></pre>
+<p>Rollback history recorded by earlier versions of the daemon carries no
+creation point: an output brought back by such an entry reports the
+rolled-back block, as before. Every other <code>await</code> answer is unchanged.</p>
+<h2 id="reconnect-behaviour-issue-97">Reconnect behaviour (issue #97)<a class="headerlink" href="#reconnect-behaviour-issue-97" title="Permanent link">&para;</a></h2>
+<p>The daemon survives upstream relay disconnects (e.g. relay container
+restart) without exiting:</p>
+<ul>
+<li>the listen socket keeps accepting consumer connections;</li>
+<li><code>ready</code> returns <code>ready=false</code> with the <code>upstream</code> reason while
+  disconnected;</li>
+<li><code>utxos_at</code> and <code>await</code> keep serving cached state — consumer
+  connections are never EOFed because of an upstream disconnect;</li>
+<li>before each reconnect attempt the supervisor probes the relay via
+  LocalStateQuery (acquire volatile tip + read tip); ChainSync is
+  attached only once the probe sees a non-Origin tip;</li>
+<li>reconnect retries use full-jitter exponential backoff (defaults
+  1 s → 30 s) via <code>Control.Retry</code>.</li>
+</ul>
+<p>Operators no longer need orchestrator-level <code>restart: always</code> on the
+indexer container to recover from peer flapping.</p>
+<h2 id="restart-and-upgrade">Restart and upgrade<a class="headerlink" href="#restart-and-upgrade" title="Permanent link">&para;</a></h2>
+<p>You run the daemon on a RocksDB <code>--db-path</code> and stop it for a deploy, a
+host reboot or a new binary. When it comes back on the same directory
+you want the same answers, including <code>utxos_with_asset</code>. If the
+directory was created by a daemon that predates the asset index, you
+want to add the index in place. You don't want to resync the chain
+into a new directory or get a wrong list in the meantime.</p>
+<pre class="mermaid"><code>stateDiagram-v2
+    [*] --&gt; Complete: new --db-path (indexed from its first block)
+    [*] --&gt; Absent: --db-path created before the asset index
+    Complete --&gt; Complete: stop and start, flag or not
+    Absent --&gt; Absent: start without --rebuild-asset-index
+    Absent --&gt; Rebuilding: start with --rebuild-asset-index
+    Rebuilding --&gt; Rebuilding: stopped mid-way, started again (flag or not)
+    Rebuilding --&gt; Complete: every live output indexed
+    Rebuilding --&gt; Absent: an output whose bytes cannot be read</code></pre>
+<h3 id="restart">Restart<a class="headerlink" href="#restart" title="Permanent link">&para;</a></h3>
+<p>Stop the daemon and start it on the same <code>--db-path</code>. It resumes the
+chain from the newest block the store recorded and answers
+<code>utxos_with_asset</code> with the same holders, bytes, quantities and
+creation points as before the stop. It then follows the chain on from
+there. Nothing has to be rebuilt.</p>
+<p>This holds once the daemon has applied a block within k slots of the
+chain tip (k is <code>--security-param-k</code>): from then on the store records
+the points it resumes from. A daemon stopped earlier, during its initial
+catch-up from genesis, has recorded none. On restart it starts the
+chain again from genesis, over the blocks it already holds.</p>
+<p>If the node's chain no longer includes any of the stored points, the
+daemon refuses to resume rather than replay from genesis over the
+store; <a href="#when-csstartpoint-is-consulted">When <code>csStartPoint</code> is consulted</a>
+names the two ways this happens and how to recover.</p>
+<h3 id="upgrading-a-store-created-before-the-asset-index">Upgrading a store created before the asset index<a class="headerlink" href="#upgrading-a-store-created-before-the-asset-index" title="Permanent link">&para;</a></h3>
+<p>A store written by a daemon that predates the asset index answers
+<code>utxos_with_asset</code> with <code>asset_index_unavailable</code>, reason <code>absent</code>, and
+keeps serving everything else. To add the index in place:</p>
+<ol>
+<li>Stop the daemon and keep a copy of the directory. The upgrade is
+   one-way from the moment it starts: the first start with the flag
+   adds the asset index's column families, and from then on a binary
+   that predates the index cannot open the store, even if the upgrade
+   is stopped before it completes. The copy is your way back.</li>
+</ol>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>cp<span class="w"> </span>-a<span class="w"> </span>/var/lib/utxo-indexer<span class="w"> </span>/var/lib/utxo-indexer.before-asset-index
+</span></code></pre></div>
+<ol>
+<li>Start the daemon on the same directory with <code>--rebuild-asset-index</code>:</li>
+</ol>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>utxo-indexer<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--relay-socket<span class="w"> </span>/path/to/cardano-node/node.sock<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>--listen<span class="w"> </span>/tmp/idx.sock<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>--network-magic<span class="w"> </span><span class="m">764824073</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>--byron-epoch-slots<span class="w"> </span><span class="m">21600</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span>--db-path<span class="w"> </span>/var/lib/utxo-indexer<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>--rebuild-asset-index
+</span></code></pre></div>
+<p>The daemon builds the index from the outputs the store already holds,
+while it follows the chain and serves the socket:</p>
+<table>
+<thead>
+<tr>
+<th>Request</th>
+<th>While the index is being built</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>utxos_at</code></td>
+<td>Answered as usual, byte for byte.</td>
+</tr>
+<tr>
+<td><code>await</code></td>
+<td>Answered as usual.</td>
+</tr>
+<tr>
+<td><code>ready</code></td>
+<td>Answered as usual; the daemon keeps following the chain.</td>
+</tr>
+<tr>
+<td><code>utxos_with_asset</code></td>
+<td><code>asset_index_unavailable</code>, reason <code>rebuilding</code>, until every live output is indexed. After that, the holders. It never answers a partial list.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Stopped mid-way?</strong> The next start continues the upgrade from where
+  it stopped, with or without the flag. One exception: a daemon stopped
+  while it was adding the column families, before the upgrade began,
+  leaves a store that opens as <code>absent</code> without the flag; start it with
+  the flag again and the upgrade continues.</li>
+<li><strong>Leaving the flag on is harmless.</strong> On a store whose index is
+  complete, or on a new store, it changes nothing. The in-memory
+  backend (no <code>--db-path</code>) ignores it.</li>
+<li><strong>An output the daemon cannot read</strong> ends the upgrade without an
+  index, and the answer goes back to <code>absent</code>. The store keeps
+  serving <code>utxos_at</code>, <code>ready</code> and <code>await</code>. Start the daemon on a new
+  <code>--db-path</code> to get the asset query.</li>
+</ul>
+<h2 id="stderr-trace-stream">Stderr trace stream<a class="headerlink" href="#stderr-trace-stream" title="Permanent link">&para;</a></h2>
+<p>Every lifecycle transition emits one line on stderr:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>2026-04-30T12:34:56.789Z INFO indexer event=started        socketPath=... dbPath=...
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>2026-04-30T12:35:42.103Z INFO indexer event=disconnected   reason=bearer-closed
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>2026-04-30T12:35:42.380Z INFO indexer event=node-replaying attempt=1 elapsedMs=275
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>2026-04-30T12:35:43.500Z INFO indexer event=reconnecting   attempt=1 waitMs=312
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>2026-04-30T12:35:44.815Z INFO indexer event=reconnected    resumeSlot=12345 elapsedMs=2712
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>2026-04-30T12:40:00.001Z INFO indexer event=stopped        reason=normal
+</span></code></pre></div>
+<p><code>grep '^.*indexer '</code> is the operator-friendly filter. Counting
+<code>event=disconnected</code> vs <code>event=reconnected</code> per peer-restart cycle is
+the recommended fault-injection assertion; <code>event=node-replaying</code>
+lines reveal that the upstream relay is alive but its ChainDB hasn't
+finished loading.</p>
+<h2 id="embedded-use">Embedded use<a class="headerlink" href="#embedded-use" title="Permanent link">&para;</a></h2>
+<p>Embedders that want to route <code>N2CEvent</code>s into their own tracer can
+pass a custom <code>Tracer IO N2CEvent</code> to
+<code>Cardano.Node.Client.UTxOIndexer.Daemon.runDaemon</code>'s first argument
+instead of <code>defaultStderrTracer</code>. To own the <code>IndexerHandle</code> (RocksDB
+is single-writer) and run the follower without the NDJSON server, use
+<code>Cardano.Node.Client.UTxOIndexer.Follower.withChainSyncFollower</code>. The
+<code>cardano-tx-generator</code> daemon in
+<a href="https://github.com/lambdasistemi/cardano-tx-tools">lambdasistemi/cardano-tx-tools</a>
+embeds the indexer this way.</p>
+<h3 id="read-several-queries-at-one-indexed-point">Read several queries at one indexed point<a class="headerlink" href="#read-several-queries-at-one-indexed-point" title="Permanent link">&para;</a></h3>
+<p><code>IndexerHandle.readView</code> accepts a <code>NonEmpty ReadQuery</code> and returns
+<code>IO (Either AssetQueryUnavailable IndexedView)</code>. Use <code>AddressQuery address</code>
+for an address's live outputs and <code>AssetQuery policyId assetName</code> for an
+asset's live holders:</p>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nf">readView</span><span class="w"> </span><span class="n">handle</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="p">(</span><span class="kt">AddressQuery</span><span class="w"> </span><span class="n">address</span><span class="w"> </span><span class="kt">:|</span><span class="w"> </span><span class="p">[</span><span class="kt">AssetQuery</span><span class="w"> </span><span class="n">policyId</span><span class="w"> </span><span class="n">assetName</span><span class="p">,</span><span class="w"> </span><span class="kt">AddressQuery</span><span class="w"> </span><span class="n">address</span><span class="p">])</span>
+</span></code></pre></div>
+<p>Import <code>NonEmpty(..)</code> from <code>Data.List.NonEmpty</code> and the view types from
+<code>Cardano.Node.Client.UTxOIndexer.Indexer</code>. On success, <code>ivPoint</code> is the
+indexed <code>(SlotNo, BlockHash)</code> shared by every answer in <code>ivResults</code>.
+Results preserve query order and duplicates: an <code>AddressQuery</code> produces
+<code>AddressResult [(TxIn, TxOut)]</code>, and an <code>AssetQuery</code> produces
+<code>AssetResult [AssetMatch]</code>. Each list is ascending by <code>TxIn</code>; asset matches
+retain the stored output bytes, quantity and original creation point,
+including after rollback.</p>
+<p>Availability, point, results and provenance come from one storage
+transaction: one RocksDB snapshot or one in-memory state read. The view is
+materialized; traversing it cannot reread storage, and it stays valid after
+further apply/rollback operations or after the indexer closes. It reads the
+current indexed state; it does not acquire a requested historical point.</p>
+<p>An empty or restoration-only store returns <code>Left NoIndexedPoint</code>. An
+absent, incomplete or degraded asset index returns <code>Left AssetIndexAbsent</code>,
+and a rebuilding index returns <code>Left AssetIndexRebuilding</code>. A requested
+asset row missing live data returns <code>Left (AssetIndexInconsistent txIn)</code>.
+These errors refuse the whole batch without returning partial results.
+<strong>Address-only views also refuse when the asset index is unavailable.</strong>
+The existing <code>snapshotAt</code> read keeps its signature and behavior and remains
+available for ordinary address reads on a degraded store.</p>
+<h3 id="when-csstartpoint-is-consulted">When <code>csStartPoint</code> is consulted<a class="headerlink" href="#when-csstartpoint-is-consulted" title="Permanent link">&para;</a></h3>
+<p><code>ChainSyncConfig.csStartPoint</code> is consulted only when the follower has
+no usable stored resume point:</p>
+<ol>
+<li><strong>cold boot</strong> — the UTxO store holds no rollback-log point
+   (<code>getResumePoints</code> is empty);</li>
+<li><strong>history store without a cursor</strong> — <code>csHistory</code> is attached and its
+   history store has no cursor yet, so there is no shared resume point
+   (<code>sharedResumePoint</code> is <code>Nothing</code>), even though the UTxO store is
+   warm.</li>
+</ol>
+<p>In every other case chain-sync resume candidates come from the stores
+and <code>csStartPoint</code> does not choose them. A store that recorded its
+coverage refuses a session whose <code>csStartPoint</code> differs from the
+recorded one (see <a href="#coverage">Coverage</a>); a store without a record
+ignores it. The bundled daemon sets no start point and
+cold-boots from Origin.</p>
+<pre class="mermaid"><code>flowchart TD
+    Boot[boot] --&gt; Q{UTxO store holds a rollback-log point?}
+    Q -- no --&gt; Cold[cold boot: offer csStartPoint or Origin]
+    Q -- yes --&gt; H{csHistory attached and history store has no cursor?}
+    H -- no --&gt; Warm[warm boot: offer the stored points]
+    H -- yes --&gt; WarmStart[warm boot: offer csStartPoint or Origin]
+    Cold -- no intersection --&gt; Cold
+    Warm -- no intersection --&gt; Fail[fail closed]
+    WarmStart -- no intersection --&gt; Fail</code></pre>
+<p>A cold boot that finds no intersection retries. A warm boot that finds
+none fails closed. When the stored points were offered, two routes lead
+there:</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Cause</th>
+<th>Recovery</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(a) divergence beyond <code>k</code></td>
+<td>the saved chain diverged from the node by more than the security parameter <code>k</code></td>
+<td>wipe the DB and rebuild, or restart against a node whose chain still includes one of the saved points</td>
+</tr>
+<tr>
+<td>(b) store younger than the rollback depth</td>
+<td>the store cold-started inside the volatile window, and the chain rolled back past its start point before the store retained <code>k</code> blocks</td>
+<td>wipe the store (it holds fewer than <code>k</code> blocks) and cold-start again from a start point outside the volatile window, at least <code>k</code> blocks behind the tip</td>
+</tr>
+</tbody>
+</table>
+<p>Route (b) exists because the intersection point is never delivered as a
+roll-forward: it is never applied, so it never becomes a rollback-log
+point. A store that has followed more than <code>k</code> blocks is immune —
+retention keeps <code>k + 1</code> points and the oldest is always offered.</p>
+<p>When the history store had no cursor, the start point was offered
+instead of the stored points, and the node's chain does not include it.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.indexes", "toc.integrate", "content.code.copy", "navigation.path"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+    
+  </body>
+</html>
