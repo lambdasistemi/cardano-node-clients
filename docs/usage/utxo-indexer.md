@@ -591,6 +591,42 @@ is single-writer) and run the follower without the NDJSON server, use
 [lambdasistemi/cardano-tx-tools](https://github.com/lambdasistemi/cardano-tx-tools)
 embeds the indexer this way.
 
+### Read several queries at one indexed point
+
+`IndexerHandle.readView` accepts a `NonEmpty ReadQuery` and returns
+`IO (Either AssetQueryUnavailable IndexedView)`. Use `AddressQuery address`
+for an address's live outputs and `AssetQuery policyId assetName` for an
+asset's live holders:
+
+```haskell
+readView handle
+    (AddressQuery address :| [AssetQuery policyId assetName, AddressQuery address])
+```
+
+Import `NonEmpty(..)` from `Data.List.NonEmpty` and the view types from
+`Cardano.Node.Client.UTxOIndexer.Indexer`. On success, `ivPoint` is the
+indexed `(SlotNo, BlockHash)` shared by every answer in `ivResults`.
+Results preserve query order and duplicates: an `AddressQuery` produces
+`AddressResult [(TxIn, TxOut)]`, and an `AssetQuery` produces
+`AssetResult [AssetMatch]`. Each list is ascending by `TxIn`; asset matches
+retain the stored output bytes, quantity and original creation point,
+including after rollback.
+
+Availability, point, results and provenance come from one storage
+transaction: one RocksDB snapshot or one in-memory state read. The view is
+materialized; traversing it cannot reread storage, and it stays valid after
+further apply/rollback operations or after the indexer closes. It reads the
+current indexed state; it does not acquire a requested historical point.
+
+An empty or restoration-only store returns `Left NoIndexedPoint`. An
+absent, incomplete or degraded asset index returns `Left AssetIndexAbsent`,
+and a rebuilding index returns `Left AssetIndexRebuilding`. A requested
+asset row missing live data returns `Left (AssetIndexInconsistent txIn)`.
+These errors refuse the whole batch without returning partial results.
+**Address-only views also refuse when the asset index is unavailable.**
+The existing `snapshotAt` read keeps its signature and behavior and remains
+available for ordinary address reads on a degraded store.
+
 ### When `csStartPoint` is consulted
 
 `ChainSyncConfig.csStartPoint` is consulted only when the follower has

@@ -224,6 +224,12 @@ let
       patch = ./faults/snapshot-binding.patch;
       example = "Cardano.Node.Client.UTxOIndexer asset index/concurrent snapshots (I5)/every snapshot equals the model state at its point";
     };
+
+    fault-view-snapshot-binding = mkFaultSpec {
+      name = "fault-view-snapshot-binding";
+      patch = ./faults/view-snapshot-binding.patch;
+      example = "Cardano.Node.Client.UTxOIndexer indexed view/every concurrent view equals the model state at its point on both backends";
+    };
   };
 
   gates = lib.mapAttrs (_: mkGate) gateSpecs;

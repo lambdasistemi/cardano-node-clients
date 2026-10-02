@@ -11,7 +11,11 @@ time. Covers maintenance exactness, backend parity, rollback
 provenance, replay\/divergent stability, concurrency, and the explicit
 unavailability answers.
 -}
-module Cardano.Node.Client.UTxOIndexer.AssetIndexSpec (spec) where
+module Cardano.Node.Client.UTxOIndexer.AssetIndexSpec (
+    spec,
+    Produced (..),
+    produced,
+) where
 
 import Cardano.Chain.Common qualified as ByronCommon
 import Cardano.Crypto.Hash.Class (Hash (UnsafeHash))

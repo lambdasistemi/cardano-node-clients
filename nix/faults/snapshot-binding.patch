@@ -1,6 +1,6 @@
 --- a/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
 +++ b/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
-@@ -1219,7 +1219,7 @@
+@@ -1255,7 +1255,7 @@
                  case assetColumns of
                      AssetColumnsOff -> pure (Left AssetIndexAbsent)
                      AssetColumnsOn ->
@@ -9,7 +9,7 @@
              , claimBuildCoverage = \requested ->
                  case assetColumns of
                      AssetColumnsOff -> pure (Right CoverageUnrecorded)
-@@ -1944,27 +1944,42 @@
+@@ -1984,11 +1984,67 @@
  the live columns for the stored bytes and creation point. A row
  whose 'TxIn' lacks live data makes the whole read inconsistent.
  -}
@@ -18,37 +18,33 @@
 +-- transactions (markers and indexed point; asset rows; one per row
 +-- join) and waits for the indexed point to move before reading the
 +-- rows, so one answer binds a point, its matches and their creation
-+-- points taken from different snapshots.
++-- points taken from different snapshots. The indexed-view core
++-- below stays single-transaction; only the legacy wrapper splits.
  readAssetSnapshot ::
 +    (forall a. Transaction IO cf Cols op a -> IO a) ->
      PolicyId ->
      AssetName ->
 -    Transaction IO cf Cols op (Either AssetQueryUnavailable AssetSnapshot)
--readAssetSnapshot policy name = do
--    mRebuild <- query MetaCol assetIndexRebuildKey
--    mMarker <- query MetaCol assetIndexCompleteKey
+-readAssetSnapshot = readAssetSnapshotCore
 +    IO (Either AssetQueryUnavailable AssetSnapshot)
 +readAssetSnapshot run policy name = do
 +    mRebuild <- run (query MetaCol assetIndexRebuildKey)
 +    mMarker <- run (query MetaCol assetIndexCompleteKey)
-     case (mRebuild, mMarker) of
-         (Just _, _) -> pure (Left AssetIndexRebuilding)
-         (Nothing, Just v) | v == assetIndexCompleteValue -> readComplete
-         _ -> pure (Left AssetIndexAbsent)
-   where
-     readComplete = do
--        mPoint <- indexedPoint
++    case (mRebuild, mMarker) of
++        (Just _, _) -> pure (Left AssetIndexRebuilding)
++        (Nothing, Just v) | v == assetIndexCompleteValue -> readComplete
++        _ -> pure (Left AssetIndexAbsent)
++  where
++    readComplete = do
 +        mPoint <- run indexedPoint
-         case mPoint of
-             Nothing -> pure (Left NoIndexedPoint)
-             Just point -> do
--                rows <- iterating AssetIndex (scanAsset policy name)
--                result <- traverse matchOf rows
++        case mPoint of
++            Nothing -> pure (Left NoIndexedPoint)
++            Just point -> do
 +                awaitMovedPoint mPoint (2000 :: Int)
 +                rows <- run (iterating AssetIndex (scanAsset policy name))
 +                result <- traverse (run . matchOf) rows
-                 pure (fmap (AssetSnapshot point) (sequenceA result))
- 
++                pure (fmap (AssetSnapshot point) (sequenceA result))
++
 +    awaitMovedPoint seen n =
 +        when (n > 0) $ do
 +            now <- run indexedPoint
@@ -56,6 +52,30 @@
 +                threadDelay 1000
 +                awaitMovedPoint seen (n - 1)
 +
-     matchOf (txIn, qty) = do
-         mAddr <- query TxInCol txIn
-         case mAddr of
++    matchOf (txIn, qty) = do
++        mAddr <- query TxInCol txIn
++        case mAddr of
++            Nothing -> pure (Left (AssetIndexInconsistent txIn))
++            Just addr -> do
++                mOut <- query AddressIndex (AddrKey addr txIn)
++                case mOut of
++                    Nothing -> pure (Left (AssetIndexInconsistent txIn))
++                    Just txOut -> do
++                        mObs <- query ObservationCol txIn
++                        case mObs of
++                            Nothing -> pure (Left (AssetIndexInconsistent txIn))
++                            Just (slot, bh) ->
++                                pure
++                                    ( Right
++                                        ( AssetMatch
++                                            { amTxIn = txIn
++                                            , amTxOut = txOut
++                                            , amQuantity = qty
++                                            , amCreatedSlot = slot
++                                            , amCreatedBlockHash = bh
++                                            }
++                                        )
++                                    )
+ 
+ {- | Transactional asset-read core shared by the legacy 'assetUtxos'
+ path and the indexed view. The legacy snapshot-binding fault rewrites
