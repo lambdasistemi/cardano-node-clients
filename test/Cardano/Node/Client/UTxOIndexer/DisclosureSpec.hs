@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
@@ -40,15 +41,23 @@ import Cardano.Node.Client.UTxOIndexer.Disclosure (
     Limit (..),
     answerLimits,
     assessFreshness,
+    storeCoverage,
+ )
+import Cardano.Node.Client.UTxOIndexer.Indexer (
+    BuildCoverage (..),
+    InterestSet (..),
+    StoreCoverage (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Server (ReadyStatus (..))
 import Cardano.Node.Client.UTxOIndexer.Types (
+    Address (..),
     BlockHash (..),
     SlotNo (..),
  )
 import Control.Monad (forM_, unless)
 import Data.ByteString qualified as BS
 import Data.Maybe (isNothing)
+import Data.Set qualified as Set
 import Data.Text qualified as Text
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (
@@ -160,6 +169,22 @@ spec = describe "asset answer disclosure: freshness and limits" $ do
                     ]
             empties
                 `shouldBe` [(Coverage FromOrigin AllAddresses, Synced)]
+
+        it "lists coverage_unknown first and never partial_history for an unknown start" $
+            forM_ allStatuses $ \st -> do
+                let limits = answerLimits (Coverage StartUnknown AddressesUnknown) (freshnessOf st)
+                take 1 limits `shouldBe` [CoverageUnknownLimit]
+                PartialHistoryLimit `elem` limits `shouldBe` False
+                minBound `shouldBe` CoverageUnknownLimit
+
+    describe "storeCoverage" $ do
+        it "states unknown start and unknown addresses for an unrecorded store" $
+            storeCoverage CoverageUnrecorded
+                `shouldBe` Coverage StartUnknown AddressesUnknown
+
+        it "states origin or the recorded point, and all or filtered, for a recorded store" $
+            forM_ recordedCases $ \(recordedCoverage, expected) ->
+                storeCoverage (CoverageRecorded recordedCoverage) `shouldBe` expected
   where
     freshnessOf st =
         Freshness
@@ -191,13 +216,19 @@ expectedSeconds c
 
 expectedLimits :: Coverage -> FreshnessStatus -> [Limit]
 expectedLimits (Coverage start addresses) st =
-    [AddressFilterLimit | addresses == FilteredAddresses]
-        <> [PartialHistoryLimit | start /= FromOrigin]
+    [CoverageUnknownLimit | start == StartUnknown || addresses == AddressesUnknown]
+        <> [AddressFilterLimit | addresses == FilteredAddresses]
+        <> [PartialHistoryLimit | isPoint start]
         <> case st of
             Synced -> []
             CatchingUp -> [CatchingUpLimit]
             Disconnected -> [DisconnectedLimit]
             Stale -> [StaleLimit]
+
+isPoint :: CoverageStart -> Bool
+isPoint = \case
+    FromPoint _ _ -> True
+    _ -> False
 
 allStatuses :: [FreshnessStatus]
 allStatuses = [Synced, CatchingUp, Disconnected, Stale]
@@ -208,8 +239,9 @@ coverages =
     | start <-
         [ FromOrigin
         , FromPoint (SlotNo 4_000) (BlockHash (BS.replicate 32 0xC3))
+        , StartUnknown
         ]
-    , addresses <- [AllAddresses, FilteredAddresses]
+    , addresses <- [AllAddresses, FilteredAddresses, AddressesUnknown]
     ]
 
 -- * Cases
@@ -325,3 +357,19 @@ holds n prop = do
             stdArgs{maxSuccess = n, chatty = False}
             (checkCoverage prop)
     unless (isSuccess result) (expectationFailure (output result))
+
+{- | Recorded coverages and the wire coverage each states: the start
+is the origin or the recorded block, the addresses are all or a
+filtered set whatever its size.
+-}
+recordedCases :: [(BuildCoverage, Coverage)]
+recordedCases =
+    [ (BuildCoverage Nothing IndexAll, Coverage FromOrigin AllAddresses)
+    , (BuildCoverage (Just point) IndexAll, Coverage (FromPoint slot hash) AllAddresses)
+    , (BuildCoverage Nothing (IndexAddressSet two), Coverage FromOrigin FilteredAddresses)
+    , (BuildCoverage (Just point) (IndexAddressSet two), Coverage (FromPoint slot hash) FilteredAddresses)
+    , (BuildCoverage Nothing (IndexAddressSet Set.empty), Coverage FromOrigin FilteredAddresses)
+    ]
+  where
+    point@(slot, hash) = (SlotNo 4_000, BlockHash (BS.replicate 32 0xC3))
+    two = Set.fromList [Address (BS.replicate 29 0x61), Address (BS.replicate 29 0x62)]

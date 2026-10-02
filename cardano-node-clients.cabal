@@ -323,6 +323,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.ServerStabilitySpec
     Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec
+    Cardano.Node.Client.UTxOIndexer.StoreFixture
     Cardano.Node.Client.UTxOIndexer.TxOutViewSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
     Cardano.Node.Client.UTxOIndexer.WarmBootSpec

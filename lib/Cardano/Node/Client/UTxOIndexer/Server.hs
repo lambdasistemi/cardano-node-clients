@@ -466,9 +466,11 @@ coverageValue Coverage{covStart, covAddresses} =
         [ "start" .= case covStart of
             FromOrigin -> Aeson.String "origin"
             FromPoint slot hash -> pointValue (slot, hash)
+            StartUnknown -> Aeson.String "unknown"
         , "addresses" .= case covAddresses of
             AllAddresses -> "all" :: Text
             FilteredAddresses -> "filtered"
+            AddressesUnknown -> "unknown"
         ]
 
 freshnessValue :: Freshness -> Value
@@ -495,6 +497,7 @@ statusText = \case
 
 limitText :: Limit -> Text
 limitText = \case
+    CoverageUnknownLimit -> "coverage_unknown"
     AddressFilterLimit -> "address_filter"
     PartialHistoryLimit -> "partial_history"
     CatchingUpLimit -> "catching_up"

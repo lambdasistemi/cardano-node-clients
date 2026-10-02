@@ -5,20 +5,22 @@ Module      : Cardano.Node.Client.UTxOIndexer.DaemonDisclosureSpec
 Description : The daemon discloses its own follower configuration
 License     : Apache-2.0
 
-The coverage an asset answer states is derived from the follower
-configuration the daemon runs, the network magic is the one the
+The coverage an asset answer states is the coverage its store
+recorded when it was created, the network magic is the one the
 follower connects with, and the stale bound comes from
 @--stale-after-seconds@.
 
-* 'followerCoverage' maps every start point and interest set to the
-  coverage they index.
 * 'parseDaemonArgs' reads @--stale-after-seconds@ (default 600, a
   positive whole number, anything else refused naming the flag) and
   keeps every other flag as it was.
-* 'runDaemon' over a store it already holds, with no node behind its
-  relay socket, answers with its configured magic, the coverage of the
-  follower it runs, and a freshness that turns stale once the
-  configured bound has passed without progress.
+* @ over a store it created, with no node behind its relay
+  socket, records the coverage of its own configuration in the store,
+  answers with its configured magic and that recorded coverage, and a
+  freshness that turns stale once the configured bound has passed
+  without progress.
+* @ over a store created before coverage was recorded
+  answers with an unknown coverage and the @ limit,
+  and writes no record into it.
 -}
 module Cardano.Node.Client.UTxOIndexer.DaemonDisclosureSpec (spec) where
 
@@ -42,26 +44,20 @@ import Cardano.Node.Client.N2C.Reconnect (
     ReconnectPolicy (..),
     defaultReconnectPolicy,
  )
+import Cardano.Node.Client.UTxOIndexer.Columns (Cols (..))
 import Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
-    followerCoverage,
     parseDaemonArgs,
     runDaemon,
  )
-import Cardano.Node.Client.UTxOIndexer.Disclosure (
-    AddressCoverage (..),
-    Coverage (..),
-    CoverageStart (..),
- )
-import Cardano.Node.Client.UTxOIndexer.Follower (
-    ChainSyncConfig (..),
-    InterestSet (..),
- )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    BuildCoverage (..),
     IndexerHandle (..),
+    InterestSet (..),
     UtxoOp (..),
-    liveUtxoHandler,
+    decodeBuildCoverage,
     withRocksDBIndexer,
+    withRocksDBIndexerRunner,
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
@@ -89,11 +85,9 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
 import Data.Either (fromLeft, isLeft, isRight)
 import Data.List (isInfixOf)
-import Data.List.NonEmpty (NonEmpty (..))
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
-import Ouroboros.Network.Magic (NetworkMagic (..))
+import Database.KV.Transaction (RunTransaction (..), query)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (
@@ -107,28 +101,6 @@ import Test.Hspec (
 
 spec :: Spec
 spec = describe "utxo-indexer daemon: disclosure from its own configuration" $ do
-    describe "followerCoverage" $ do
-        it "covers from origin when the follower has no start point" $ do
-            covStart (followerCoverage (chainSyncCfg Nothing IndexAll))
-                `shouldBe` FromOrigin
-            covStart (followerCoverage (chainSyncCfg Nothing filtered))
-                `shouldBe` FromOrigin
-
-        it "covers from the follower's start point when it has one" $
-            forM_ [(0, 0x00), (4_242, 0x5C), (maxBound, 0xFF)] $ \(slot, b) -> do
-                let hash = BlockHash (BS.replicate 32 b)
-                covStart (followerCoverage (chainSyncCfg (Just (SlotNo slot, hash)) IndexAll))
-                    `shouldBe` FromPoint (SlotNo slot) hash
-
-        it "covers all addresses for IndexAll and a filtered set for IndexAddressSet" $ do
-            covAddresses (followerCoverage (chainSyncCfg Nothing IndexAll))
-                `shouldBe` AllAddresses
-            covAddresses (followerCoverage (chainSyncCfg Nothing filtered))
-                `shouldBe` FilteredAddresses
-            covAddresses
-                (followerCoverage (chainSyncCfg Nothing (IndexAddressSet Set.empty)))
-                `shouldBe` FilteredAddresses
-
     describe "parseDaemonArgs" $ do
         it "defaults the stale bound to 600 seconds" $
             (dcStaleAfterSeconds <$> parsed required) `shouldBeRight` 600
@@ -197,8 +169,8 @@ spec = describe "utxo-indexer daemon: disclosure from its own configuration" $ d
             parseDaemonArgs (required <> ["--frobnicate", "1"]) `shouldSatisfy` isLeft
 
     describe "runDaemon" $ do
-        it "states its magic and the coverage of the follower it runs" $
-            withDaemonOverStore 3_141_592 600 $ \sock -> do
+        it "states its magic and the coverage it recorded in the store it created" $
+            answering OwnStore 3_141_592 600 $ \sock -> do
                 answer <- askHeld sock
                 KM.lookup "network" answer
                     `shouldBe` Just (Aeson.object ["magic" .= (3_141_592 :: Word32)])
@@ -210,22 +182,44 @@ spec = describe "utxo-indexer daemon: disclosure from its own configuration" $ d
                             ]
                         )
 
+        it "records the coverage of its own configuration in a store it creates" $ do
+            (_, record) <- withDaemonOver OwnStore 42 600 $ \_ -> pure ()
+            (decodeBuildCoverage =<< record)
+                `shouldBe` Just (BuildCoverage Nothing IndexAll)
+
+        it "states unknown coverage over a store created before coverage was recorded" $
+            answering LegacyStore 42 600 $ \sock -> do
+                answer <- askHeld sock
+                KM.lookup "coverage" answer
+                    `shouldBe` Just
+                        ( Aeson.object
+                            [ "start" .= ("unknown" :: Text)
+                            , "addresses" .= ("unknown" :: Text)
+                            ]
+                        )
+                KM.lookup "limits" answer
+                    `shouldBe` Just (Aeson.toJSON ["coverage_unknown", "catching_up" :: Text])
+
+        it "writes no record into a store created before coverage was recorded" $
+            withDaemonOver LegacyStore 42 600 (\_ -> pure ())
+                >>= (`shouldBe` Nothing) . snd
+
         it "is catching_up, not stale, with no node behind it inside the default bound" $
-            withDaemonOverStore 42 600 $ \sock -> do
+            answering OwnStore 42 600 $ \sock -> do
                 answer <- askHeld sock
                 freshnessStatus answer `shouldBe` Just "catching_up"
                 KM.lookup "limits" answer
                     `shouldBe` Just (Aeson.toJSON ["catching_up" :: Text])
 
         it "turns stale once the configured bound passes without progress" $
-            withDaemonOverStore 42 1 $ \sock -> do
+            answering OwnStore 42 1 $ \sock -> do
                 answer <- untilSecondsSince sock 2
                 freshnessStatus answer `shouldBe` Just "stale"
                 KM.lookup "limits" answer
                     `shouldBe` Just (Aeson.toJSON ["stale" :: Text])
   where
-    filtered = IndexAddressSet (Set.singleton (Address (BS.replicate 29 0x61)))
     parsed = parseDaemonArgs
+    answering store magic bound act = fst <$> withDaemonOver store magic bound act
 
 shouldBeRight :: (Show a, Eq a) => Either String a -> a -> IO ()
 shouldBeRight r expected = case r of
@@ -251,31 +245,22 @@ withoutFlag flag = go
     go (x : rest) = x : go rest
     go [] = []
 
-chainSyncCfg :: Maybe (SlotNo, BlockHash) -> InterestSet -> ChainSyncConfig
-chainSyncCfg start interest =
-    ChainSyncConfig
-        { csRelaySocket = "/nonexistent/node.sock"
-        , csNetworkMagic = NetworkMagic 42
-        , csByronEpochSlots = 21_600
-        , csStartPoint = start
-        , csReadyThresholdSlots = 60
-        , csSecurityParamK = 2_160
-        , csReconnectPolicy = defaultReconnectPolicy
-        , csProbeConfig = defaultProbeConfig
-        , csInterestSet = interest
-        , csHandlers = liveUtxoHandler interest :| []
-        , csBlockTracer = nullTracer
-        , csTipTracer = nullTracer
-        , csHistory = Nothing
-        }
+-- * The daemon over a store, with no node
 
--- * The daemon over a store it already holds, with no node
+-- | How the store the daemon serves came to hold its blocks.
+data Store
+    = -- | The daemon created it; the blocks were applied afterwards.
+      OwnStore
+    | -- | Created and filled before coverage was recorded.
+      LegacyStore
 
-{- | Seed a RocksDB store, then run the daemon on it with the given
-magic and stale bound and a relay socket nothing listens on.
+{- | Run the daemon with the given magic and stale bound and a relay
+socket nothing listens on, over a store holding one block; the action
+gets the daemon's socket. Returns the action's result and the store's
+build-coverage record as it stands once the daemon has stopped.
 -}
-withDaemonOverStore :: Word32 -> Word64 -> (FilePath -> IO a) -> IO a
-withDaemonOverStore magic bound action =
+withDaemonOver :: Store -> Word32 -> Word64 -> (FilePath -> IO a) -> IO (a, Maybe ByteString)
+withDaemonOver store magic bound action =
     withSystemTempDirectory "daemon-disclosure" $ \tmp -> do
         let db = tmp </> "db"
             sock = tmp </> "indexer.sock"
@@ -293,10 +278,23 @@ withDaemonOverStore magic bound action =
                     , dcStaleAfterSeconds = bound
                     , dcRebuildAssetIndex = False
                     }
+            serving :: IO b -> IO b
+            serving act =
+                withAsync (runDaemon nullTracer cfg) $ \_ -> do
+                    waitAnswering sock 200
+                    act
+        case store of
+            OwnStore -> serving (pure ())
+            LegacyStore -> pure ()
         withRocksDBIndexer db seedStore
-        withAsync (runDaemon nullTracer cfg) $ \_ -> do
-            waitAnswering sock 200
-            action sock
+        r <- serving (action sock)
+        (,) r <$> storedRecord db
+
+-- | The build-coverage record of a closed store, as stored.
+storedRecord :: FilePath -> IO (Maybe ByteString)
+storedRecord db =
+    withRocksDBIndexerRunner db $ \_ runner ->
+        runTransaction runner (query MetaCol "build-coverage")
 
 {- | Wait until the daemon answers on its socket: the socket file
 appears at bind, before the server listens.

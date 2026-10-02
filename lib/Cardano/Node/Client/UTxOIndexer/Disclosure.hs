@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.Disclosure
 Description : Network, coverage and freshness of an asset answer
@@ -7,9 +9,10 @@ What a successful @utxos_with_asset@ answer states about the index
 that produced it, beside its point and holders:
 
 * the network magic of the follower serving the store;
-* the coverage of that follower: where it started (origin or a
+* the coverage of the store: where its history starts (origin or a
   concrete point) and whether it indexes every address or a filtered
-  set;
+  set, as recorded when the store was created, or unknown for a store
+  that holds no record;
 * the upstream freshness: @synced@, @catching_up@, @disconnected@ or
   @stale@, the last observed tip slot, how far the answer's own point
   is behind it, and the seconds since the follower last made
@@ -18,7 +21,8 @@ that produced it, beside its point and holders:
   answer at its point. An empty list is the only form that claims the
   chain's answer.
 
-The 'Disclosure' is fixed for the life of the serving process; the
+The 'Disclosure' is fixed for the life of the serving process (its
+coverage is the store's, read once when the follower starts); the
 'Freshness' is derived per answer from one readiness sample and one
 clock sample taken after the answer's storage read.
 -}
@@ -35,6 +39,7 @@ module Cardano.Node.Client.UTxOIndexer.Disclosure (
     Limit (..),
     assessFreshness,
     answerLimits,
+    storeCoverage,
 
     -- * Readiness sample
     ReadyStatus (..),
@@ -43,6 +48,11 @@ module Cardano.Node.Client.UTxOIndexer.Disclosure (
 import Cardano.Node.Client.N2C.Reconnect (
     DisconnectInfo (..),
     UpstreamStatus (..),
+ )
+import Cardano.Node.Client.UTxOIndexer.Indexer (
+    BuildCoverage (..),
+    InterestSet (..),
+    StoreCoverage (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     BlockHash,
@@ -57,22 +67,26 @@ import Data.Text (Text)
 import Data.Time.Clock (UTCTime, diffUTCTime)
 import Data.Word (Word32, Word64)
 
--- | Where the serving follower's history starts.
+-- | Where the store's history starts.
 data CoverageStart
     = -- | From the genesis of the chain.
       FromOrigin
     | -- | From this block: nothing before it is indexed.
       FromPoint !SlotNo !BlockHash
+    | -- | The store does not know where its history starts.
+      StartUnknown
     deriving stock (Eq, Show)
 
--- | Which addresses the serving follower indexes.
+-- | Which addresses the store indexes.
 data AddressCoverage
     = AllAddresses
     | -- | Only an address set; outputs elsewhere are not indexed.
       FilteredAddresses
+    | -- | The store does not know which addresses it indexes.
+      AddressesUnknown
     deriving stock (Eq, Show)
 
--- | The coverage of the serving follower.
+-- | The coverage of the store an answer is read from.
 data Coverage = Coverage
     { covStart :: !CoverageStart
     , covAddresses :: !AddressCoverage
@@ -115,7 +129,8 @@ data Freshness = Freshness
 
 -- | A reason the answer may differ from the chain-wide answer.
 data Limit
-    = AddressFilterLimit
+    = CoverageUnknownLimit
+    | AddressFilterLimit
     | PartialHistoryLimit
     | CatchingUpLimit
     | DisconnectedLimit
@@ -236,17 +251,39 @@ assessFreshness disclosure now ready (SlotNo point) =
                     | otherwise -> Synced
 
 {- | Every reason an answer may differ from the chain-wide
-answer at its point, in wire order: the address filter,
-partial history, then the freshness status unless synced.
-Empty only for full coverage from origin and a synced
-answer.
+answer at its point, in wire order: an unknown coverage, the
+address filter, partial history (a start at a block, never an
+unknown start), then the freshness status unless synced. Empty
+only for full coverage from origin and a synced answer.
 -}
 answerLimits :: Coverage -> Freshness -> [Limit]
 answerLimits Coverage{covStart, covAddresses} Freshness{frStatus} =
-    [AddressFilterLimit | covAddresses == FilteredAddresses]
-        <> [PartialHistoryLimit | covStart /= FromOrigin]
+    [ CoverageUnknownLimit
+    | covStart == StartUnknown || covAddresses == AddressesUnknown
+    ]
+        <> [AddressFilterLimit | covAddresses == FilteredAddresses]
+        <> [PartialHistoryLimit | startsAtPoint]
         <> case frStatus of
             Synced -> []
             CatchingUp -> [CatchingUpLimit]
             Disconnected -> [DisconnectedLimit]
             Stale -> [StaleLimit]
+  where
+    startsAtPoint = case covStart of
+        FromPoint _ _ -> True
+        _ -> False
+
+{- | The coverage a store states: unknown start and unknown addresses
+when it holds no record, otherwise the origin or the recorded start
+block, and all addresses or a filtered set.
+-}
+storeCoverage :: StoreCoverage -> Coverage
+storeCoverage = \case
+    CoverageUnrecorded -> Coverage StartUnknown AddressesUnknown
+    CoverageRecorded BuildCoverage{bcStartPoint, bcInterestSet} ->
+        Coverage
+            { covStart = maybe FromOrigin (uncurry FromPoint) bcStartPoint
+            , covAddresses = case bcInterestSet of
+                IndexAll -> AllAddresses
+                IndexAddressSet _ -> FilteredAddresses
+            }

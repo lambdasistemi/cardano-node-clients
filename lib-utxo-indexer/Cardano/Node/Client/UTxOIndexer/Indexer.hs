@@ -96,6 +96,13 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     AssetSnapshot (..),
     AssetMatch (..),
     AssetQueryUnavailable (..),
+
+    -- * Build coverage
+    BuildCoverage (..),
+    StoreCoverage (..),
+    BuildCoverageRefusal (..),
+    encodeBuildCoverage,
+    decodeBuildCoverage,
 ) where
 
 import Cardano.Node.Client.BlockIndexer.Engine qualified as Engine
@@ -157,7 +164,8 @@ import Control.Concurrent.STM (
     writeTVar,
  )
 import Control.Exception (Exception, IOException, throwIO, try)
-import Control.Monad (when)
+import Control.Monad (guard, when)
+import Data.Bits (shiftL, shiftR, (.|.))
 import Data.ByteString qualified as BS
 import Data.Default.Class (def)
 import Data.Dependent.Map (DMap)
@@ -289,6 +297,143 @@ data AssetQueryUnavailable
     | -- | An upgrade of the asset index is in progress.
       AssetIndexRebuilding
     deriving stock (Eq, Show)
+
+{- | The coverage a store is built with: where its history starts
+('Nothing' for the chain's origin, or the block it starts from) and
+which addresses it indexes. Equality is exact, including the address
+set.
+-}
+data BuildCoverage = BuildCoverage
+    { bcStartPoint :: !(Maybe (SlotNo, BlockHash))
+    , bcInterestSet :: !InterestSet
+    }
+    deriving stock (Eq, Show)
+
+{- | What a store knows about its own coverage: the coverage recorded
+when it was created, or nothing (a store created before coverage was
+recorded, or one without a metadata column).
+-}
+data StoreCoverage
+    = CoverageRecorded !BuildCoverage
+    | CoverageUnrecorded
+    deriving stock (Eq, Show)
+
+{- | Why a store refuses a session's coverage: it was built with a
+different one, or its record does not decode. The store is left
+untouched.
+-}
+data BuildCoverageRefusal
+    = BuildCoverageMismatch
+        { recorded :: !BuildCoverage
+        , requested :: !BuildCoverage
+        }
+    | BuildCoverageUndecodable
+        { raw :: !BS.ByteString
+        , requested :: !BuildCoverage
+        }
+    deriving stock (Eq, Show)
+
+instance Exception BuildCoverageRefusal
+
+{- | The build-coverage record, version 1, integers big-endian: @0x01@;
+the start, @0x00@ for the origin or @0x01@, the slot (8 bytes), the
+hash length (4 bytes) and the hash; the addresses, @0x00@ for all or
+@0x01@, their count (4 bytes) and, in ascending byte order, each
+address's length (4 bytes) and bytes.
+-}
+encodeBuildCoverage :: BuildCoverage -> BS.ByteString
+encodeBuildCoverage BuildCoverage{bcStartPoint, bcInterestSet} =
+    BS.concat $
+        [BS.singleton 1]
+            <> case bcStartPoint of
+                Nothing -> [BS.singleton 0]
+                Just (SlotNo slot, BlockHash hash) ->
+                    [BS.singleton 1, bigEndian 8 slot, sized hash]
+            <> case bcInterestSet of
+                IndexAll -> [BS.singleton 0]
+                IndexAddressSet addresses ->
+                    [BS.singleton 1, bigEndian 4 (Set.size addresses)]
+                        <> map (sized . unAddress) (Set.toAscList addresses)
+  where
+    sized bytes = bigEndian 4 (BS.length bytes) <> bytes
+
+{- | Decode a build-coverage record. Any other bytes — another version,
+a short or overlong value, addresses out of ascending order or repeated
+— are 'Nothing'.
+-}
+decodeBuildCoverage :: BS.ByteString -> Maybe BuildCoverage
+decodeBuildCoverage bytes = do
+    (version, afterVersion) <- BS.uncons bytes
+    guard (version == 1)
+    (start, afterStart) <- tagged afterVersion (pure Nothing) startPoint
+    (interest, rest) <- tagged afterStart (pure IndexAll) addressSet
+    guard (BS.null rest)
+    pure BuildCoverage{bcStartPoint = start, bcInterestSet = interest}
+  where
+    tagged input none some = do
+        (tag, rest) <- BS.uncons input
+        case tag of
+            0 -> (,rest) <$> none
+            1 -> some rest
+            _ -> Nothing
+    startPoint input = do
+        (slot, afterSlot) <- fixed 8 input
+        (hash, rest) <- sizedField afterSlot
+        pure (Just (SlotNo slot, BlockHash hash), rest)
+    addressSet input = do
+        (count, afterCount) <- fixed 4 input
+        (addresses, rest) <- fields (count :: Word64) afterCount
+        guard (and (zipWith (<) addresses (drop 1 addresses)))
+        pure (IndexAddressSet (Set.fromDistinctAscList (map Address addresses)), rest)
+    fields 0 input = Just ([], input)
+    fields n input = do
+        (field, afterField) <- sizedField input
+        (others, rest) <- fields (n - 1) afterField
+        pure (field : others, rest)
+    sizedField input = do
+        (len, afterLen) <- fixed 4 input
+        guard (fromIntegral (BS.length afterLen) >= (len :: Word64))
+        pure (BS.splitAt (fromIntegral len) afterLen)
+    fixed n input = do
+        guard (BS.length input >= n)
+        let (field, rest) = BS.splitAt n input
+        pure (BS.foldl' (\acc b -> acc `shiftL` 8 .|. fromIntegral b) 0 field, rest)
+
+-- | @n@ big-endian bytes of a non-negative integer.
+bigEndian :: (Integral a) => Int -> a -> BS.ByteString
+bigEndian n x =
+    BS.pack
+        [ fromIntegral (toInteger x `shiftR` (8 * i))
+        | i <- [n - 1, n - 2 .. 0]
+        ]
+
+-- | The metadata key holding the build-coverage record.
+buildCoverageKey :: BS.ByteString
+buildCoverageKey = "build-coverage"
+
+{- | The claim of a session's coverage on a store with metadata
+columns: an existing record is served when equal and refused
+otherwise, never rewritten; an empty store without a record gains the
+session's coverage; a non-empty store without one stays unrecorded.
+-}
+claimCoverage ::
+    BuildCoverage ->
+    Transaction IO cf Cols op (Either BuildCoverageRefusal StoreCoverage)
+claimCoverage requested = do
+    stored <- query MetaCol buildCoverageKey
+    case stored of
+        Just bytes -> pure $ case decodeBuildCoverage bytes of
+            Nothing -> Left BuildCoverageUndecodable{raw = bytes, requested}
+            Just recorded
+                | recorded == requested -> Right (CoverageRecorded recorded)
+                | otherwise -> Left BuildCoverageMismatch{recorded, requested}
+        Nothing -> do
+            empty <- isEmptyStore
+            if empty
+                then
+                    Right (CoverageRecorded requested)
+                        <$ insert MetaCol buildCoverageKey (encodeBuildCoverage requested)
+                else pure (Right CoverageUnrecorded)
 
 type IndexerTx cf op =
     Engine.EngineTx IO cf Cols op
@@ -455,6 +600,17 @@ data IndexerHandle = IndexerHandle
     -- ^ Read every live holder of the asset with the stored output
     -- bytes, quantity and true creation point, plus the indexed
     -- point — all from one storage transaction.
+    , claimBuildCoverage ::
+        BuildCoverage ->
+        IO (Either BuildCoverageRefusal StoreCoverage)
+    -- ^ Decide, in one transaction, the coverage a session with the
+    -- given coverage serves. A store without a record gains it when
+    -- empty (no live output, no rollback-log entry) and is
+    -- 'CoverageUnrecorded' otherwise; a recorded store serves an equal
+    -- coverage and refuses a different one or an undecodable record.
+    -- The record is written once and never changed. A store opened
+    -- without its metadata column (four families) is
+    -- 'CoverageUnrecorded'.
     }
 
 {- | Open an in-memory indexer, run the action with the
@@ -759,17 +915,17 @@ bootHandle runner@RunTransaction{runTransaction} assetColumns request action = d
         count <- countRollbackEntries
         rebuilding <- case assetColumns of
             AssetColumnsOff -> pure False
-            AssetColumnsOn -> decide count
+            AssetColumnsOn -> decide
         pure (count, rebuilding)
-    decide count = do
-        emptyTxIn <- isEmptyColumn TxInCol
+    decide = do
+        empty <- isEmptyStore
         marker <- query MetaCol assetIndexCompleteKey
         progress <- query MetaCol assetIndexRebuildKey
         case (progress, marker) of
             (Just _, _) -> pure True
             (Nothing, Just _) -> pure False
             _
-                | emptyTxIn && count == 0 ->
+                | empty ->
                     False
                         <$ insert MetaCol assetIndexCompleteKey assetIndexCompleteValue
                 | request ->
@@ -922,6 +1078,12 @@ chunkAfter from = start >>= go rebuildChunkSize []
             let acc' = (entryKey, entryValue) : acc
              in if n <= 1 then pure (reverse acc') else nextEntry >>= go (n - 1) acc'
 
+{- | Whether no block was ever applied to the store: no live output and
+no rollback-log entry.
+-}
+isEmptyStore :: Transaction IO cf Cols op Bool
+isEmptyStore = (&&) <$> isEmptyColumn TxInCol <*> isEmptyColumn RollbackCol
+
 -- | Whether a column holds no entries.
 isEmptyColumn ::
     Cols (KV k v) -> Transaction IO cf Cols op Bool
@@ -1058,6 +1220,10 @@ mkHandle
                     AssetColumnsOff -> pure (Left AssetIndexAbsent)
                     AssetColumnsOn ->
                         runTransaction (readAssetSnapshot policy name)
+            , claimBuildCoverage = \requested ->
+                case assetColumns of
+                    AssetColumnsOff -> pure (Right CoverageUnrecorded)
+                    AssetColumnsOn -> runTransaction (claimCoverage requested)
             }
 
 {- | Retarget an opaque follower state to a handler list.
