@@ -534,6 +534,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#several-lookups-at-one-indexed-point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Several lookups at one indexed point
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#network-coverage-and-freshness" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1488,14 +1499,99 @@ wrong code.</p>
 <p>A <code>fault-not-applied</code> or no-line failure after a change to
 <code>Indexer.hs</code> means the patch must be refreshed to the new source; a
 <code>SURVIVED</code> means the guarding test must be strengthened.</p>
+<h2 id="several-lookups-at-one-indexed-point">Several lookups at one indexed point<a class="headerlink" href="#several-lookups-at-one-indexed-point" title="Permanent link">&para;</a></h2>
+<p>Send <code>read_view</code> when a decision needs address outputs and asset holders
+from the same index state. The daemon validates the complete request, then
+reads every query in one storage snapshot. One connection sends one NDJSON
+line and receives one response line ending in LF, followed by EOF.</p>
+<p>For a daemon listening at <code>/tmp/idx.sock</code>, this runnable example asks for
+an address and the native asset named <code>tok</code> (replace the illustrative raw
+address and policy bytes with those you track):</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s\n&#39;</span><span class="w"> </span><span class="s1">&#39;{&quot;read_view&quot;:[{&quot;utxos_at&quot;:&quot;60a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1&quot;},{&quot;utxos_with_asset&quot;:{&quot;policy_id&quot;:&quot;abababababababababababababababababababababababababababab&quot;,&quot;asset_name&quot;:&quot;746f6b&quot;}}]}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>nc<span class="w"> </span>-U<span class="w"> </span>/tmp/idx.sock
+</span></code></pre></div>
+<p>The request array must contain at least one query. Each element has exactly
+one key: <code>utxos_at</code> with a raw address encoded as hex, or <code>utxos_with_asset</code>
+with exactly <code>policy_id</code> and <code>asset_name</code>. Hex accepts either case. The policy
+is 28 bytes; the name is 0–32 bytes, including empty and arbitrary byte
+names. Address decoding retains the legacy raw-byte rules, including empty
+bytes. A singleton, address-only or asset-only array is also valid.</p>
+<p>A successful response has exactly <code>point</code> and <code>results</code>. For example, when
+both lookups have no matches at an available point:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="nt">&quot;point&quot;</span><span class="p">:{</span><span class="nt">&quot;slot&quot;</span><span class="p">:</span><span class="mi">42</span><span class="p">,</span><span class="nt">&quot;blockHash&quot;</span><span class="p">:</span><span class="s2">&quot;&lt;indexed-block-hash-hex&gt;&quot;</span><span class="p">},</span><span class="nt">&quot;results&quot;</span><span class="p">:[{</span><span class="nt">&quot;utxos_at&quot;</span><span class="p">:[]},{</span><span class="nt">&quot;utxos_with_asset&quot;</span><span class="p">:[]}]}</span>
+</span></code></pre></div>
+<p>The slot and block hash identify the <strong>one indexed snapshot shared by every
+answer</strong>. They do not promise the current chain tip or acquire a requested
+historical point. <code>results</code> has one entry per query in the original order.
+Repeated queries remain repeated entries; the daemon does not deduplicate
+or merge them. Member lists are ascending by transaction ID bytes, then
+numeric output index.</p>
+<p>Each address member retains the legacy <code>txin</code> and <code>txout</code> fields. Each
+asset member retains <code>txin</code>, <code>txout</code>, decimal-string <code>quantity</code>, <code>created</code>
+and <code>datum</code>, as described under <a href="#fields">Fields</a> and
+<a href="#datum-availability">Datum availability</a>. <code>created</code> is the output's
+original slot and block hash, which may precede the batch point, including
+after a rollback. <code>txout</code> is the unchanged stored CBOR in lower-case hex;
+datum kinds remain <code>none</code>, <code>hash</code> (with <code>hash</code>) and <code>inline</code> (with <code>cbor</code>).
+Batch answers contain no network, coverage or freshness disclosure.</p>
+<p>An invalid batch refuses the entire request before any storage read:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="s2">&quot;invalid_read_view&quot;</span><span class="p">,</span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="s2">&quot;read_view[1]: query must be an object&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<p>An empty or nonarray batch, unknown fields, wrong types or invalid address
+or asset hex all produce this error. A detail concerning an element names
+its zero-based position; the first invalid element wins. A batch-only
+top-level object must have exactly <code>read_view</code>. The existing parsers still
+take precedence, in order: <code>utxos_at</code>, <code>ready</code>, <code>await</code>, <code>utxos_with_asset</code>,
+then <code>read_view</code>. These strict batch rules do not override a legacy request
+that was accepted, including a legacy <code>invalid_asset_query</code> response.
+Invalid JSON and lines without an accepted request key retain
+<code>{"error":"malformed json"}</code>.</p>
+<p>Unavailable reads return exactly the existing refusal shape:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="s2">&quot;asset_index_unavailable&quot;</span><span class="p">,</span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="s2">&quot;no_indexed_point&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no_indexed_point</code></td>
+<td>No indexed block is available, including a restoration-only store.</td>
+</tr>
+<tr>
+<td><code>absent</code></td>
+<td>The asset index is absent, degraded or incomplete.</td>
+</tr>
+<tr>
+<td><code>rebuilding</code></td>
+<td>The asset index is being rebuilt.</td>
+</tr>
+<tr>
+<td><code>inconsistent</code></td>
+<td>An asset holder has missing live data or undecodable output bytes.</td>
+</tr>
+</tbody>
+</table>
+<p>The refusal carries no point, results or partial answers. Rebuilding or
+absent can take precedence over no indexed point. <strong>Address-only batches
+also refuse when the asset index is unavailable</strong>, while legacy <code>utxos_at</code>
+continues to work on a degraded store. An available snapshot with no matches
+succeeds with empty member lists. Storage exceptions retain the inherited
+behavior: the connection closes with EOF and no response line.</p>
+<p>CI's <code>fault-socket-view-snapshot-binding</code> deliberately serves a batch as
+separate snapshots. The socket test advances a real store between those
+reads and rejects the resulting contents against an independent history
+at the reported point. This check complements the library view fault.</p>
 <h2 id="network-coverage-and-freshness">Network, coverage and freshness<a class="headerlink" href="#network-coverage-and-freshness" title="Permanent link">&para;</a></h2>
 <p>An empty or short <code>utxos</code> list can mean two things: the chain holds no
 more outputs of the asset at <code>point</code>, or this index cannot see them.
 Every successful asset answer says which, in the same line:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">&quot;network&quot;</span><span class="p">:</span><span class="w">   </span><span class="p">{</span><span class="nt">&quot;magic&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">},</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">&quot;coverage&quot;</span><span class="p">:</span><span class="w">  </span><span class="p">{</span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;origin&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;addresses&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;all&quot;</span><span class="p">},</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nt">&quot;freshness&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;synced&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tipSlot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1294</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;slotsBehind&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;secondsSinceProgress&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nt">&quot;limits&quot;</span><span class="p">:</span><span class="w">    </span><span class="p">[]</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">&quot;network&quot;</span><span class="p">:</span><span class="w">   </span><span class="p">{</span><span class="nt">&quot;magic&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">},</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nt">&quot;coverage&quot;</span><span class="p">:</span><span class="w">  </span><span class="p">{</span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;origin&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;addresses&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;all&quot;</span><span class="p">},</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nt">&quot;freshness&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;synced&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tipSlot&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1294</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;slotsBehind&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;secondsSinceProgress&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="nt">&quot;limits&quot;</span><span class="p">:</span><span class="w">    </span><span class="p">[]</span>
 </span></code></pre></div>
 <p>Read <code>limits</code> first. <strong>An empty <code>limits</code> is the only answer that claims
 to be the chain's answer at <code>point</code>.</strong> Every other answer names each
@@ -1741,18 +1837,18 @@ keeps serving everything else. To add the index in place:</p>
    that predates the index cannot open the store, even if the upgrade
    is stopped before it completes. The copy is your way back.</li>
 </ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>cp<span class="w"> </span>-a<span class="w"> </span>/var/lib/utxo-indexer<span class="w"> </span>/var/lib/utxo-indexer.before-asset-index
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>cp<span class="w"> </span>-a<span class="w"> </span>/var/lib/utxo-indexer<span class="w"> </span>/var/lib/utxo-indexer.before-asset-index
 </span></code></pre></div>
 <ol>
 <li>Start the daemon on the same directory with <code>--rebuild-asset-index</code>:</li>
 </ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>utxo-indexer<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--relay-socket<span class="w"> </span>/path/to/cardano-node/node.sock<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>--listen<span class="w"> </span>/tmp/idx.sock<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>--network-magic<span class="w"> </span><span class="m">764824073</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>--byron-epoch-slots<span class="w"> </span><span class="m">21600</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span>--db-path<span class="w"> </span>/var/lib/utxo-indexer<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>--rebuild-asset-index
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>utxo-indexer<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>--relay-socket<span class="w"> </span>/path/to/cardano-node/node.sock<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>--listen<span class="w"> </span>/tmp/idx.sock<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span>--network-magic<span class="w"> </span><span class="m">764824073</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span>--byron-epoch-slots<span class="w"> </span><span class="m">21600</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span>--db-path<span class="w"> </span>/var/lib/utxo-indexer<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span>--rebuild-asset-index
 </span></code></pre></div>
 <p>The daemon builds the index from the outputs the store already holds,
 while it follows the chain and serves the socket:</p>
@@ -1798,12 +1894,12 @@ while it follows the chain and serves the socket:</p>
 </ul>
 <h2 id="stderr-trace-stream">Stderr trace stream<a class="headerlink" href="#stderr-trace-stream" title="Permanent link">&para;</a></h2>
 <p>Every lifecycle transition emits one line on stderr:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>2026-04-30T12:34:56.789Z INFO indexer event=started        socketPath=... dbPath=...
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>2026-04-30T12:35:42.103Z INFO indexer event=disconnected   reason=bearer-closed
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>2026-04-30T12:35:42.380Z INFO indexer event=node-replaying attempt=1 elapsedMs=275
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>2026-04-30T12:35:43.500Z INFO indexer event=reconnecting   attempt=1 waitMs=312
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>2026-04-30T12:35:44.815Z INFO indexer event=reconnected    resumeSlot=12345 elapsedMs=2712
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>2026-04-30T12:40:00.001Z INFO indexer event=stopped        reason=normal
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>2026-04-30T12:34:56.789Z INFO indexer event=started        socketPath=... dbPath=...
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>2026-04-30T12:35:42.103Z INFO indexer event=disconnected   reason=bearer-closed
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>2026-04-30T12:35:42.380Z INFO indexer event=node-replaying attempt=1 elapsedMs=275
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>2026-04-30T12:35:43.500Z INFO indexer event=reconnecting   attempt=1 waitMs=312
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>2026-04-30T12:35:44.815Z INFO indexer event=reconnected    resumeSlot=12345 elapsedMs=2712
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>2026-04-30T12:40:00.001Z INFO indexer event=stopped        reason=normal
 </span></code></pre></div>
 <p><code>grep '^.*indexer '</code> is the operator-friendly filter. Counting
 <code>event=disconnected</code> vs <code>event=reconnected</code> per peer-restart cycle is
@@ -1825,8 +1921,8 @@ embeds the indexer this way.</p>
 <code>IO (Either AssetQueryUnavailable IndexedView)</code>. Use <code>AddressQuery address</code>
 for an address's live outputs and <code>AssetQuery policyId assetName</code> for an
 asset's live holders:</p>
-<div class="language-haskell highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nf">readView</span><span class="w"> </span><span class="n">handle</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="p">(</span><span class="kt">AddressQuery</span><span class="w"> </span><span class="n">address</span><span class="w"> </span><span class="kt">:|</span><span class="w"> </span><span class="p">[</span><span class="kt">AssetQuery</span><span class="w"> </span><span class="n">policyId</span><span class="w"> </span><span class="n">assetName</span><span class="p">,</span><span class="w"> </span><span class="kt">AddressQuery</span><span class="w"> </span><span class="n">address</span><span class="p">])</span>
+<div class="language-haskell highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nf">readView</span><span class="w"> </span><span class="n">handle</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">    </span><span class="p">(</span><span class="kt">AddressQuery</span><span class="w"> </span><span class="n">address</span><span class="w"> </span><span class="kt">:|</span><span class="w"> </span><span class="p">[</span><span class="kt">AssetQuery</span><span class="w"> </span><span class="n">policyId</span><span class="w"> </span><span class="n">assetName</span><span class="p">,</span><span class="w"> </span><span class="kt">AddressQuery</span><span class="w"> </span><span class="n">address</span><span class="p">])</span>
 </span></code></pre></div>
 <p>Import <code>NonEmpty(..)</code> from <code>Data.List.NonEmpty</code> and the view types from
 <code>Cardano.Node.Client.UTxOIndexer.Indexer</code>. On success, <code>ivPoint</code> is the
