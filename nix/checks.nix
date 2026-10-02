@@ -230,6 +230,12 @@ let
       patch = ./faults/view-snapshot-binding.patch;
       example = "Cardano.Node.Client.UTxOIndexer indexed view/every concurrent view equals the model state at its point on both backends";
     };
+
+    fault-socket-view-snapshot-binding = mkFaultSpec {
+      name = "fault-socket-view-snapshot-binding";
+      patch = ./faults/socket-view-snapshot-binding.patch;
+      example = "utxo-indexer socket read view/every answer equals independent state at the reported point across a controlled advance";
+    };
   };
 
   gates = lib.mapAttrs (_: mkGate) gateSpecs;

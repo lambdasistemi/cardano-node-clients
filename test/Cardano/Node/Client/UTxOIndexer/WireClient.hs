@@ -33,6 +33,12 @@ module Cardano.Node.Client.UTxOIndexer.WireClient (
     expectAnswer,
     askAsset,
 
+    -- * Atomic batch answers
+    BatchAnswer (..),
+    BatchResult (..),
+    batchAnswer,
+    expectBatch,
+
     -- * Reading JSON
     decoded,
     objectWithKeys,
@@ -290,3 +296,75 @@ txInOrder t = case Text.splitOn "#" t of
         , read (Text.unpack ix)
         )
     _ -> error ("not a wire TxIn: " <> show t)
+
+-- | One exact-key answer carrying a single full point and ordered rows.
+data BatchAnswer = BatchAnswer
+    { batchPoint :: (Integer, Text)
+    , batchResults :: [BatchResult]
+    }
+    deriving stock (Eq, Show)
+
+-- | Position and kind correlate each result, including duplicates.
+data BatchResult = AddressRows [(Text, Text)] | AssetRows [Match]
+    deriving stock (Eq, Show)
+
+{- | Read the accepted batch schema independently, rejecting extra fields,
+nonintegral slots and malformed members; no disclosure is accepted.
+-}
+batchAnswer :: ByteString -> Either String BatchAnswer
+batchAnswer raw = do
+    unlessLine
+    top <- objectWithKeys ["point", "results"] =<< decoded raw
+    p <- point =<< field "point" top
+    rs <- array =<< field "results" top
+    case rs of
+        [] -> Left "results must be nonempty"
+        _ -> BatchAnswer p <$> traverse result rs
+  where
+    unlessLine
+        | not (BS.null raw) && BS.last raw == 10 && BS.count 10 raw == 1 = Right ()
+        | otherwise = Left "batch must be exactly one LF-terminated response line"
+    array (Aeson.Array xs) = Right (foldr (:) [] xs)
+    array other = Left ("not an array: " <> show other)
+    point v = do
+        o <- objectWithKeys ["slot", "blockHash"] v
+        s <- field "slot" o
+        slot <- case Aeson.fromJSON s :: Aeson.Result Integer of
+            Aeson.Success n | n >= 0 -> Right n
+            _ -> Left ("slot must be a nonnegative integer: " <> show s)
+        (,) slot <$> textField "blockHash" o
+    result v@(Aeson.Object o)
+        | KM.member "utxos_at" o = do
+            e <- objectWithKeys ["utxos_at"] v
+            xs <- array =<< field "utxos_at" e
+            AddressRows <$> traverse address xs
+        | KM.member "utxos_with_asset" o = do
+            e <- objectWithKeys ["utxos_with_asset"] v
+            xs <- array =<< field "utxos_with_asset" e
+            AssetRows <$> traverse asset xs
+    result other = Left ("unknown result: " <> show other)
+    address v = do
+        o <- objectWithKeys ["txin", "txout"] v
+        (,) <$> textField "txin" o <*> textField "txout" o
+    asset v = do
+        o <- objectWithKeys ["txin", "txout", "quantity", "created", "datum"] v
+        Match
+            <$> textField "txin" o
+            <*> textField "txout" o
+            <*> textField "quantity" o
+            <*> (point =<< field "created" o)
+            <*> (datum =<< field "datum" o)
+    datum v = do
+        o <- case v of
+            Aeson.Object d -> Right d
+            _ -> Left "datum is not an object"
+        kind <- textField "kind" o
+        case kind of
+            "none" -> objectWithKeys ["kind"] v
+            "hash" -> textField "hash" o >> objectWithKeys ["kind", "hash"] v
+            "inline" -> textField "cbor" o >> objectWithKeys ["kind", "cbor"] v
+            _ -> Left ("unknown datum kind: " <> show kind)
+
+-- | Assert successful decoding with the actual response in the mismatch.
+expectBatch :: ByteString -> IO BatchAnswer
+expectBatch raw = either (fail . (<> "; actual response: " <> show raw)) pure (batchAnswer raw)

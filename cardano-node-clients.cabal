@@ -322,10 +322,14 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
     Cardano.Node.Client.UTxOIndexer.PreAssetServer
     Cardano.Node.Client.UTxOIndexer.PreDisclosureServer
+    Cardano.Node.Client.UTxOIndexer.PreReadViewServer
     Cardano.Node.Client.UTxOIndexer.ProviderSpec
     Cardano.Node.Client.UTxOIndexer.ServerSpec
     Cardano.Node.Client.UTxOIndexer.ServerStabilitySpec
     Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec
+    Cardano.Node.Client.UTxOIndexer.SocketReadViewSpec
+    Cardano.Node.Client.UTxOIndexer.SocketReadViewStabilitySpec
+    Cardano.Node.Client.UTxOIndexer.SocketViewFixture
     Cardano.Node.Client.UTxOIndexer.StoreFixture
     Cardano.Node.Client.UTxOIndexer.TxOutViewSpec
     Cardano.Node.Client.UTxOIndexer.TypesSpec
@@ -398,11 +402,16 @@ test-suite fault-check
     Cardano.Node.Client.UTxOIndexer.AssetIndexSpec
     Cardano.Node.Client.UTxOIndexer.FaultCheck
     Cardano.Node.Client.UTxOIndexer.IndexedViewSpec
+    Cardano.Node.Client.UTxOIndexer.SocketReadViewSpec
+    Cardano.Node.Client.UTxOIndexer.SocketViewFixture
     Cardano.Node.Client.UTxOIndexer.StoreFixture
+    Cardano.Node.Client.UTxOIndexer.WireClient
 
   build-depends:
+    , aeson
     , async
     , base
+    , base16-bytestring
     , bytestring
     , cardano-crypto-class
     , cardano-ledger-api
@@ -410,6 +419,7 @@ test-suite fault-check
     , cardano-ledger-byron
     , cardano-ledger-core
     , cardano-ledger-mary
+    , cardano-node-clients
     , cardano-node-clients:utxo-indexer-lib
     , chain-follower
     , containers
@@ -419,10 +429,13 @@ test-suite fault-check
     , hspec
     , hspec-core
     , microlens
+    , network
     , rocksdb-haskell-jprupp
     , rocksdb-kv-transactions
     , rocksdb-kv-transactions:kv-transactions
     , temporary
+    , text
+    , time
 
 test-suite e2e-tests
   import:           warnings

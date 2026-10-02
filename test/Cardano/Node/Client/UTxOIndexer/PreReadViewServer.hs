@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 
 {- |
-Module      : Cardano.Node.Client.UTxOIndexer.Server
+Module      : Cardano.Node.Client.UTxOIndexer.PreReadViewServer
 Description : NDJSON Unix-socket server for the indexer
 License     : Apache-2.0
 
@@ -46,15 +46,6 @@ RESP: {"point": {"slot":<int>, "blockHash":"<hex>"},
     | {"error": "asset_index_unavailable",
        "reason": "rebuilding" | "absent" | "no_indexed_point"
                | "inconsistent"}
-
-REQ:  {"read_view": [{"utxos_at":"<address-hex>"},
-                     {"utxos_with_asset":{"policy_id":"<56 hex>",
-                                         "asset_name":"<0..64 hex>"}}]}
-RESP: {"point":{"slot":<int>,"blockHash":"<hex>"},
-       "results":[{"utxos_at":[<address members>]},
-                  {"utxos_with_asset":[<asset members>]}]}
-    | {"error":"invalid_read_view","detail":"<text>"}
-    | {"error":"asset_index_unavailable","reason":"<reason above>"}
 @
 
 Each connection is a single request → single response →
@@ -70,12 +61,8 @@ Address bytes are sent on the wire as hex. Bech32
 parsing lives in the consumer (consumers either already
 have raw bytes from the ledger or hex-encode them
 explicitly before calling).
-
-Batch queries are validated together, retain order and duplicates, and use
-one materialized 'readView' snapshot. Its point binds every result; batch
-answers carry no disclosure. A refusal applies to the whole batch.
 -}
-module Cardano.Node.Client.UTxOIndexer.Server (
+module Cardano.Node.Client.UTxOIndexer.PreReadViewServer (
     -- * Server
     runServer,
 
@@ -100,10 +87,7 @@ import Cardano.Node.Client.UTxOIndexer.Indexer (
     AssetQueryUnavailable (..),
     AssetSnapshot (..),
     AwaitObservation (..),
-    IndexedView (..),
     IndexerHandle (..),
-    ReadQuery (..),
-    ReadResult (..),
  )
 import Cardano.Node.Client.UTxOIndexer.TxOutView (
     DatumView (..),
@@ -143,8 +127,6 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LBS
-import Data.List.NonEmpty (NonEmpty (..))
-import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
@@ -240,11 +222,6 @@ handleConn idx disclosure getReady conn = (`finally` close conn) $ do
                             object (members <> disclosureMembers disclosure freshness)
         Just (InvalidAssetQuery detail) ->
             sendLine conn (encode (invalidAssetQuery detail))
-        Just (ReadView queries) -> do
-            answer <- readView idx queries
-            sendLine conn (encode (readViewAnswer answer))
-        Just (InvalidReadView detail) ->
-            sendLine conn (encode (invalidReadView detail))
 
 {- | Read up to and including the first @\n@. The line
 itself is returned without the trailing newline.
@@ -287,14 +264,12 @@ data Request
     | -- | A @utxos_with_asset@ request that cannot be read, with
       -- the reason.
       InvalidAssetQuery !Text
-    | ReadView !(NonEmpty ReadQuery)
-    | InvalidReadView !Text
     deriving stock (Eq, Show)
 
 {- | The three original requests are tried first, so every line they
 accept is answered exactly as before; a line carrying
 @utxos_with_asset@ that none of them accepts is an asset query,
-well-formed or not. The strict @read_view@ alternative is tried last.
+well-formed or not.
 -}
 instance FromJSON Request where
     parseJSON =
@@ -316,39 +291,12 @@ instance FromJSON Request where
                         . parseAssetQuery
                         <$> o .: "utxos_with_asset"
                     )
-                <|> ( either InvalidReadView ReadView . parseReadView o
-                        <$> o .: "read_view"
-                    )
-
-parseHexAddress :: Text -> Aeson.Parser Address
-parseHexAddress t = case Base16.decode (Text.encodeUtf8 t) of
-    Right bs -> pure (Address bs)
-    Left err -> fail $ "utxos_at: invalid base16 — " <> err
-
--- Validate every element before the handler can access storage. Strict keys
--- apply only here, after all legacy alternatives have declined the line.
-parseReadView :: KeyMap.KeyMap Value -> Value -> Either Text (NonEmpty ReadQuery)
-parseReadView envelope value = do
-    if KeyMap.keys envelope == ["read_view"]
-        then Right ()
-        else Left "read_view must be the only top-level field"
-    entries <- case value of
-        Aeson.Array xs -> Right (foldr (:) [] xs)
-        _ -> Left "read_view must be a nonempty array"
-    batch <- traverse element (zip [0 :: Int ..] entries)
-    maybe (Left "read_view must be a nonempty array") Right (NE.nonEmpty batch)
-  where
-    element (position, entry) =
-        either (Left . (("read_view[" <> Text.pack (show position) <> "]: ") <>)) Right $
-            case entry of
-                Aeson.Object o -> case KeyMap.toList o of
-                    [("utxos_at", Aeson.String address)] ->
-                        either (Left . Text.pack) (Right . AddressQuery) $
-                            Aeson.parseEither parseHexAddress address
-                    [("utxos_with_asset", asset)] ->
-                        uncurry AssetQuery <$> parseAssetQuery asset
-                    _ -> Left "query must have exactly one utxos_at hex string or utxos_with_asset object"
-                _ -> Left "query must be an object"
+      where
+        parseHexAddress :: Text -> Aeson.Parser Address
+        parseHexAddress t = case Base16.decode (Text.encodeUtf8 t) of
+            Right bs -> pure (Address bs)
+            Left err ->
+                fail $ "utxos_at: invalid base16 — " <> err
 
 parseTxInWire :: Text -> Aeson.Parser TxIn
 parseTxInWire s =
@@ -417,13 +365,14 @@ newtype UtxosResponse = UtxosResponse [(TxIn, TxOut)]
 instance ToJSON UtxosResponse where
     toJSON (UtxosResponse xs) =
         object ["utxos" .= map utxoEntry xs]
-
-utxoEntry :: (TxIn, TxOut) -> Value
-utxoEntry (txin, txout) =
-    object
-        [ "txin" .= txInWire txin
-        , "txout" .= Text.decodeUtf8 (Base16.encode (unTxOut txout))
-        ]
+      where
+        utxoEntry :: (TxIn, TxOut) -> Value
+        utxoEntry (txin, txout) =
+            object
+                [ "txin" .= txInWire txin
+                , "txout"
+                    .= Text.decodeUtf8 (Base16.encode (unTxOut txout))
+                ]
 
 txInWire :: TxIn -> Text
 txInWire (TxIn tid ix) =
@@ -463,37 +412,6 @@ invalidAssetQuery detail =
         , "detail" .= detail
         ]
 
-invalidReadView :: Text -> Value
-invalidReadView detail =
-    object ["error" .= ("invalid_read_view" :: Text), "detail" .= detail]
-
--- Encoding traverses only the materialized view. Any undecodable asset
--- datum refuses the whole response, including already encoded address rows.
-readViewAnswer :: Either AssetQueryUnavailable IndexedView -> Value
-readViewAnswer = \case
-    Left reason -> unavailableValue (unavailableReason reason)
-    Right IndexedView{ivPoint, ivResults} ->
-        case traverse resultValue ivResults of
-            Nothing -> unavailableValue "inconsistent"
-            Just results ->
-                object ["point" .= pointValue ivPoint, "results" .= NE.toList results]
-  where
-    resultValue (AddressResult members) =
-        Just (object ["utxos_at" .= map utxoEntry members])
-    resultValue (AssetResult members) =
-        (\matches -> object ["utxos_with_asset" .= matches]) <$> traverse matchValue members
-
-unavailableReason :: AssetQueryUnavailable -> Text
-unavailableReason = \case
-    AssetIndexAbsent -> "absent"
-    NoIndexedPoint -> "no_indexed_point"
-    AssetIndexInconsistent _ -> "inconsistent"
-    AssetIndexRebuilding -> "rebuilding"
-
-unavailableValue :: Text -> Value
-unavailableValue reason =
-    object ["error" .= ("asset_index_unavailable" :: Text), "reason" .= reason]
-
 {- | An asset answer before its disclosure: the v1 members of a
 success with the snapshot's point, or a refusal sent as it is.
 -}
@@ -508,7 +426,10 @@ answer @inconsistent@: its datum is never made up.
 -}
 assetAnswer :: Either AssetQueryUnavailable AssetSnapshot -> AssetAnswer
 assetAnswer = \case
-    Left reason -> unavailable (unavailableReason reason)
+    Left AssetIndexAbsent -> unavailable "absent"
+    Left NoIndexedPoint -> unavailable "no_indexed_point"
+    Left (AssetIndexInconsistent _) -> unavailable "inconsistent"
+    Left AssetIndexRebuilding -> unavailable "rebuilding"
     Right AssetSnapshot{asPoint, asMatches} ->
         case traverse matchValue asMatches of
             Nothing -> unavailable "inconsistent"
@@ -521,7 +442,11 @@ assetAnswer = \case
   where
     unavailable :: Text -> AssetAnswer
     unavailable reason =
-        AssetRefused (unavailableValue reason)
+        AssetRefused $
+            object
+                [ "error" .= ("asset_index_unavailable" :: Text)
+                , "reason" .= reason
+                ]
 
 {- | The four members every successful asset answer carries beside
 its point and holders: @network@, @coverage@, @freshness@ and

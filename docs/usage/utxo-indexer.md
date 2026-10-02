@@ -296,6 +296,92 @@ A `fault-not-applied` or no-line failure after a change to
 `Indexer.hs` means the patch must be refreshed to the new source; a
 `SURVIVED` means the guarding test must be strengthened.
 
+## Several lookups at one indexed point
+
+Send `read_view` when a decision needs address outputs and asset holders
+from the same index state. The daemon validates the complete request, then
+reads every query in one storage snapshot. One connection sends one NDJSON
+line and receives one response line ending in LF, followed by EOF.
+
+For a daemon listening at `/tmp/idx.sock`, this runnable example asks for
+an address and the native asset named `tok` (replace the illustrative raw
+address and policy bytes with those you track):
+
+```sh
+printf '%s\n' '{"read_view":[{"utxos_at":"60a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"},{"utxos_with_asset":{"policy_id":"abababababababababababababababababababababababababababab","asset_name":"746f6b"}}]}' | nc -U /tmp/idx.sock
+```
+
+The request array must contain at least one query. Each element has exactly
+one key: `utxos_at` with a raw address encoded as hex, or `utxos_with_asset`
+with exactly `policy_id` and `asset_name`. Hex accepts either case. The policy
+is 28 bytes; the name is 0–32 bytes, including empty and arbitrary byte
+names. Address decoding retains the legacy raw-byte rules, including empty
+bytes. A singleton, address-only or asset-only array is also valid.
+
+A successful response has exactly `point` and `results`. For example, when
+both lookups have no matches at an available point:
+
+```json
+{"point":{"slot":42,"blockHash":"<indexed-block-hash-hex>"},"results":[{"utxos_at":[]},{"utxos_with_asset":[]}]}
+```
+
+The slot and block hash identify the **one indexed snapshot shared by every
+answer**. They do not promise the current chain tip or acquire a requested
+historical point. `results` has one entry per query in the original order.
+Repeated queries remain repeated entries; the daemon does not deduplicate
+or merge them. Member lists are ascending by transaction ID bytes, then
+numeric output index.
+
+Each address member retains the legacy `txin` and `txout` fields. Each
+asset member retains `txin`, `txout`, decimal-string `quantity`, `created`
+and `datum`, as described under [Fields](#fields) and
+[Datum availability](#datum-availability). `created` is the output's
+original slot and block hash, which may precede the batch point, including
+after a rollback. `txout` is the unchanged stored CBOR in lower-case hex;
+datum kinds remain `none`, `hash` (with `hash`) and `inline` (with `cbor`).
+Batch answers contain no network, coverage or freshness disclosure.
+
+An invalid batch refuses the entire request before any storage read:
+
+```json
+{"error":"invalid_read_view","detail":"read_view[1]: query must be an object"}
+```
+
+An empty or nonarray batch, unknown fields, wrong types or invalid address
+or asset hex all produce this error. A detail concerning an element names
+its zero-based position; the first invalid element wins. A batch-only
+top-level object must have exactly `read_view`. The existing parsers still
+take precedence, in order: `utxos_at`, `ready`, `await`, `utxos_with_asset`,
+then `read_view`. These strict batch rules do not override a legacy request
+that was accepted, including a legacy `invalid_asset_query` response.
+Invalid JSON and lines without an accepted request key retain
+`{"error":"malformed json"}`.
+
+Unavailable reads return exactly the existing refusal shape:
+
+```json
+{"error":"asset_index_unavailable","reason":"no_indexed_point"}
+```
+
+| Reason | Meaning |
+|---|---|
+| `no_indexed_point` | No indexed block is available, including a restoration-only store. |
+| `absent` | The asset index is absent, degraded or incomplete. |
+| `rebuilding` | The asset index is being rebuilt. |
+| `inconsistent` | An asset holder has missing live data or undecodable output bytes. |
+
+The refusal carries no point, results or partial answers. Rebuilding or
+absent can take precedence over no indexed point. **Address-only batches
+also refuse when the asset index is unavailable**, while legacy `utxos_at`
+continues to work on a degraded store. An available snapshot with no matches
+succeeds with empty member lists. Storage exceptions retain the inherited
+behavior: the connection closes with EOF and no response line.
+
+CI's `fault-socket-view-snapshot-binding` deliberately serves a batch as
+separate snapshots. The socket test advances a real store between those
+reads and rejects the resulting contents against an independent history
+at the reported point. This check complements the library view fault.
+
 ## Network, coverage and freshness
 
 An empty or short `utxos` list can mean two things: the chain holds no

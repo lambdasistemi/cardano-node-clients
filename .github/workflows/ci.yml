@@ -31,6 +31,7 @@ jobs:
           .#checks.x86_64-linux.fault-asset-matching
           .#checks.x86_64-linux.fault-snapshot-binding
           .#checks.x86_64-linux.fault-view-snapshot-binding
+          .#checks.x86_64-linux.fault-socket-view-snapshot-binding
       - name: Release version contract
         run: scripts/release/check-version-consistency
   build:
@@ -133,3 +134,14 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Indexed view snapshot binding fault check
         run: nix run --quiet .#fault-view-snapshot-binding
+  fault-socket-view-snapshot-binding:
+    needs: build-gate
+    runs-on: nixos
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/cachix-action@v17
+        with:
+          name: paolino
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Socket read view snapshot binding fault check
+        run: nix run --quiet .#fault-socket-view-snapshot-binding

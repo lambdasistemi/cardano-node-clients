@@ -1,0 +1,14 @@
+--- a/lib/Cardano/Node/Client/UTxOIndexer/Server.hs
++++ b/lib/Cardano/Node/Client/UTxOIndexer/Server.hs
+@@ -241,7 +241,10 @@
+         Just (InvalidAssetQuery detail) ->
+             sendLine conn (encode (invalidAssetQuery detail))
+         Just (ReadView queries) -> do
+-            answer <- readView idx queries
++            answers <- traverse (\query -> readView idx (query :| [])) queries
++            let answer = do
++                    views <- sequenceA answers
++                    pure (IndexedView (ivPoint (NE.head views)) (fmap (NE.head . ivResults) views))
+             sendLine conn (encode (readViewAnswer answer))
+         Just (InvalidReadView detail) ->
+             sendLine conn (encode (invalidReadView detail))
