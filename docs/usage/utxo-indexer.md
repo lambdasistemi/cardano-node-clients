@@ -211,7 +211,7 @@ is the chain's answer is what `limits` says: see
 | `utxos[].created.slot`, `utxos[].created.blockHash` | The block that created the output — the same point `await` reports for that `txin`. |
 | `utxos[].datum` | The datum, read from the `txout` bytes themselves (next section). |
 | `network.magic` | The network magic the daemon's follower connects with (`--network-magic`). |
-| `coverage` | What this index covers: `start` (`"origin"` or the `{"slot","blockHash"}` it started from) and `addresses` (`"all"` or `"filtered"`). |
+| `coverage` | What the store covers, as recorded when it was created: `start` (`"origin"`, the `{"slot","blockHash"}` it started from, or `"unknown"`) and `addresses` (`"all"`, `"filtered"`, or `"unknown"`). |
 | `freshness` | How current the answer is: `status`, the last observed upstream `tipSlot`, how many slots `point` is `slotsBehind` that tip, and `secondsSinceProgress` of the follower. |
 | `limits` | Every reason this answer may differ from the chain-wide answer at `point`. `[]` is the only form that claims the chain's answer. |
 
@@ -277,8 +277,9 @@ reason it may differ, whether `utxos` is empty or not.
 
 | `limits` entry | Present when | What it means for `utxos` |
 |----------------|--------------|---------------------------|
-| `address_filter` | `coverage.addresses` is `"filtered"` | Outputs at addresses outside the follower's address set were never indexed: holders there are missing. |
-| `partial_history` | `coverage.start` is a point, not `"origin"` | Outputs created before the start point were never indexed: holders created earlier are missing. |
+| `coverage_unknown` | `coverage.start` and `coverage.addresses` are `"unknown"` | The store holds no record of how it was built: its start point and its address set are unknown, so holders may be missing for either reason. |
+| `address_filter` | `coverage.addresses` is `"filtered"` | Outputs at addresses outside the store's address set were never indexed: holders there are missing. |
+| `partial_history` | `coverage.start` is a point, not `"origin"` or `"unknown"` | Outputs created before the start point were never indexed: holders created earlier are missing. |
 | `catching_up` | `freshness.status` is `catching_up` | `point` is behind the upstream tip: later creations and spends are not reflected yet. |
 | `disconnected` | `freshness.status` is `disconnected` | The upstream node is unreachable: the answer comes from the cached store, and how far the chain has moved since is unknown. |
 | `stale` | `freshness.status` is `stale` | The upstream is connected but the follower has made no progress for longer than `--stale-after-seconds`. |
@@ -296,34 +297,50 @@ following a node is on that node's network.
 
 ### Coverage
 
-`coverage` describes the follower configuration of the serving process:
+`coverage` is the coverage the **store** was built with, recorded in
+the store when it was created — not the configuration of the process
+serving it:
 
 | Member | Values | From |
 |--------|--------|------|
-| `start` | `"origin"`, or `{"slot": <int>, "blockHash": "<hex>"}` | the follower's start point; none means origin |
-| `addresses` | `"all"` or `"filtered"` | the follower's interest set: every address, or an address set |
+| `start` | `"origin"`, `{"slot": <int>, "blockHash": "<hex>"}`, or `"unknown"` | the recorded start point (none means origin) |
+| `addresses` | `"all"`, `"filtered"`, or `"unknown"` | the recorded interest set: every address, or an address set |
+
+What is recorded, and when:
+
+- The first follower session over an **empty** store (no live output,
+  no rollback-log entry) records its start point and its interest set,
+  including the full address set, before chain-sync starts. The record
+  is written once and never changed.
+- A later session whose start point or interest set differs — a start
+  point added, removed or moved, `"all"` against a set, or one address
+  set against another — is **refused** before chain-sync starts, with
+  an error (`BuildCoverageRefusal`) naming the recorded and the
+  requested coverage. The store is left untouched; reopen it with the
+  configuration it was built with, or build a new store. A record that
+  cannot be read is refused the same way and kept as it is.
+- A store that already held blocks when coverage started being
+  recorded has no record, and none is ever written into it: its
+  coverage cannot be known. It is served with `start` and `addresses`
+  both `"unknown"` and the `coverage_unknown` limit, whatever the
+  serving configuration. The same holds for a store still opened with
+  only the four pre-asset column families.
+
+```mermaid
+flowchart TD
+    S[follower session: start point, interest set] --> R{store holds a record?}
+    R -- yes, equal --> Serve[serve the recorded coverage]
+    R -- yes, different or unreadable --> Refuse[refuse before chain-sync; store untouched]
+    R -- no --> E{store empty?}
+    E -- yes --> Rec[record the session's coverage, then serve it]
+    E -- no --> U[serve unknown coverage; write nothing]
+```
 
 The bundled `utxo-indexer` binary always follows from origin over every
-address, so it always answers `{"start":"origin","addresses":"all"}`.
-The other values come from in-process followers built with a start
-point or an address set (see [Embedded use](#embedded-use)).
-
-Coverage is the configuration of the **running process**, not a record
-kept in the store:
-
-- A start point is used only when the stores hold no usable resume
-  point: the UTxO store is empty (cold boot), or a history store is
-  attached and has no cursor yet (see
-  [When `csStartPoint` is consulted](#when-csstartpoint-is-consulted)).
-  Otherwise the store resumes from its own rollback points whatever
-  the configuration says, so a start point disclosed for a store that
-  was created under a different configuration does not describe that
-  store.
-- Changing the interest set over an existing store does not re-index
-  the outputs it skipped or drop the ones it kept.
-
-The disclosure is exact for a store the process created itself; keep
-one configuration per store.
+address: a store it creates answers
+`{"start":"origin","addresses":"all"}`. The other values come from
+in-process followers built with a start point or an address set (see
+[Embedded use](#embedded-use)).
 
 ### Freshness
 
@@ -549,8 +566,10 @@ no usable stored resume point:
    warm.
 
 In every other case chain-sync resume candidates come from the stores
-and `csStartPoint` is ignored: changing it has no effect until the
-stores are wiped. The bundled daemon sets no start point and
+and `csStartPoint` does not choose them. A store that recorded its
+coverage refuses a session whose `csStartPoint` differs from the
+recorded one (see [Coverage](#coverage)); a store without a record
+ignores it. The bundled daemon sets no start point and
 cold-boots from Origin.
 
 ```mermaid

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 
 {- |
 Module      : Cardano.Node.Client.UTxOIndexer.FollowerSpec
@@ -32,6 +33,7 @@ import Cardano.Node.Client.TxHistoryIndexer.Indexer (
     HistoryIndexer,
     withInMemoryHistoryIndexer,
  )
+import Cardano.Node.Client.UTxOIndexer.Columns (Cols (..))
 import Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
     FollowerHandle (..),
@@ -46,12 +48,24 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     ApplyConflict,
+    BuildCoverage (..),
+    BuildCoverageRefusal (..),
     IndexerHandle (..),
+    StoreCoverage (..),
     liveUtxoHandler,
     withInMemoryIndexer,
+    withInMemoryIndexerRunner,
+    withRocksDBIndexer,
+    withRocksDBIndexerRunner,
  )
 import Cardano.Node.Client.UTxOIndexer.IndexerOp (
     UtxoOp (..),
+ )
+import Cardano.Node.Client.UTxOIndexer.StoreFixture (
+    dumpClosedStore,
+    dumpStore,
+    seedPreChangeStore,
+    storeFamilyCount,
  )
 import Cardano.Node.Client.UTxOIndexer.Types (
     Address (..),
@@ -72,13 +86,16 @@ import Control.Concurrent.STM (
     writeTVar,
  )
 import Control.Exception (ErrorCall (..), try)
+import Control.Monad (forM_)
 import Control.Tracer (Tracer (..), nullTracer, traceWith)
+import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf, isPrefixOf, tails)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Set qualified as Set
+import Database.KV.Transaction (RunTransaction (..), insert, query)
 import Ouroboros.Consensus.Block.EBB (
     IsEBB (..),
  )
@@ -88,6 +105,7 @@ import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
 import Ouroboros.Network.Block qualified as Network
 import Ouroboros.Network.Magic (NetworkMagic (..))
 import Ouroboros.Network.Point qualified as Network.Point
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (
     Spec,
@@ -251,6 +269,8 @@ spec =
                                             pure tips
                                     observedTips
                                         `shouldBe` [Network.SlotNo 123]
+
+        buildCoverageSpec
 
         describe "warm-boot no-intersection" $ do
             it
@@ -725,3 +745,200 @@ blk1 = BlockHash (BS.replicate 32 0xF1)
 blk2 = BlockHash (BS.replicate 32 0xF2)
 blk3 = BlockHash (BS.replicate 32 0xF3)
 blk4 = BlockHash (BS.replicate 32 0xF4)
+
+-- * Build coverage across reopen
+
+{- | One store reopened between follower sessions: a RocksDB directory
+closed and opened again, or one in-memory handle under a second
+bracket. Its contents and its record are read between sessions.
+-}
+data Store = Store
+    { reopen :: forall a. (IndexerHandle -> IO a) -> IO a
+    , contents :: IO [String]
+    , readRecord :: IO (Maybe ByteString)
+    , writeRecord :: ByteString -> IO ()
+    }
+
+backends :: [(String, (Store -> IO ()) -> IO ())]
+backends =
+    [ ("RocksDB, closed and reopened", withRocksDBStore)
+    , ("in-memory, a second bracket on the same handle", withMemoryStore)
+    ]
+
+withRocksDBStore :: (Store -> IO ()) -> IO ()
+withRocksDBStore act =
+    withSystemTempDirectory "build-coverage" $ \tmp -> do
+        let db = tmp </> "db"
+        act
+            Store
+                { reopen = withRocksDBIndexer db
+                , contents = map show <$> dumpClosedStore db
+                , readRecord = withRocksDBIndexerRunner db (\_ runner -> readRecordWith runner)
+                , writeRecord = \bytes ->
+                    withRocksDBIndexerRunner db (\_ runner -> writeRecordWith runner bytes)
+                }
+
+withMemoryStore :: (Store -> IO ()) -> IO ()
+withMemoryStore act =
+    withInMemoryIndexerRunner $ \h runner ->
+        act
+            Store
+                { reopen = \f -> f h
+                , contents = map show <$> dumpStore runner
+                , readRecord = readRecordWith runner
+                , writeRecord = writeRecordWith runner
+                }
+
+readRecordWith :: RunTransaction IO cf Cols op -> IO (Maybe ByteString)
+readRecordWith runner = runTransaction runner (query MetaCol "build-coverage")
+
+writeRecordWith :: RunTransaction IO cf Cols op -> ByteString -> IO ()
+writeRecordWith runner = runTransaction runner . insert MetaCol "build-coverage"
+
+{- | What one follower session over the handle did: the store coverage
+it served (or the refusal it raised), whether the chain-sync runner
+ran, and whether the caller's action ran.
+-}
+data Session = Session
+    { sOutcome :: Either BuildCoverageRefusal StoreCoverage
+    , sRunnerRan :: Bool
+    , sActionRan :: Bool
+    }
+    deriving stock (Eq, Show)
+
+session :: BuildCoverage -> IndexerHandle -> IO Session
+session c idx = do
+    runnerRan <- newIORef False
+    actionRan <- newIORef False
+    let runner _ _ _ _ _ _ _ = Right () <$ writeIORef runnerRan True
+    outcome <-
+        try $
+            withChainSyncFollowerUsing runner nullN2CTracer (coverageCfg c) idx $ \fh -> do
+                writeIORef actionRan True
+                Async.wait (fhAsync fh)
+                pure (fhStoreCoverage fh)
+    Session outcome <$> readIORef runnerRan <*> readIORef actionRan
+
+-- | A session that served the given coverage and ran to its end.
+served :: StoreCoverage -> Session
+served c = Session (Right c) True True
+
+-- | A session refused before chain-sync and before the caller's action.
+refusedWith :: BuildCoverageRefusal -> Session
+refusedWith r = Session (Left r) False False
+
+coverageCfg :: BuildCoverage -> ChainSyncConfig
+coverageCfg BuildCoverage{bcStartPoint, bcInterestSet} =
+    (mkCfg "/nonexistent/build-coverage.sock")
+        { csStartPoint = bcStartPoint
+        , csInterestSet = bcInterestSet
+        , csHandlers = liveUtxoHandler bcInterestSet :| []
+        }
+
+-- | Make the store non-empty: one block holding an output every session indexes.
+populate :: IndexerHandle -> IO ()
+populate idx =
+    applyAtSlot
+        idx
+        (SlotNo 300)
+        (BlockHash (BS.replicate 32 0x30))
+        [UtxoCreate (TxIn (BS.replicate 32 0x30) 0) addrShared (TxOut "\x80")]
+
+buildCoverageSpec :: Spec
+buildCoverageSpec =
+    describe "build coverage across reopen" $ do
+        forM_ backends $ \(name, withStore) -> describe name $ do
+            it "records the first session's coverage and serves it on reopen with the same configuration" $
+                forM_ coverageSessions $ \c -> withStore $ \store -> do
+                    reopen store (session c) `shouldReturn` served (CoverageRecorded c)
+                    reopen store populate
+                    reopen store (session c) `shouldReturn` served (CoverageRecorded c)
+
+            it "refuses a changed start point before chain-sync, leaving the store untouched" $
+                forM_ startChanges $
+                    refusesChange withStore
+
+            it "refuses a changed address filter before chain-sync, leaving the store untouched" $
+                forM_ interestChanges $
+                    refusesChange withStore
+
+            it "refuses an undecodable record before chain-sync, keeping its bytes" $
+                forM_ ["", "\x02\x00\x00", "\x01\x00\x00\x00"] $ \bytes -> withStore $ \store -> do
+                    reopen store populate
+                    writeRecord store bytes
+                    before <- contents store
+                    reopen store (session originAll)
+                        `shouldReturn` refusedWith
+                            BuildCoverageUndecodable{raw = bytes, requested = originAll}
+                    contents store `shouldReturn` before
+
+            it "serves an unknown coverage from a store populated before coverage was recorded, recording nothing" $
+                forM_ coverageSessions $ \c -> withStore $ \store -> do
+                    reopen store populate
+                    reopen store (session c) `shouldReturn` served CoverageUnrecorded
+                    readRecord store `shouldReturn` Nothing
+
+        describe "a store with only the four pre-change column families" $
+            it "serves an unknown coverage, empty or not, and gains no family" $
+                forM_ [False, True] $ \populated ->
+                    withSystemTempDirectory "build-coverage-degraded" $ \tmp -> do
+                        let db = tmp </> "db"
+                            out = (TxIn (BS.replicate 32 0x40) 0, addrShared, TxOut "\x80", (SlotNo 40, blk1))
+                        if populated
+                            then seedPreChangeStore db [out] [(SlotNo 40, blk1)]
+                            else seedPreChangeStore db [] []
+                        withRocksDBIndexer db $ \idx -> do
+                            session originAll idx `shouldReturn` served CoverageUnrecorded
+                            claimBuildCoverage idx originAll
+                                `shouldReturn` Right CoverageUnrecorded
+                        storeFamilyCount db `shouldReturn` 4
+  where
+    refusesChange withStore (old, new) = withStore $ \store -> do
+        reopen store (session old) `shouldReturn` served (CoverageRecorded old)
+        reopen store populate
+        before <- contents store
+        reopen store (session new)
+            `shouldReturn` refusedWith BuildCoverageMismatch{recorded = old, requested = new}
+        contents store `shouldReturn` before
+        reopen store (session old) `shouldReturn` served (CoverageRecorded old)
+
+originAll :: BuildCoverage
+originAll = BuildCoverage Nothing IndexAll
+
+-- | An address in every interest set below.
+addrShared :: Address
+addrShared = Address (BS.replicate 29 0x61)
+
+setA, setB :: InterestSet
+setA = IndexAddressSet (Set.fromList [addrShared, Address (BS.replicate 29 0x62)])
+setB = IndexAddressSet (Set.fromList [addrShared, Address (BS.replicate 29 0x63)])
+
+pointA, pointA', pointB :: (SlotNo, BlockHash)
+pointA = (SlotNo 100, BlockHash (BS.replicate 32 0xA1))
+pointA' = (SlotNo 100, BlockHash (BS.replicate 32 0xA2))
+pointB = (SlotNo 200, BlockHash (BS.replicate 32 0xA1))
+
+coverageSessions :: [BuildCoverage]
+coverageSessions =
+    [ originAll
+    , BuildCoverage (Just pointA) IndexAll
+    , BuildCoverage Nothing setA
+    , BuildCoverage (Just pointB) setB
+    ]
+
+-- | none to a point, a point to none, a point to another hash, a point to another slot.
+startChanges :: [(BuildCoverage, BuildCoverage)]
+startChanges =
+    [ (BuildCoverage Nothing setA, BuildCoverage (Just pointA) setA)
+    , (BuildCoverage (Just pointA) IndexAll, originAll)
+    , (BuildCoverage (Just pointA) IndexAll, BuildCoverage (Just pointA') IndexAll)
+    , (BuildCoverage (Just pointA) setB, BuildCoverage (Just pointB) setB)
+    ]
+
+-- | all to a set, a set to all, set A to set B.
+interestChanges :: [(BuildCoverage, BuildCoverage)]
+interestChanges =
+    [ (originAll, BuildCoverage Nothing setA)
+    , (BuildCoverage (Just pointA) setA, BuildCoverage (Just pointA) IndexAll)
+    , (BuildCoverage Nothing setA, BuildCoverage Nothing setB)
+    ]

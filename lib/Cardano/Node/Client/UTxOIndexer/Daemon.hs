@@ -23,7 +23,6 @@ module Cardano.Node.Client.UTxOIndexer.Daemon (
     DaemonConfig (..),
     runDaemon,
     parseDaemonArgs,
-    followerCoverage,
     applyUpstreamStatus,
 ) where
 
@@ -42,10 +41,8 @@ import Cardano.Node.Client.N2C.Trace (
     StopReason (..),
  )
 import Cardano.Node.Client.UTxOIndexer.Disclosure (
-    AddressCoverage (..),
-    Coverage (..),
-    CoverageStart (..),
     Disclosure (..),
+    storeCoverage,
  )
 import Cardano.Node.Client.UTxOIndexer.Follower (
     ChainSyncConfig (..),
@@ -56,6 +53,7 @@ import Cardano.Node.Client.UTxOIndexer.Follower (
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
     OpenOptions (..),
+    StoreCoverage,
     defaultOpenOptions,
     liveUtxoHandler,
     withInMemoryIndexer,
@@ -154,7 +152,7 @@ runDaemon tracer cfg = do
                     runServer
                         (dcListenSocket cfg)
                         idx
-                        (daemonDisclosure cfg)
+                        (daemonDisclosure cfg (fhStoreCoverage fh))
                         getReady
     onStart =
         traceWith
@@ -269,37 +267,17 @@ applyUpstreamStatus cfg newStatus rs =
                 }
 
 {- | What every asset answer of this daemon states: the magic
-its follower connects with, the coverage of the follower
-configuration it runs ('toChainSyncCfg'), the ready
-threshold and the stale bound.
+its follower connects with, the coverage its store holds for
+the follower's session, the ready threshold and the stale
+bound.
 -}
-daemonDisclosure :: DaemonConfig -> Disclosure
-daemonDisclosure cfg =
+daemonDisclosure :: DaemonConfig -> StoreCoverage -> Disclosure
+daemonDisclosure cfg coverage =
     Disclosure
         { dsNetworkMagic = dcNetworkMagic cfg
-        , dsCoverage = followerCoverage (toChainSyncCfg cfg)
+        , dsCoverage = storeCoverage coverage
         , dsReadyThresholdSlots = dcReadyThresholdSlots cfg
         , dsStaleAfterSeconds = dcStaleAfterSeconds cfg
-        }
-
-{- | The coverage a follower configuration indexes: from origin
-without a start point, from the start point otherwise; every
-address under 'IndexAll', a filtered set under
-'IndexAddressSet'.
-
-The start point is honoured on cold boot only: a store warm-booted
-under a configuration with a different start point keeps the
-history it was created with, which this does not see.
--}
-followerCoverage :: ChainSyncConfig -> Coverage
-followerCoverage cfg =
-    Coverage
-        { covStart = case csStartPoint cfg of
-            Nothing -> FromOrigin
-            Just (slot, hash) -> FromPoint slot hash
-        , covAddresses = case csInterestSet cfg of
-            IndexAll -> AllAddresses
-            IndexAddressSet _ -> FilteredAddresses
         }
 
 -- | Default stale bound (seconds).

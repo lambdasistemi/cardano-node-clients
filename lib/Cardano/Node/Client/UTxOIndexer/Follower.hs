@@ -145,9 +145,11 @@ import Cardano.Node.Client.UTxOIndexer.Columns (
     Cols,
  )
 import Cardano.Node.Client.UTxOIndexer.Indexer (
+    BuildCoverage (..),
     IndexerFollowerState,
     IndexerHandle (..),
     InterestSet (..),
+    StoreCoverage (..),
     filterBlockOps,
     withFollowerHandlers,
  )
@@ -564,6 +566,8 @@ data FollowerHandle = FollowerHandle
     -- ^ The follower's supervised chain-sync thread.
     -- 'link' it to propagate exceptions; cancellation on
     -- the bracket exit is automatic.
+    , fhStoreCoverage :: !StoreCoverage
+    -- ^ The coverage the store holds for this session.
     }
 
 -- ---------------------------------------------------------------------------
@@ -593,6 +597,15 @@ The follower writes UTxO operations into the handle via
 'applyAtSlot' and 'rollbackTo'; concurrent reads via
 'snapshotAt' / 'awaitTxIn' are thread-safe (the indexer
 library guarantees STM-backed read isolation).
+
+Before chain-sync starts, the store claims the configuration's
+coverage ('csStartPoint', 'csInterestSet') once per bracket: an
+empty store records it, a store recorded with it serves it, and a
+store without a record serves it as 'CoverageUnrecorded'. A store
+recorded with another coverage, or whose record does not decode,
+raises 'BuildCoverageRefusal' before the chain-sync thread starts and
+before the action runs; the store is left untouched. The outcome is
+'fhStoreCoverage'.
 -}
 withChainSyncFollower ::
     -- | Tracer for reconnect-supervisor lifecycle events.
@@ -635,6 +648,14 @@ withChainSyncFollowerCore ::
     (FollowerHandle -> IO a) ->
     IO a
 withChainSyncFollowerCore supervise chainSyncRunner tracer cfg idx action = do
+    storeCoverage <-
+        claimBuildCoverage
+            idx
+            BuildCoverage
+                { bcStartPoint = csStartPoint cfg
+                , bcInterestSet = csInterestSet cfg
+                }
+            >>= either throwIO pure
     now <- getCurrentTime
     readinessVar <- newTVarIO (initialReadiness now)
     let chainSession = do
@@ -702,6 +723,7 @@ withChainSyncFollowerCore supervise chainSyncRunner tracer cfg idx action = do
             FollowerHandle
                 { fhReadiness = readTVar readinessVar
                 , fhAsync = a
+                , fhStoreCoverage = storeCoverage
                 }
 
 defaultChainSyncRunner :: ChainSyncRunner

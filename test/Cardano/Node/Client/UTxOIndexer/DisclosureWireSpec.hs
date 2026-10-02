@@ -232,6 +232,17 @@ spec = describe "utxo-indexer socket: utxos_with_asset discloses network, covera
                 status answer `shouldBe` "synced"
                 dLimits answer `shouldBe` ["address_filter", "partial_history"]
 
+        it "names coverage_unknown first, and no partial history, for an unknown coverage" $
+            withDisclosed unknownCoverage $ \env -> do
+                setSynced env
+                atTip <- askHolders env
+                dLimits atTip `shouldBe` ["coverage_unknown"]
+                point <- learnPoint env
+                at <- getCurrentTime
+                setReady env (connected at (Just (point + 999)))
+                behind <- askHolders env
+                dLimits behind `shouldBe` ["coverage_unknown", "catching_up"]
+
         it "is carried whether utxos is empty or not" $
             withDisclosed partialFiltered $ \env -> do
                 point <- learnPoint env
@@ -302,6 +313,9 @@ partialFiltered =
         , dsStaleAfterSeconds = 30
         }
 
+unknownCoverage :: Disclosure
+unknownCoverage = fullCoverage{dsCoverage = Coverage StartUnknown AddressesUnknown}
+
 coverageCases :: [(String, Coverage, Aeson.Value)]
 coverageCases =
     [
@@ -335,6 +349,11 @@ coverageCases =
                     ]
             , "addresses" .= ("filtered" :: Text)
             ]
+        )
+    ,
+        ( "unknown start and unknown addresses for a store that does not know its coverage"
+        , Coverage StartUnknown AddressesUnknown
+        , Aeson.object ["start" .= ("unknown" :: Text), "addresses" .= ("unknown" :: Text)]
         )
     ]
   where
