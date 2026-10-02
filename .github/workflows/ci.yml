@@ -54,7 +54,7 @@ jobs:
           name: paolino
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Dev shell CI
-        run: nix develop --quiet -c just ci
+        run: nix develop --quiet -c bash -c 'cabal update && just ci'
   e2e:
     needs: build-gate
     runs-on: nixos
