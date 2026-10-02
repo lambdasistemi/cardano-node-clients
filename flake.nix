@@ -149,8 +149,16 @@
                   inherit pkgs system;
                 };
             };
+          # The fault-check runner built from a patched copy of the
+          # source; used only by the fault checks, never by a package.
+          faultRunner = faultSrc:
+            (project.appendModule {
+              modules = [{
+                packages.cardano-node-clients.src = lib.mkForce faultSrc;
+              }];
+            }).hsPkgs.cardano-node-clients.components.tests.fault-check;
           checkSuite = import ./nix/checks.nix {
-            inherit pkgs components lintPkgs;
+            inherit pkgs components lintPkgs faultRunner;
             cardanoNode = cardano-node.packages.${system}.cardano-node;
             src = ./.;
           };

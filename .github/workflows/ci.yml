@@ -27,6 +27,9 @@ jobs:
           .#checks.x86_64-linux.unit
           .#checks.x86_64-linux.e2e
           .#checks.x86_64-linux.lint
+          .#checks.x86_64-linux.fault-check-runner
+          .#checks.x86_64-linux.fault-asset-matching
+          .#checks.x86_64-linux.fault-snapshot-binding
       - name: Release version contract
         run: scripts/release/check-version-consistency
   build:
@@ -73,6 +76,28 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Lint
         run: nix run --quiet .#lint
+  fault-asset-matching:
+    needs: build-gate
+    runs-on: nixos
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/cachix-action@v17
+        with:
+          name: paolino
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Asset matching fault check
+        run: nix run --quiet .#fault-asset-matching
+  fault-snapshot-binding:
+    needs: build-gate
+    runs-on: nixos
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/cachix-action@v17
+        with:
+          name: paolino
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Snapshot binding fault check
+        run: nix run --quiet .#fault-snapshot-binding
   docs:
     runs-on: nixos
     if: github.ref == 'refs/heads/main'

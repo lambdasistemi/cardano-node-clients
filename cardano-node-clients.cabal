@@ -313,6 +313,8 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.DisclosureSpec
     Cardano.Node.Client.UTxOIndexer.DisclosureStabilitySpec
     Cardano.Node.Client.UTxOIndexer.DisclosureWireSpec
+    Cardano.Node.Client.UTxOIndexer.FaultCheck
+    Cardano.Node.Client.UTxOIndexer.FaultCheckSpec
     Cardano.Node.Client.UTxOIndexer.FollowerSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec
@@ -364,6 +366,7 @@ test-suite unit-tests
     , directory
     , filepath
     , hspec
+    , hspec-core
     , microlens
     , network
     , ouroboros-consensus
@@ -382,6 +385,41 @@ test-suite unit-tests
     , text
     , time
     , typed-protocols:stateful
+
+test-suite fault-check
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          fault-check-main.hs
+  default-language: GHC2021
+  ghc-options:      -threaded
+  other-modules:
+    Cardano.Node.Client.UTxOIndexer.AssetIndexSpec
+    Cardano.Node.Client.UTxOIndexer.FaultCheck
+
+  build-depends:
+    , async
+    , base
+    , bytestring
+    , cardano-crypto-class
+    , cardano-ledger-api
+    , cardano-ledger-binary
+    , cardano-ledger-byron
+    , cardano-ledger-core
+    , cardano-ledger-mary
+    , cardano-node-clients:utxo-indexer-lib
+    , chain-follower
+    , containers
+    , data-default-class
+    , directory
+    , filepath
+    , hspec
+    , hspec-core
+    , microlens
+    , rocksdb-haskell-jprupp
+    , rocksdb-kv-transactions
+    , rocksdb-kv-transactions:kv-transactions
+    , temporary
 
 test-suite e2e-tests
   import:           warnings

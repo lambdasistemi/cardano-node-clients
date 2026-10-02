@@ -1,0 +1,61 @@
+--- a/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
++++ b/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
+@@ -1219,7 +1219,7 @@
+                 case assetColumns of
+                     AssetColumnsOff -> pure (Left AssetIndexAbsent)
+                     AssetColumnsOn ->
+-                        runTransaction (readAssetSnapshot policy name)
++                        readAssetSnapshot runTransaction policy name
+             , claimBuildCoverage = \requested ->
+                 case assetColumns of
+                     AssetColumnsOff -> pure (Right CoverageUnrecorded)
+@@ -1944,27 +1944,42 @@
+ the live columns for the stored bytes and creation point. A row
+ whose 'TxIn' lacks live data makes the whole read inconsistent.
+ -}
++--
++-- FAULT fault-snapshot-binding: the read runs as separate
++-- transactions (markers and indexed point; asset rows; one per row
++-- join) and waits for the indexed point to move before reading the
++-- rows, so one answer binds a point, its matches and their creation
++-- points taken from different snapshots.
+ readAssetSnapshot ::
++    (forall a. Transaction IO cf Cols op a -> IO a) ->
+     PolicyId ->
+     AssetName ->
+-    Transaction IO cf Cols op (Either AssetQueryUnavailable AssetSnapshot)
+-readAssetSnapshot policy name = do
+-    mRebuild <- query MetaCol assetIndexRebuildKey
+-    mMarker <- query MetaCol assetIndexCompleteKey
++    IO (Either AssetQueryUnavailable AssetSnapshot)
++readAssetSnapshot run policy name = do
++    mRebuild <- run (query MetaCol assetIndexRebuildKey)
++    mMarker <- run (query MetaCol assetIndexCompleteKey)
+     case (mRebuild, mMarker) of
+         (Just _, _) -> pure (Left AssetIndexRebuilding)
+         (Nothing, Just v) | v == assetIndexCompleteValue -> readComplete
+         _ -> pure (Left AssetIndexAbsent)
+   where
+     readComplete = do
+-        mPoint <- indexedPoint
++        mPoint <- run indexedPoint
+         case mPoint of
+             Nothing -> pure (Left NoIndexedPoint)
+             Just point -> do
+-                rows <- iterating AssetIndex (scanAsset policy name)
+-                result <- traverse matchOf rows
++                awaitMovedPoint mPoint (2000 :: Int)
++                rows <- run (iterating AssetIndex (scanAsset policy name))
++                result <- traverse (run . matchOf) rows
+                 pure (fmap (AssetSnapshot point) (sequenceA result))
+ 
++    awaitMovedPoint seen n =
++        when (n > 0) $ do
++            now <- run indexedPoint
++            when (now == seen) $ do
++                threadDelay 1000
++                awaitMovedPoint seen (n - 1)
++
+     matchOf (txIn, qty) = do
+         mAddr <- query TxInCol txIn
+         case mAddr of

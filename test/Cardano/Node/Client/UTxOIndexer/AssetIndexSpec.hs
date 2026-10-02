@@ -75,7 +75,14 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Short qualified as SBS
 import Data.Default.Class (def)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (
+    IORef,
+    atomicModifyIORef',
+    modifyIORef',
+    newIORef,
+    readIORef,
+    writeIORef,
+ )
 import Data.List (isInfixOf, sortOn)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Map.Strict (Map)
@@ -107,6 +114,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (
     Spec,
     describe,
+    expectationFailure,
     it,
     shouldBe,
     shouldReturn,
@@ -232,7 +240,7 @@ spec =
                     readsTotal <- newIORef (0 :: Int)
                     readsDuringWriter <- newIORef (0 :: Int)
                     pointsSeen <- newIORef Set.empty
-                    writer <- async (runScriptDelayed h concurrencyScript)
+                    writer <- async (runScriptDelayed h readsTotal concurrencyScript)
                     readers <-
                         mapM
                             (\_ -> async (reader h recorded done readsTotal readsDuringWriter pointsSeen))
@@ -587,16 +595,26 @@ runScript h = mapM_ act
     act (Rollback t) = rollbackTo h (SlotNo t)
 
 {- | The concurrency writer: like 'runScript' but with a small delay
-per step so readers observably overlap the mutation window.
+per step so readers observably overlap the mutation window. After
+each step it waits (a bounded while) until a reader has started
+a read of the new state, so every state the script reaches is read
+while the next write is still to come.
 -}
-runScriptDelayed :: IndexerHandle -> [Action] -> IO ()
-runScriptDelayed h = mapM_ act
+runScriptDelayed :: IndexerHandle -> IORef Int -> [Action] -> IO ()
+runScriptDelayed h readsTotal = mapM_ act
   where
     act a = do
         threadDelay 2000
         case a of
             Apply s -> applyStep h s
             Rollback t -> rollbackTo h (SlotNo t)
+        before <- readIORef readsTotal
+        awaitRead before (200 :: Int)
+    awaitRead before n = do
+        now <- readIORef readsTotal
+        when (now <= before && n > 0) $ do
+            threadDelay 100
+            awaitRead before (n - 1)
 
 {- | Run a script and, after every action, assert the typed read of
 every listed asset equals the model's state at the model's point.
@@ -622,7 +640,9 @@ shouldReturnSnapshot ::
 shouldReturnSnapshot action ((slot, hash), expected) = do
     r <- action
     case r of
-        Left e -> error (show e)
+        Left e ->
+            expectationFailure
+                ("expected a snapshot, the read answered " <> show e)
         Right AssetSnapshot{asPoint, asMatches} -> do
             asPoint `shouldBe` (SlotNo slot, BlockHash hash)
             asMatches `shouldBe` expected
@@ -665,7 +685,7 @@ reader h recorded done readsTotal readsDuringWriter pointsSeen = loop
     loop = do
         isDone <- readIORef done
         unless isDone $ do
-            modifyIORef' readsTotal (+ 1)
+            atomicModifyIORef' readsTotal (\n -> (n + 1, ()))
             wasDuring <- not <$> readIORef done
             when wasDuring $ modifyIORef' readsDuringWriter (+ 1)
             r <- assetUtxos h (polId p1Bytes) (name "tok")
@@ -674,11 +694,14 @@ reader h recorded done readsTotal readsDuringWriter pointsSeen = loop
                     modifyIORef' pointsSeen (Set.insert asPoint)
                     case Map.lookup asPoint recorded of
                         Nothing ->
-                            error ("unknown point " <> show asPoint)
+                            expectationFailure
+                                ("unknown point " <> show asPoint)
                         Just expected ->
                             asMatches `shouldBe` expected
                 Left NoIndexedPoint -> pure ()
-                Left e -> error (show e)
+                Left e ->
+                    expectationFailure
+                        ("expected a snapshot, the read answered " <> show e)
             loop
 
 {- | Non-degeneracy witness: every listed asset really holds a

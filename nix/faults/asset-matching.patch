@@ -1,0 +1,13 @@
+--- a/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
++++ b/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
+@@ -1920,7 +1920,9 @@
+   where
+     go acc Nothing = pure (reverse acc)
+     go acc (Just Entry{entryKey = k, entryValue = q})
+-        | assetKeyPolicy k == policy && assetKeyName k == name =
++        -- FAULT fault-asset-matching: a row is kept on its policy alone,
++        -- so the walk also returns the other asset names of the policy.
++        | assetKeyPolicy k == policy =
+             nextEntry >>= go ((assetKeyTxIn k, q) : acc)
+         | otherwise = pure (reverse acc)
+ 
