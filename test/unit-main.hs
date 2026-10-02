@@ -23,6 +23,7 @@ import Cardano.Node.Client.UTxOIndexer.DaemonSpec qualified as UTxOIndexerDaemon
 import Cardano.Node.Client.UTxOIndexer.DisclosureSpec qualified as UTxOIndexerDisclosureSpec
 import Cardano.Node.Client.UTxOIndexer.DisclosureStabilitySpec qualified as UTxOIndexerDisclosureStabilitySpec
 import Cardano.Node.Client.UTxOIndexer.DisclosureWireSpec qualified as UTxOIndexerDisclosureWireSpec
+import Cardano.Node.Client.UTxOIndexer.FaultCheckSpec qualified as UTxOIndexerFaultCheckSpec
 import Cardano.Node.Client.UTxOIndexer.FollowerSpec qualified as UTxOIndexerFollowerSpec
 import Cardano.Node.Client.UTxOIndexer.IndexerSpec qualified as UTxOIndexerSpec
 import Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec qualified as UTxOIndexerMainnetSmokeSpec
@@ -64,6 +65,7 @@ main = hspec $ do
     UTxOIndexerProviderSpec.spec
     UTxOIndexerDaemonSpec.spec
     UTxOIndexerDaemonDisclosureSpec.spec
+    UTxOIndexerFaultCheckSpec.spec
     UTxOIndexerFollowerSpec.spec
     UTxOIndexerMainnetSmokeSpec.spec
     N2CLocalStateQuerySpec.spec

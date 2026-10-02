@@ -258,6 +258,44 @@ flowchart TD
 | `no_indexed_point` | The store has no point to answer at yet: no block applied, or the daemon is still in its initial catch-up from genesis, which records no rollback points. | Retry once `ready` is `true`. |
 | `inconsistent` | An index entry has no matching live output, or an output's bytes cannot be read. | Report it; the store needs rebuilding. |
 
+### Fault checks in CI
+
+Two CI jobs show that the tests guarding this answer fail when the
+behaviour they guard breaks, not only when their setup does. Each
+builds the asset query from a copy of the source with one fault
+patched in (`nix/faults/*.patch`; the shipped daemon and library are
+never built with it), runs the one guarding example, and passes only
+if that example fails on an expectation.
+
+| Job | Fault | Guarding example |
+|-----|-------|------------------|
+| `fault-asset-matching` | the index walk keeps a row on its policy alone, so other asset names of the policy are returned | `…asset index/transactional maintenance against the model (I1)/matches after create, move, split, partial spend and burn` |
+| `fault-snapshot-binding` | the read runs as separate transactions and waits for the indexed point to move, so the point, the matches and their creation points come from different snapshots | `…asset index/concurrent snapshots (I5)/every snapshot equals the model state at its point` |
+
+Run one locally with `nix run --quiet .#fault-asset-matching` (or
+`.#fault-snapshot-binding`). It prints one line:
+
+```text
+FAULT-CHECK fault-asset-matching outcome=KILLED example=<hspec path>
+```
+
+| Outcome | Exit | Meaning |
+|---------|------|---------|
+| `KILLED` | 0 | the example failed on an expectation under the fault: the guard works |
+| `SURVIVED` | 3 | the example passed under the fault: the guard misses this fault |
+| `SETUP-FAILURE:<reason>` | 2 | no verdict: `fault-not-applied` (the patch no longer applies to the source), `example-not-run`, `example-not-unique`, `example-pending`, `failed-by-exception` (the example failed by an exception, not an expectation), `harness-failed` (the check script itself failed), `usage` (the runner was not given exactly one example) |
+| no `FAULT-CHECK` line | 1 | no verdict: nix failed before the check ran, typically a faulted copy that no longer compiles |
+
+The table is itself checked: the `fault-check-runner` check (built by
+CI's build gate) drives the check script through every row with a
+stub runner, and the unit suite drives the classifier through every
+kind of example result; both fail if any outcome exits 1 or gets the
+wrong code.
+
+A `fault-not-applied` or no-line failure after a change to
+`Indexer.hs` means the patch must be refreshed to the new source; a
+`SURVIVED` means the guarding test must be strengthened.
+
 ## Network, coverage and freshness
 
 An empty or short `utxos` list can mean two things: the chain holds no
