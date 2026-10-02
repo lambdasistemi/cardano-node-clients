@@ -33,6 +33,8 @@ import Cardano.Node.Client.UTxOIndexer.ProviderSpec qualified as UTxOIndexerProv
 import Cardano.Node.Client.UTxOIndexer.ServerSpec qualified as UTxOIndexerServerSpec
 import Cardano.Node.Client.UTxOIndexer.ServerStabilitySpec qualified as UTxOIndexerServerStabilitySpec
 import Cardano.Node.Client.UTxOIndexer.SharedFollowerSpec qualified as UTxOIndexerSharedFollowerSpec
+import Cardano.Node.Client.UTxOIndexer.SocketReadViewSpec qualified as SocketReadViewSpec
+import Cardano.Node.Client.UTxOIndexer.SocketReadViewStabilitySpec qualified as SocketReadViewStabilitySpec
 import Cardano.Node.Client.UTxOIndexer.TxOutViewSpec qualified as UTxOIndexerTxOutViewSpec
 import Cardano.Node.Client.UTxOIndexer.TypesSpec qualified as UTxOIndexerTypesSpec
 import Cardano.Node.Client.UTxOIndexer.WarmBootSpec qualified as UTxOIndexerWarmBootSpec
@@ -52,6 +54,8 @@ main = hspec $ do
     UTxOIndexerTxOutViewSpec.spec
     UTxOIndexerAssetIndexSpec.spec
     IndexedViewSpec.spec
+    SocketReadViewSpec.spec
+    SocketReadViewStabilitySpec.spec
     UTxOIndexerAssetProvenanceSpec.spec
     UTxOIndexerAssetTypesSpec.spec
     UTxOIndexerAssetUpgradeSpec.spec
