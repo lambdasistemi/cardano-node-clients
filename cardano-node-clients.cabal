@@ -316,6 +316,7 @@ test-suite unit-tests
     Cardano.Node.Client.UTxOIndexer.FaultCheck
     Cardano.Node.Client.UTxOIndexer.FaultCheckSpec
     Cardano.Node.Client.UTxOIndexer.FollowerSpec
+    Cardano.Node.Client.UTxOIndexer.IndexedViewSpec
     Cardano.Node.Client.UTxOIndexer.IndexerSpec
     Cardano.Node.Client.UTxOIndexer.MainnetSmokeSpec
     Cardano.Node.Client.UTxOIndexer.PersistenceSpec
@@ -396,6 +397,8 @@ test-suite fault-check
   other-modules:
     Cardano.Node.Client.UTxOIndexer.AssetIndexSpec
     Cardano.Node.Client.UTxOIndexer.FaultCheck
+    Cardano.Node.Client.UTxOIndexer.IndexedViewSpec
+    Cardano.Node.Client.UTxOIndexer.StoreFixture
 
   build-depends:
     , async

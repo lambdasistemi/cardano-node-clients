@@ -97,6 +97,11 @@ module Cardano.Node.Client.UTxOIndexer.Indexer (
     AssetMatch (..),
     AssetQueryUnavailable (..),
 
+    -- * Indexed read view
+    ReadQuery (..),
+    ReadResult (..),
+    IndexedView (..),
+
     -- * Build coverage
     BuildCoverage (..),
     StoreCoverage (..),
@@ -296,6 +301,33 @@ data AssetQueryUnavailable
       AssetIndexInconsistent !TxIn
     | -- | An upgrade of the asset index is in progress.
       AssetIndexRebuilding
+    deriving stock (Eq, Show)
+
+-- | A query in an ordered, nonempty indexed read batch.
+data ReadQuery
+    = -- | Every live output at an address.
+      AddressQuery !Address
+    | -- | Every live holder of the policy and asset name.
+      AssetQuery !PolicyId !AssetName
+    deriving stock (Eq, Show)
+
+-- | One answer corresponding to the query at the same batch position.
+data ReadResult
+    = -- | Stored outputs in ascending 'TxIn' order.
+      AddressResult [(TxIn, TxOut)]
+    | -- | Asset holders in ascending 'TxIn' order, retaining creation points.
+      AssetResult [AssetMatch]
+    deriving stock (Eq, Show)
+
+{- | A materialized batch read from one storage transaction. Traversing
+the view never reads storage and remains valid after the store closes.
+-}
+data IndexedView = IndexedView
+    { ivPoint :: !(SlotNo, BlockHash)
+    -- ^ The indexed point shared by all answers.
+    , ivResults :: !(NonEmpty ReadResult)
+    -- ^ One answer per input query, preserving order and duplicates.
+    }
     deriving stock (Eq, Show)
 
 {- | The coverage a store is built with: where its history starts
@@ -611,6 +643,10 @@ data IndexerHandle = IndexerHandle
     -- The record is written once and never changed. A store opened
     -- without its metadata column (four families) is
     -- 'CoverageUnrecorded'.
+    , readView :: NonEmpty ReadQuery -> IO (Either AssetQueryUnavailable IndexedView)
+    -- ^ Read the point, availability and all answers in one transaction.
+    -- Refuse the whole batch when the asset index is unavailable, including
+    -- address-only batches; 'snapshotAt' remains independently available.
     }
 
 {- | Open an in-memory indexer, run the action with the
@@ -1224,6 +1260,10 @@ mkHandle
                 case assetColumns of
                     AssetColumnsOff -> pure (Right CoverageUnrecorded)
                     AssetColumnsOn -> runTransaction (claimCoverage requested)
+            , readView = \queries ->
+                case assetColumns of
+                    AssetColumnsOff -> pure (Left AssetIndexAbsent)
+                    AssetColumnsOn -> runTransaction (readIndexedView queries)
             }
 
 {- | Retarget an opaque follower state to a handler list.
@@ -1948,7 +1988,17 @@ readAssetSnapshot ::
     PolicyId ->
     AssetName ->
     Transaction IO cf Cols op (Either AssetQueryUnavailable AssetSnapshot)
-readAssetSnapshot policy name = do
+readAssetSnapshot = readAssetSnapshotCore
+
+{- | Transactional asset-read core shared by the legacy 'assetUtxos'
+path and the indexed view. The legacy snapshot-binding fault rewrites
+the wrapper above; the core stays single-transaction for the view.
+-}
+readAssetSnapshotCore ::
+    PolicyId ->
+    AssetName ->
+    Transaction IO cf Cols op (Either AssetQueryUnavailable AssetSnapshot)
+readAssetSnapshotCore policy name = do
     mRebuild <- query MetaCol assetIndexRebuildKey
     mMarker <- query MetaCol assetIndexCompleteKey
     case (mRebuild, mMarker) of
@@ -1989,6 +2039,41 @@ readAssetSnapshot policy name = do
                                             }
                                         )
                                     )
+
+-- | Availability and indexed point for the entire batch, even address-only.
+readViewPoint ::
+    Transaction IO cf Cols op (Either AssetQueryUnavailable (SlotNo, BlockHash))
+readViewPoint = do
+    rebuilding <- query MetaCol assetIndexRebuildKey
+    complete <- query MetaCol assetIndexCompleteKey
+    case (rebuilding, complete) of
+        (Just _, _) -> pure (Left AssetIndexRebuilding)
+        (Nothing, Just v) | v == assetIndexCompleteValue -> do
+            maybe (Left NoIndexedPoint) Right <$> indexedPoint
+        _ -> pure (Left AssetIndexAbsent)
+
+-- | Resolve one query inside the enclosing view transaction.
+readViewResult ::
+    ReadQuery ->
+    Transaction IO cf Cols op (Either AssetQueryUnavailable ReadResult)
+readViewResult (AddressQuery addr) =
+    Right . AddressResult <$> iterating AddressIndex (scanAddress addr)
+readViewResult (AssetQuery policy name) =
+    fmap (AssetResult . asMatches) <$> readAssetSnapshotCore policy name
+
+{- | Point, markers, address scans and asset joins all use the runner's
+single snapshot. Only materialized values leave the transaction.
+-}
+readIndexedView ::
+    NonEmpty ReadQuery ->
+    Transaction IO cf Cols op (Either AssetQueryUnavailable IndexedView)
+readIndexedView queries = do
+    point <- readViewPoint
+    case point of
+        Left reason -> pure (Left reason)
+        Right p -> do
+            results <- traverse readViewResult queries
+            pure (IndexedView p <$> sequenceA results)
 
 {- | Stream a mutable list reference one element at a
 time, returning 'Nothing' when exhausted. Used to feed

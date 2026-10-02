@@ -1,0 +1,44 @@
+--- a/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
++++ b/lib-utxo-indexer/Cardano/Node/Client/UTxOIndexer/Indexer.hs
+@@ -1263,7 +1263,7 @@
+             , readView = \queries ->
+                 case assetColumns of
+                     AssetColumnsOff -> pure (Left AssetIndexAbsent)
+-                    AssetColumnsOn -> runTransaction (readIndexedView queries)
++                    AssetColumnsOn -> readIndexedView runTransaction queries
+             }
+ 
+ {- | Retarget an opaque follower state to a handler list.
+@@ -2055,16 +2055,28 @@
+ {- | Point, markers, address scans and asset joins all use the runner's
+ single snapshot. Only materialized values leave the transaction.
+ -}
++-- FAULT fault-view-snapshot-binding: capture the point separately,
++-- wait for a concurrent apply/rollback, then resolve each query in
++-- a new transaction. The normal model assertion must reject this.
+ readIndexedView ::
++    (forall a. Transaction IO cf Cols op a -> IO a) ->
+     NonEmpty ReadQuery ->
+-    Transaction IO cf Cols op (Either AssetQueryUnavailable IndexedView)
+-readIndexedView queries = do
+-    point <- readViewPoint
++    IO (Either AssetQueryUnavailable IndexedView)
++readIndexedView run queries = do
++    point <- run readViewPoint
+     case point of
+         Left reason -> pure (Left reason)
+         Right p -> do
+-            results <- traverse readViewResult queries
++            awaitMovedPoint p (2000 :: Int)
++            results <- traverse (run . readViewResult) queries
+             pure (IndexedView p <$> sequenceA results)
++  where
++    awaitMovedPoint seen n =
++        when (n > 0) $ do
++            now <- run readViewPoint
++            when (now == Right seen) $ do
++                threadDelay 1000
++                awaitMovedPoint seen (n - 1)
+ 
+ {- | Stream a mutable list reference one element at a
+ time, returning 'Nothing' when exhausted. Used to feed

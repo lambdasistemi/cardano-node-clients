@@ -24,6 +24,7 @@ import Cardano.Node.Client.UTxOIndexer.FaultCheck (
     render,
     runExample,
  )
+import Cardano.Node.Client.UTxOIndexer.IndexedViewSpec qualified as IndexedViewSpec
 import Control.Monad (unless)
 import System.Environment (getArgs)
 import System.Exit (exitWith)
@@ -33,7 +34,7 @@ main :: IO ()
 main = do
     args <- getArgs
     (outcome, detail) <- case args of
-        [example] -> runExample AssetIndexSpec.spec example
+        [example] -> runExample (AssetIndexSpec.spec >> IndexedViewSpec.spec) example
         _ -> pure (SetupFailure "usage", "")
     unless (null detail) $ hPutStrLn stderr detail
     putStrLn (render outcome)

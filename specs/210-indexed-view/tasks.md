@@ -9,11 +9,11 @@
 
 ## S1 / V1–V3
 
-- [ ] T210-101 Record baseline and frozen gate/base/fences before dispatch.
-- [ ] T210-102 Add typed materialized multi-query read and unavailability.
-- [ ] T210-103 Model/parity/apply/rollback/availability/provenance specs execute.
+- [x] T210-101 Record baseline and frozen gate/base/fences before dispatch.
+- [x] T210-102 Add typed materialized multi-query read and unavailability.
+- [x] T210-103 Model/parity/apply/rollback/availability/provenance specs execute.
 - [ ] T210-104 Split-snapshot fault produces behavioral RED; head CI executes it.
-- [ ] T210-105 Library documentation and compatibility regressions pass.
+- [x] T210-105 Library documentation and compatibility regressions pass.
 - [ ] T210-106 Every checkpoint approved; root gate and exact-head CI green.
 
 ## S2 / V4 — scope ruling required
