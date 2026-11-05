@@ -30,6 +30,7 @@ import Ouroboros.Consensus.HardFork.History.Summary (
     EraEnd (..),
     EraSummary (..),
     Summary (..),
+    initBound,
  )
 
 import Cardano.Node.Client.Validity (
@@ -60,7 +61,7 @@ mkBound s =
         { boundTime = RelativeTime (fromIntegral s)
         , boundSlot = SlotNo s
         , boundEpoch = EpochNo (s `div` 432_000)
-        , boundPerasRound = NoPerasEnabled
+        , boundNextPerasRound = boundNextPerasRound initBound
         }
 
 bounded :: Word64 -> Word64 -> EraSummary

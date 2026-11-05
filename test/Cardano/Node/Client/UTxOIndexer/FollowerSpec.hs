@@ -87,7 +87,7 @@ import Control.Concurrent.STM (
  )
 import Control.Exception (ErrorCall (..), try)
 import Control.Monad (forM_)
-import Control.Tracer (Tracer (..), nullTracer, traceWith)
+import Control.Tracer (mkTracer, nullTracer, traceWith)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
@@ -219,14 +219,14 @@ spec =
                             let cfg =
                                     (mkCfg (dir <> "/unused.sock"))
                                         { csBlockTracer =
-                                            Tracer $
+                                            mkTracer $
                                                 \_ ->
                                                     atomically $
                                                         writeTVar
                                                             blockSeen
                                                             True
                                         , csTipTracer =
-                                            Tracer $
+                                            mkTracer $
                                                 \slot ->
                                                     atomically $
                                                         modifyTVar'

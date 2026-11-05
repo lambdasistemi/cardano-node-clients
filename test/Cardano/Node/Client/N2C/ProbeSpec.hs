@@ -15,11 +15,36 @@ module Cardano.Node.Client.N2C.ProbeSpec (spec) where
 import Cardano.Node.Client.N2C.Probe (
     ProbeConfig (..),
     defaultProbeConfig,
+    waitForNodeReady,
  )
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Cardano.Node.Client.N2C.Trace (renderN2CEvent)
+import Control.Exception (SomeException, try)
+import Control.Tracer (mkTracer)
+import Data.Either (isLeft)
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Text qualified as Text
+import Ouroboros.Network.Magic (NetworkMagic (..))
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 spec :: Spec
 spec = describe "Cardano.Node.Client.N2C.Probe" $ do
+    it "reports an unavailable socket as a probe failure, not chain replay" $
+        withSystemTempDirectory "n2c-probe" $ \dir -> do
+            events <- newIORef []
+            let tracer = mkTracer $ \event ->
+                    modifyIORef' events (renderN2CEvent event :)
+                config = defaultProbeConfig{pcTotalTimeoutMs = Just 0}
+            result <-
+                try @SomeException $
+                    waitForNodeReady tracer config (NetworkMagic 42) (dir </> "missing.socket")
+            result `shouldSatisfy` isLeft
+            observed <- readIORef events
+            observed
+                `shouldSatisfy` any (Text.isInfixOf (Text.pack "event=node-probe-failed"))
+            observed
+                `shouldSatisfy` (not . any (Text.isInfixOf (Text.pack "event=node-replaying")))
     describe "defaultProbeConfig" $ do
         it "per-attempt timeout = 5_000 ms" $
             pcAttemptTimeoutMs defaultProbeConfig `shouldBe` 5_000

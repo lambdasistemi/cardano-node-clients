@@ -86,7 +86,6 @@ import Data.Foldable (toList)
 import Data.Word (Word16)
 import Lens.Micro ((^.))
 import Ouroboros.Consensus.Cardano.Node ()
-import Ouroboros.Consensus.Protocol.Praos.Header ()
 import Ouroboros.Consensus.Shelley.Ledger.NetworkProtocolVersion ()
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 import Ouroboros.Network.Block qualified as Network

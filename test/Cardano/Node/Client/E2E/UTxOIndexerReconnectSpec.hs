@@ -71,7 +71,7 @@ import Control.Concurrent.STM (
     readTVarIO,
  )
 import Control.Exception (bracket)
-import Control.Tracer (Tracer (..))
+import Control.Tracer (mkTracer)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString (ByteString)
@@ -110,7 +110,7 @@ runReconnectE2E = do
     gDir <- genesisDir
     eventsRef <- newTVarIO ([] :: [N2CEvent])
     let captureTracer =
-            Tracer
+            mkTracer
                 ( \ev ->
                     atomically (modifyTVar' eventsRef (ev :))
                 )

@@ -51,7 +51,7 @@ import Control.Concurrent (
  )
 import Control.Concurrent.Async (race_)
 import Control.Exception (IOException, catch, try)
-import Control.Tracer (Tracer (..))
+import Control.Tracer (mkTracer)
 import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -70,7 +70,7 @@ import System.Posix.Signals (
 data DaemonConfig = DaemonConfig
     { daemonControlSocket :: FilePath
     -- ^ Path of the Unix control socket. The daemon binds here
-    -- and unlinks on shutdown.
+    --     and unlinks on shutdown.
     , daemonProducerHosts :: [HostName]
     -- ^ Producer hostnames the @chain_sync_flap@ endpoint targets.
     , daemonProducerPort :: PortNumber
@@ -79,8 +79,8 @@ data DaemonConfig = DaemonConfig
     -- ^ Network magic used in the N2N handshake.
     , daemonChainPointsFile :: Maybe FilePath
     -- ^ Path of the chain-points file produced by
-    -- @tracer-sidecar@. When 'Nothing', the @chain_sync_flap@
-    -- endpoint always returns 'CsffNoChainPointsFile'.
+    --     @tracer-sidecar@. When 'Nothing', the @chain_sync_flap@
+    --     endpoint always returns 'CsffNoChainPointsFile'.
     }
 
 {- | Run the daemon: install signal handler, start NDJSON server,
@@ -139,7 +139,7 @@ runFlap cfg path args = do
                     nConns = max 1 (fromIntegral (csfNConns args) :: Int)
                     capped = NE.fromList (NE.take nConns points)
                     limit = Limit (csfLimit args)
-                    tracer = Tracer (hPutStrLn stderr)
+                    tracer = mkTracer (hPutStrLn stderr)
                 repeatedAdversaryApplication
                     tracer
                     nConns

@@ -49,7 +49,6 @@ import Ouroboros.Consensus.Node.Serialisation (
     decodeNodeToClient,
     encodeNodeToClient,
  )
-import Ouroboros.Consensus.Protocol.Praos.Header ()
 import Ouroboros.Consensus.Shelley.Ledger (
     CodecConfig (ShelleyCodecConfig),
  )

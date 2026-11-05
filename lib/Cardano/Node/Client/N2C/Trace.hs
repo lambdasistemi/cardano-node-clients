@@ -23,7 +23,7 @@ module Cardano.Node.Client.N2C.Trace (
 
 import Cardano.Node.Client.UTxOIndexer.Types (SlotNo (..))
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
-import Control.Tracer (Tracer (..), nullTracer)
+import Control.Tracer (Tracer, mkTracer, nullTracer)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -43,32 +43,34 @@ as new constructors rather than by extending existing ones.
 -}
 data N2CEvent
     = -- | Daemon entry: listen-socket path and (optional)
-      -- RocksDB path. Emitted once per process.
+      --       RocksDB path. Emitted once per process.
       IndexerStarted !FilePath !(Maybe FilePath)
     | -- | Upstream chain-sync run terminated. The 'Text'
-      -- is a short, human-readable reason
-      -- (@displayException@ truncated to ~80 chars).
+      --       is a short, human-readable reason
+      --       (@displayException@ truncated to ~80 chars).
       IndexerDisconnected !Text
     | -- | The probe loop is waiting for the upstream node
-      -- to finish loading its ChainDB. Emitted once per
-      -- failed probe attempt (LSQ acquire that didn't
-      -- reply within the per-attempt budget). Operators
-      -- can use the attempt counter and elapsed time to
-      -- distinguish "alive, replaying" from "broken".
+      --       to finish loading its ChainDB. Emitted once per
+      --       failed probe attempt (LSQ acquire that didn't
+      --       reply within the per-attempt budget). Operators
+      --       can use the attempt counter and elapsed time to
+      --       distinguish "alive, replaying" from "broken".
       IndexerNodeReplaying !Int !Word64
+    | -- | A probe connection or query failed; the reason is retained.
+      IndexerNodeProbeFailed !Int !Word64 !Text
     | -- | Supervisor is about to retry chain-sync.
-      -- @attempt@ is 1-based; @waitMs@ is the jittered
-      -- delay this attempt slept before connecting.
+      --       @attempt@ is 1-based; @waitMs@ is the jittered
+      --       delay this attempt slept before connecting.
       IndexerReconnecting !Int !Word64
     | -- | A fresh chain-sync run survived the reset
-      -- threshold. @resumeSlot@ is the most recently
-      -- applied slot at the moment the supervisor
-      -- declared the run healthy; @elapsedMs@ is the
-      -- total time spent disconnected since the prior
-      -- 'IndexerDisconnected'.
+      --       threshold. @resumeSlot@ is the most recently
+      --       applied slot at the moment the supervisor
+      --       declared the run healthy; @elapsedMs@ is the
+      --       total time spent disconnected since the prior
+      --       'IndexerDisconnected'.
       IndexerReconnected !(Maybe SlotNo) !Word64
     | -- | Daemon exit. Emitted exactly once per process,
-      -- including on async cancellation.
+      --       including on async cancellation.
       IndexerStopped !StopReason
     deriving stock (Show, Eq)
 
@@ -116,6 +118,11 @@ renderN2CEvent ev =
             kv "event" "node-replaying"
                 <> kshow "attempt" attempt
                 <> kshow "elapsedMs" elapsedMs
+        IndexerNodeProbeFailed attempt elapsedMs reason ->
+            kv "event" "node-probe-failed"
+                <> kshow "attempt" attempt
+                <> kshow "elapsedMs" elapsedMs
+                <> kvText "reason" reason
         IndexerReconnecting attempt waitMs ->
             kv "event" "reconnecting"
                 <> kshow "attempt" attempt
@@ -166,7 +173,7 @@ Format:
 @
 -}
 handleTracer :: Handle -> Tracer IO N2CEvent
-handleTracer h = Tracer $ \ev -> do
+handleTracer h = mkTracer $ \ev -> do
     now <- getCurrentTime
     let ts =
             formatTime

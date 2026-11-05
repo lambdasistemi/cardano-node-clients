@@ -33,7 +33,7 @@ import Control.Concurrent.STM (
     tryPutTMVar,
  )
 import Control.Monad (void, when)
-import Control.Tracer (Tracer (..))
+import Control.Tracer (Tracer, mkTracer)
 import Data.IORef (
     modifyIORef',
     newIORef,
@@ -68,7 +68,7 @@ killDuring targetPhase withApp = do
     seenRef <- newIORef ([] :: [phase])
     readyVar <- newEmptyTMVarIO
 
-    let tracer = Tracer $ \phase -> do
+    let tracer = mkTracer $ \phase -> do
             modifyIORef' seenRef $ \seen ->
                 if phase `elem` seen
                     then seen
