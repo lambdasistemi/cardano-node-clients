@@ -206,6 +206,7 @@ enactPV11Transition lsqCh ltxsCh = do
                         , sppOwners = Set.empty
                         , sppRelays = StrictSeq.empty
                         , sppMetadata = SNothing
+                        , sppBlsKey = SNothing
                         }
                 poolRegCert = RegPoolTxCert poolParams
 

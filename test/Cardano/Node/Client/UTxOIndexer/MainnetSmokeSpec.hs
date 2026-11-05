@@ -44,7 +44,7 @@ import Control.Concurrent.STM (
     newTVarIO,
     readTVarIO,
  )
-import Control.Tracer (Tracer (..), nullTracer)
+import Control.Tracer (mkTracer, nullTracer)
 import Data.ByteString.Short qualified as SBS
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
@@ -85,7 +85,7 @@ runMainnetSmoke socketPath = do
         withRocksDBIndexer (tmp </> "db") $ \idx -> do
             eventsVar <- newTVarIO ([] :: [N2CEvent])
             let tracer =
-                    Tracer $ \ev ->
+                    mkTracer $ \ev ->
                         atomically (modifyTVar' eventsVar (ev :))
                 cfg =
                     ChainSyncConfig

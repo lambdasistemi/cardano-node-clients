@@ -50,11 +50,13 @@ import Cardano.Node.Client.N2C.LocalStateQuery (queryLSQ)
 import Cardano.Node.Client.N2C.Trace (
     N2CEvent (..),
  )
-import Control.Concurrent.Async (withAsync)
+import Cardano.Node.Client.N2C.Types (ConnectionLost (..))
+import Control.Concurrent.Async (race)
 import Control.Exception (
     Exception,
     SomeAsyncException,
     SomeException,
+    displayException,
     fromException,
     throwIO,
  )
@@ -68,6 +70,7 @@ import Control.Retry (
     recoveringDynamic,
  )
 import Control.Tracer (Tracer, traceWith)
+import Data.Text qualified as Text
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import Ouroboros.Consensus.Ledger.Query (Query (GetChainPoint))
@@ -82,22 +85,22 @@ once at daemon startup from CLI flags.
 data ProbeConfig = ProbeConfig
     { pcAttemptTimeoutMs :: !Word64
     -- ^ Per-attempt cap on the LSQ acquire+query call.
-    -- After this many milliseconds the probe assumes the
-    -- node hasn't finished loading its ChainDB yet,
-    -- emits 'IndexerNodeReplaying', and retries.
+    --     After this many milliseconds the probe assumes the
+    --     node hasn't finished loading its ChainDB yet,
+    --     emits 'IndexerNodeReplaying', and retries.
     , pcRetryBaseMs :: !Word64
     -- ^ Base of the exponential backoff between probe
-    -- attempts (ms).
+    --     attempts (ms).
     , pcRetryMaxMs :: !Word64
     -- ^ Cap of the exponential backoff between probe
-    -- attempts (ms).
+    --     attempts (ms).
     , pcTotalTimeoutMs :: !(Maybe Word64)
     -- ^ Total cap on the probe loop.
-    -- 'Nothing' = unbounded (default): the probe waits
-    -- forever, emitting 'IndexerNodeReplaying' on each
-    -- iteration. 'Just n' caps cumulative retry delay at
-    -- @n@ ms; once exceeded, the most recent failure is
-    -- rethrown.
+    --     'Nothing' = unbounded (default): the probe waits
+    --     forever, reporting replay or connection failures on each
+    --     iteration. 'Just n' caps cumulative retry delay at
+    --     @n@ ms; once exceeded, the most recent failure is
+    --     rethrown.
     }
     deriving stock (Show, Eq)
 
@@ -137,9 +140,9 @@ instance Exception ProbeTipAtOrigin
 non-Origin chain tip via LocalStateQuery. Blocks until
 the node is ready or until 'pcTotalTimeoutMs' is reached.
 
-Emits 'IndexerNodeReplaying' on each retry attempt so
-operators can distinguish "alive but warming up" from
-"broken".
+Emits 'IndexerNodeReplaying' for timeouts or an Origin tip,
+and 'IndexerNodeProbeFailed' with the error for connection
+or query failures.
 
 Async exceptions ('AsyncCancelled', termination signals)
 propagate immediately so the daemon can shut down cleanly.
@@ -169,17 +172,17 @@ waitForNodeReady tracer pc magic socketPath = do
     probeOnce = do
         lsq <- newLSQChannel 16
         ltxs <- newLTxSChannel 16
-        withAsync (runNodeClient magic socketPath lsq ltxs) $ \_ -> do
-            mPoint <-
-                timeout
-                    (msToMicros (pcAttemptTimeoutMs pc))
-                    (queryLSQ lsq GetChainPoint)
-            case mPoint of
-                Nothing -> throwIO ProbeAttemptTimeout
-                Just (Network.Point Network.Point.Origin) ->
-                    throwIO ProbeTipAtOrigin
-                Just (Network.Point (Network.Point.At _)) ->
-                    pure ()
+        result <-
+            timeout
+                (msToMicros (pcAttemptTimeoutMs pc))
+                (race (runNodeClient magic socketPath lsq ltxs) (queryLSQ lsq GetChainPoint))
+        case result of
+            Nothing -> throwIO ProbeAttemptTimeout
+            Just (Left (Left failure)) -> throwIO failure
+            Just (Left (Right ())) -> throwIO ConnectionLost
+            Just (Right (Network.Point Network.Point.Origin)) ->
+                throwIO ProbeTipAtOrigin
+            Just (Right (Network.Point (Network.Point.At _))) -> pure ()
 
     retryHandler ::
         Word64 ->
@@ -191,12 +194,17 @@ waitForNodeReady tracer pc magic socketPath = do
             Nothing -> do
                 nowNs <- getMonotonicTimeNSec
                 let elapsedMs = (nowNs - startNs) `div` 1_000_000
-                traceWith
-                    tracer
-                    ( IndexerNodeReplaying
-                        (rsIterNumber rs + 1)
-                        elapsedMs
-                    )
+                let event
+                        | Just ProbeAttemptTimeout <- fromException e =
+                            IndexerNodeReplaying (rsIterNumber rs + 1) elapsedMs
+                        | Just ProbeTipAtOrigin <- fromException e =
+                            IndexerNodeReplaying (rsIterNumber rs + 1) elapsedMs
+                        | otherwise =
+                            IndexerNodeProbeFailed
+                                (rsIterNumber rs + 1)
+                                elapsedMs
+                                (Text.pack (displayException e))
+                traceWith tracer event
                 pure ConsultPolicy
 
 -- | Convert milliseconds to microseconds, saturating at 'maxBound :: Int'.

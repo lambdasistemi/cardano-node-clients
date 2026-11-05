@@ -88,7 +88,6 @@ import Ouroboros.Consensus.Node.Serialisation (
     encodeNodeToClient,
     encodeResult,
  )
-import Ouroboros.Consensus.Protocol.Praos.Header ()
 import Ouroboros.Consensus.Shelley.Ledger.NetworkProtocolVersion ()
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 import Ouroboros.Network.Block (

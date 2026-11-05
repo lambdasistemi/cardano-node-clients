@@ -1,0 +1,8 @@
+- [x] Capture old image v20 rejection against exact v23-only HEAD and null readiness.
+- [x] Resolve node 11.2.0 install plan and freeze; record pin provenance in node112-pins.json.
+- [x] Align dependency snapshots and adapt upstream APIs, including standalone ChainSync v23 and Dijkstra genesis.
+- [x] Execute unavailable-socket probe regression RED, then preserve connection errors and execute GREEN.
+- [x] Build indexer and run actual HEAD readiness/progress plus 40 client E2E examples.
+- [x] Complete source build, unit, lint, fault checks and dev-shell verification.
+- [ ] Publish exact candidate branch and PR for downstream immutable pins.
+- [ ] Complete downstream tools and Asteria image verification, tracked in tools #169 and consumer #299.

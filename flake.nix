@@ -13,7 +13,7 @@
       inputs.hackage.follows = "hackageNix";
     };
     hackageNix = {
-      url = "github:input-output-hk/hackage.nix/b6b4aa4bd699f743238da45c7f43da5a26a822f7";
+      url = "github:input-output-hk/hackage.nix/8a8899d3e55b6ea4b08be45a91228d1cc4c20d5c";
       flake = false;
     };
     nixpkgs.follows = "haskellNix/nixpkgs-unstable";
@@ -27,12 +27,12 @@
     };
     CHaP = {
       url =
-        "github:intersectmbo/cardano-haskell-packages/e8a483522ee73c8c9493ea6055553e5c2532e66b";
+        "github:intersectmbo/cardano-haskell-packages/f150513ff4741d1b816b26694425f19cddb67109";
       flake = false;
     };
     mkdocs.url = "github:paolino/dev-assets?dir=mkdocs";
     cardano-node = {
-      url = "github:IntersectMBO/cardano-node/11.0.1";
+      url = "github:IntersectMBO/cardano-node/11.2.0";
     };
     bundlers = {
       url = "github:NixOS/bundlers";
@@ -57,7 +57,7 @@
           };
           lintPkgs = import lintNixpkgs { inherit system; };
           lib = pkgs.lib;
-          indexState = "2026-03-26T20:21:33Z";
+          indexState = "2026-09-29T11:48:37Z";
           indexTool = { index-state = indexState; };
           fix-libs = { lib, pkgs, ... }: {
             packages.cardano-crypto-praos.components.library.pkgconfig =
@@ -174,6 +174,7 @@
               cp -r ${./e2e-test/genesis} $out
             '';
             utxo-indexer = components.exes.utxo-indexer;
+            e2e-tests = components.tests.e2e-tests;
           } // linuxReleasePackages;
           checks = checkSuite.checks;
           apps = checkApps // {
@@ -198,6 +199,7 @@
             };
           };
           devShells.default = project.shell;
+          devShells.ci = project.shellFor { withHoogle = lib.mkForce false; };
         };
     };
 }

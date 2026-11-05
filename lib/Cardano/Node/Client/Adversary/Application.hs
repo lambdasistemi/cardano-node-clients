@@ -37,7 +37,6 @@ import Data.List.NonEmpty qualified as NE
 import Data.Word (Word32)
 import Network.Socket (PortNumber)
 import Ouroboros.Consensus.Block (headerPoint)
-import Ouroboros.Consensus.Protocol.Praos.Header ()
 import Ouroboros.Consensus.Shelley.Ledger.NetworkProtocolVersion ()
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 import Ouroboros.Network.Block (genesisPoint, getTipPoint)

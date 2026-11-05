@@ -49,7 +49,6 @@ import Data.Void (Void)
 import Network.Mux qualified as Mx
 import Ouroboros.Consensus.Cardano.Block qualified as Consensus
 import Ouroboros.Consensus.Cardano.Node ()
-import Ouroboros.Consensus.Protocol.Praos.Header ()
 import Ouroboros.Consensus.Shelley.Ledger.NetworkProtocolVersion ()
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 import Ouroboros.Network.Block (
@@ -133,7 +132,7 @@ runChainSyncN2C epochSlots magic socketPath app =
             (localSnocket ioManager)
             nullNetworkConnectTracers
             ( simpleSingletonVersions
-                NodeToClientV_20
+                NodeToClientV_23
                 NodeToClientVersionData
                     { networkMagic = magic
                     , query = False

@@ -9,7 +9,8 @@ import Cardano.Network.NodeToNode (
     DiffusionMode (InitiatorOnlyDiffusionMode),
     NodeToNodeVersion (NodeToNodeV_14),
     NodeToNodeVersionData (..),
-    nodeToNodeCodecCBORTerm,
+    nodeToNodeVersionDataCodec,
+    ntnDataFlow,
  )
 import Cardano.Network.Protocol.Handshake.Codec (
     nodeToNodeHandshakeCodec,
@@ -35,7 +36,6 @@ import Network.Socket (
     defaultHints,
     getAddrInfo,
  )
-import Ouroboros.Consensus.Protocol.Praos.Header ()
 import Ouroboros.Consensus.Shelley.Ledger.NetworkProtocolVersion ()
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 import Ouroboros.Network.Block qualified as Network
@@ -54,12 +54,12 @@ import Ouroboros.Network.Mux (
     StartOnDemandOrEagerly (StartOnDemand),
     mkMiniProtocolCbFromPeer,
  )
+import Ouroboros.Network.PerasSupport (PerasSupport (PerasUnsupported))
 import Ouroboros.Network.Protocol.ChainSync.Client (
     ChainSyncClient (..),
  )
 import Ouroboros.Network.Protocol.ChainSync.Client qualified as ChainSync
 import Ouroboros.Network.Protocol.Handshake.Codec (
-    cborTermVersionDataCodec,
     noTimeLimitsHandshake,
  )
 import Ouroboros.Network.Protocol.Handshake.Version (
@@ -103,9 +103,7 @@ runChainSyncApplication magic peerName peerPort application = withIOManager $ \i
         ConnectToArgs
             { ctaHandshakeCodec = nodeToNodeHandshakeCodec
             , ctaHandshakeTimeLimits = noTimeLimitsHandshake
-            , ctaVersionDataCodec =
-                cborTermVersionDataCodec
-                    nodeToNodeCodecCBORTerm
+            , ctaVersionDataCodec = nodeToNodeVersionDataCodec
             , ctaConnectTracers = nullNetworkConnectTracers
             , ctaHandshakeCallbacks =
                 HandshakeCallbacks
@@ -121,10 +119,12 @@ runChainSyncApplication magic peerName peerPort application = withIOManager $ \i
                 , diffusionMode = InitiatorOnlyDiffusionMode
                 , peerSharing = PeerSharingDisabled
                 , query = False
+                , perasSupport = PerasUnsupported
                 }
             )
             (chainSyncToOuroboros . application) -- application
         )
+        ntnDataFlow
         Nothing
         addrAddress
 
